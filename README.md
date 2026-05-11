@@ -39,8 +39,13 @@ cd books-exporter
 # 1. 安装 Python 和 Tkinter
 brew install python@3.14 python-tk@3.14
 
-# 2. 安装依赖
+# 2. 安装依赖（二选一）
+
+# PySimpleGUI 版本
 /opt/homebrew/bin/python3.14 -m pip install PySimpleGUI --break-system-packages
+
+# PyQt6 版本（推荐，更美观）
+/opt/homebrew/bin/python3.14 -m pip install PyQt6 --break-system-packages
 
 # 3. 进入项目目录
 cd books-exporter
@@ -69,17 +74,23 @@ cd books-exporter
 
 ### GUI 模式
 
+提供两个版本：
+
 ```bash
+# PySimpleGUI 版本（轻量）
 ./run-gui.sh
-```
 
-或
-
-```bash
-/opt/homebrew/bin/python3.14 -m gui.main
+# PyQt6 版本（推荐，macOS 原生风格）
+./run-gui-qt.sh
 ```
 
 界面左侧显示书籍列表（按笔记数排序），右侧显示选中书的详情和统计。点击"预览"查看笔记内容，点击"导出"选择保存位置。
+
+**PyQt6 版本特点**：
+- 现代化 macOS 风格设计
+- 自定义细长滚动条
+- 流畅的触控板滚动支持
+- 卡片式统计显示
 
 ## AI Agent 支持
 
@@ -108,6 +119,10 @@ Skill 文件位置：`skills/apple-books-export/SKILL.md`
 books-exporter/
 ├── books_exporter.py           # CLI 核心 + 数据层
 ├── gui/                        # GUI 模块
+│   ├── main.py                 # PySimpleGUI 入口
+│   ├── main_window.py          # PySimpleGUI 主窗口
+│   ├── main_qt.py              # PyQt6 入口
+│   └── main_window_qt.py       # PyQt6 主窗口
 ├── services/                   # 业务逻辑封装
 ├── skills/                     # AI Agent skill
 │   └── apple-books-export/
@@ -115,7 +130,8 @@ books-exporter/
 │       └── scripts/
 │           └── books-exporter  # 独立二进制
 ├── build.sh                    # 打包脚本
-├── run-gui.sh                  # GUI 启动脚本
+├── run-gui.sh                  # PySimpleGUI 启动脚本
+├── run-gui-qt.sh               # PyQt6 启动脚本
 └── README.md
 ```
 
