@@ -93,14 +93,6 @@ class DetailPanel(ctk.CTkFrame):
             anchor="center"
         )
         self.highlight_count.grid(row=1, column=0, pady=(0, 10))
-        self.total_label = ctk.CTkLabel(
-            self.detail_frame,
-            text="",
-            font=ctk.CTkFont(size=12),
-            text_color="#888888",
-            anchor="w"
-        )
-        self.total_label.grid(row=4, column=0, sticky="w", padx=(20, 20), pady=(0, 16))
 
         # 分隔线
         ctk.CTkFrame(
@@ -165,8 +157,6 @@ class DetailPanel(ctk.CTkFrame):
                 self.author_label.configure(text=f"作者：{author}")
             else:
                 self.author_label.configure(text="")
-
-            self.total_label.configure(text=f"笔记总数：{book['note_count']} 条")
 
             if stats:
                 self.highlight_count.configure(text=str(stats.get('highlights', 0)))
