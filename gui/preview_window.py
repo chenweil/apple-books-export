@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from books_exporter import apple_timestamp_to_datetime
+from books_exporter import apple_timestamp_to_datetime, parse_cfi_chapter, format_chapter_display
 
 
 class PreviewWindow:
@@ -97,10 +97,10 @@ class PreviewWindow:
             lines.append('-' * 40)
             for i, ann in enumerate(highlights[:50], 1):  # 限制显示50条
                 lines.append('')
-                lines.append(f'### {i}.')
-
-                if ann.get('location'):
-                    lines.append(f'位置: {ann["location"]}')
+                
+                chapter = parse_cfi_chapter(ann.get('location')) if ann.get('location') else None
+                chapter_display = format_chapter_display(chapter, i)
+                lines.append(f'### {i}. {chapter_display}')
 
                 if ann.get('selected_text'):
                     text = ann['selected_text'][:200]
@@ -133,10 +133,10 @@ class PreviewWindow:
             lines.append('-' * 40)
             for i, ann in enumerate(notes[:50], 1):
                 lines.append('')
-                lines.append(f'### {i}.')
-
-                if ann.get('location'):
-                    lines.append(f'位置: {ann["location"]}')
+                
+                chapter = parse_cfi_chapter(ann.get('location')) if ann.get('location') else None
+                chapter_display = format_chapter_display(chapter, i)
+                lines.append(f'### {i}. {chapter_display}')
 
                 if ann.get('note'):
                     note_text = ann['note'][:300]
@@ -163,12 +163,13 @@ class PreviewWindow:
             lines.append('## 书签 (共 {} 条)'.format(len(bookmarks)))
             lines.append('-' * 40)
             for i, ann in enumerate(bookmarks[:50], 1):
-                location = ann.get('location', '未知位置')
+                chapter = parse_cfi_chapter(ann.get('location')) if ann.get('location') else None
+                chapter_display = format_chapter_display(chapter, i)
                 note = ann.get('note', '')
                 if note:
-                    lines.append(f'{i}. 位置: {location} - {note[:50]}')
+                    lines.append(f'{i}. {chapter_display} - {note[:50]}')
                 else:
-                    lines.append(f'{i}. 位置: {location}')
+                    lines.append(f'{i}. {chapter_display}')
 
             if len(bookmarks) > 50:
                 lines.append(f'... (还有 {len(bookmarks) - 50} 条书签未显示)')
