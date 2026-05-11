@@ -1,12 +1,10 @@
 import SwiftUI
 
 struct ContentView: View {
-    @State private var bookService = BookService()
     @State private var bookListVM: BookListViewModel!
     @State private var detailVM: DetailViewModel!
     @State private var showPreview = false
     @State private var showExportDialog = false
-    @State private var exportDone = false
     
     var body: some View {
         HSplitView {
@@ -26,8 +24,9 @@ struct ContentView: View {
         }
         .frame(minWidth: 700, minHeight: 500)
         .onAppear {
-            bookListVM = BookListViewModel(bookService: bookService)
-            detailVM = DetailViewModel(bookService: bookService)
+            let service = BookService()
+            bookListVM = BookListViewModel(bookService: service)
+            detailVM = DetailViewModel(bookService: service)
             
             Task {
                 await bookListVM.loadBooks()
@@ -56,24 +55,20 @@ struct ContentView: View {
             if let book = bookListVM.selectedBook {
                 ExportProgressView(
                     book: book,
-                    isExporting: bookService.isBusy,
-                    exportDone: exportDone,
+                    isExporting: detailVM.isExporting,
+                    exportDone: detailVM.exportDone,
                     onDismiss: {
-                        if exportDone {
+                        if detailVM.exportDone {
                             showExportDialog = false
-                            exportDone = false
-                            detailVM.resetExportState()
                         } else {
                             showExportDialog = false
                         }
                     }
                 )
-                
-                if bookService.isBusy && !exportDone {
-                    Task {
+                .task(id: detailVM.isExporting) {
+                    if detailVM.isExporting {
                         let documentsURL = FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask)[0]
-                        try? await detailVM.exportSelectedBook(to: documentsURL)
-                        exportDone = detailVM.exportDone
+                        await detailVM.exportSelectedBook(to: documentsURL)
                     }
                 }
             }
