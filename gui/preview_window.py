@@ -115,23 +115,15 @@ class PreviewWindow(ctk.CTkToplevel):
         lines.append("─" * 50)
         lines.append("")
 
-        # 分类笔记
-        highlights = []
-        notes = []
-        bookmarks = []
+        # 过滤有实际内容的高亮（type=2 有 selected_text 的）
+        highlights = [
+            ann for ann in annotations
+            if ann.get('selected_text') or ann.get('note')
+        ]
 
-        for ann in annotations:
-            ann_type = ann['type']
-            if ann_type == 0:
-                bookmarks.append(ann)
-            elif ann_type == 1:
-                notes.append(ann)
-            elif ann_type in (2, 3):
-                highlights.append(ann)
-
-        # 高亮与标注
+        # 高亮与笔记
         if highlights:
-            lines.append(f"## 高亮与标注 ({len(highlights)} 条)")
+            lines.append(f"## 高亮与笔记 ({len(highlights)} 条)")
             lines.append("")
             for i, ann in enumerate(highlights[:50], 1):
                 chapter = parse_cfi_chapter(ann.get('location')) if ann.get('location') else None
@@ -159,54 +151,7 @@ class PreviewWindow(ctk.CTkToplevel):
                 lines.append("")
 
             if len(highlights) > 50:
-                lines.append(f"... 还有 {len(highlights) - 50} 条高亮未显示")
-            lines.append("")
-
-        # 独立笔记
-        if notes:
-            lines.append(f"## 独立笔记 ({len(notes)} 条)")
-            lines.append("")
-            for i, ann in enumerate(notes[:50], 1):
-                chapter = parse_cfi_chapter(ann.get('location')) if ann.get('location') else None
-                chapter_display = format_chapter_display(chapter, i)
-                lines.append(f"### {i}. {chapter_display}")
-                lines.append("")
-
-                if ann.get('note'):
-                    note_text = ann['note'][:300]
-                    if len(ann['note']) > 300:
-                        note_text += "..."
-                    lines.append(f"  {note_text}")
-
-                if ann.get('created_date'):
-                    try:
-                        date = apple_timestamp_to_datetime(ann['created_date'])
-                        local = date.astimezone()
-                        lines.append(f"  {local.strftime('%Y-%m-%d %H:%M')}")
-                    except Exception:
-                        pass
-
-                lines.append("")
-
-            if len(notes) > 50:
-                lines.append(f"... 还有 {len(notes) - 50} 条笔记未显示")
-            lines.append("")
-
-        # 书签
-        if bookmarks:
-            lines.append(f"## 书签 ({len(bookmarks)} 条)")
-            lines.append("")
-            for i, ann in enumerate(bookmarks[:50], 1):
-                chapter = parse_cfi_chapter(ann.get('location')) if ann.get('location') else None
-                chapter_display = format_chapter_display(chapter, i)
-                note = ann.get('note', '')
-                if note:
-                    lines.append(f"  {i}. {chapter_display} - {note[:50]}")
-                else:
-                    lines.append(f"  {i}. {chapter_display}")
-
-            if len(bookmarks) > 50:
-                lines.append(f"... 还有 {len(bookmarks) - 50} 条书签未显示")
+                lines.append(f"... 还有 {len(highlights) - 50} 条未显示")
             lines.append("")
 
         return '\n'.join(lines)

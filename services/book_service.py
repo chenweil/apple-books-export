@@ -37,28 +37,16 @@ class BookService:
 
         Returns:
             dict: {
-                'highlights': 高亮数,
-                'notes': 独立笔记数,
-                'bookmarks': 书签数,
+                'highlights': 有内容的笔记数,
                 'total': 总数
             }
         """
-        highlights = 0
-        notes = 0
-        bookmarks = 0
-
-        for ann in annotations:
-            ann_type = ann['type']
-            if ann_type == 0:
-                bookmarks += 1
-            elif ann_type == 1:
-                notes += 1
-            elif ann_type in (2, 3):
-                highlights += 1
+        highlights = sum(
+            1 for ann in annotations
+            if ann.get('selected_text') or ann.get('note')
+        )
 
         return {
             'highlights': highlights,
-            'notes': notes,
-            'bookmarks': bookmarks,
             'total': len(annotations)
         }

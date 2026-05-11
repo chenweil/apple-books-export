@@ -230,25 +230,15 @@ def export_book_to_markdown(book, annotations, output_dir):
         f.write(f"**笔记数量**: {len(annotations)}\n\n")
         f.write("---\n\n")
 
-        # 按类型分组
-        highlights = []
-        notes = []
-        bookmarks = []
+        # 过滤有实际内容的笔记
+        highlights = [
+            ann for ann in annotations
+            if ann.get('selected_text') or ann.get('note')
+        ]
 
-        for ann in annotations:
-            ann_type = ann['type']
-            if ann_type == 0:
-                bookmarks.append(ann)
-            elif ann_type == 1:
-                notes.append(ann)
-            elif ann_type == 2:
-                highlights.append(ann)
-            elif ann_type == 3:
-                highlights.append(ann)
-
-        # 写入高亮/标注
+        # 写入高亮与笔记
         if highlights:
-            f.write("## 高亮与标注\n\n")
+            f.write("## 高亮与笔记\n\n")
             for i, ann in enumerate(highlights, 1):
                 chapter = parse_cfi_chapter(ann['location']) if ann['location'] else None
                 chapter_display = format_chapter_display(chapter, i)
@@ -263,33 +253,6 @@ def export_book_to_markdown(book, annotations, output_dir):
                         local = date.astimezone()  # 转为本机时区
                         f.write(f"*{local.strftime('%Y-%m-%d %H:%M %Z')}*\n\n")
                 f.write("---\n\n")
-
-        # 写入独立笔记
-        if notes:
-            f.write("## 独立笔记\n\n")
-            for i, ann in enumerate(notes, 1):
-                chapter = parse_cfi_chapter(ann['location']) if ann['location'] else None
-                chapter_display = format_chapter_display(chapter, i)
-                f.write(f"### {i}. {chapter_display}\n\n")
-                if ann['note']:
-                    f.write(f"{ann['note']}\n\n")
-                if ann['created_date']:
-                    date = apple_timestamp_to_datetime(ann['created_date'])
-                    if date:
-                        local = date.astimezone()  # 转为本机时区
-                        f.write(f"*{local.strftime('%Y-%m-%d %H:%M %Z')}*\n\n")
-                f.write("---\n\n")
-
-        # 写入书签
-        if bookmarks:
-            f.write("## 书签\n\n")
-            for i, ann in enumerate(bookmarks, 1):
-                chapter = parse_cfi_chapter(ann['location']) if ann['location'] else None
-                chapter_display = format_chapter_display(chapter, i)
-                f.write(f"- {i}. {chapter_display}")
-                if ann['note']:
-                    f.write(f" - {ann['note']}")
-                f.write("\n")
 
     return filepath
 
