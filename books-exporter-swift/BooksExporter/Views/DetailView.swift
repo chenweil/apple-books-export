@@ -35,6 +35,11 @@ struct DetailView: View {
                         }
                         .frame(maxWidth: .infinity, alignment: .center)
                         .padding()
+                    } else if let error = viewModel.currentError {
+                        Text(error.localizedDescription)
+                            .font(.caption)
+                            .foregroundColor(.red)
+                            .padding(8)
                     } else {
                         ScrollView {
                             VStack(alignment: .leading, spacing: 8) {
@@ -126,7 +131,7 @@ struct AnnotationPreviewRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
-                Text(annotation.chapterTitle.isEmpty ? "无章节" : annotation.chapterTitle)
+                Text(annotation.displayLocation)
                     .font(.caption)
                     .fontWeight(.medium)
                 Spacer()

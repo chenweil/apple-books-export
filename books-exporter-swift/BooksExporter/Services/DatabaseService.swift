@@ -4,6 +4,7 @@ import SQLite3
 class DatabaseService {
     private var bkLibraryDB: OpaquePointer?
     private var aeAnnotationDB: OpaquePointer?
+    private let sqliteTransient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
     
     private var bkLibraryPath: String?
     private var aeAnnotationPath: String?
@@ -16,12 +17,14 @@ class DatabaseService {
         if bkLibraryPath == nil || aeAnnotationPath == nil {
             try resolveDatabasePaths()
         }
-        
-        if sqlite3_open_v2(bkLibraryPath!, &bkLibraryDB, SQLITE_OPEN_READONLY, nil) != SQLITE_OK {
+
+        let bkURI = "file:\(bkLibraryPath!)?immutable=1"
+        if sqlite3_open_v2(bkURI, &bkLibraryDB, SQLITE_OPEN_READONLY | SQLITE_OPEN_URI, nil) != SQLITE_OK {
             throw DatabaseError.openFailed("BKLibrary: \(String(cString: sqlite3_errmsg(bkLibraryDB)))")
         }
-        
-        if sqlite3_open_v2(aeAnnotationPath!, &aeAnnotationDB, SQLITE_OPEN_READONLY, nil) != SQLITE_OK {
+
+        let aeURI = "file:\(aeAnnotationPath!)?immutable=1"
+        if sqlite3_open_v2(aeURI, &aeAnnotationDB, SQLITE_OPEN_READONLY | SQLITE_OPEN_URI, nil) != SQLITE_OK {
             throw DatabaseError.openFailed("AEAnnotation: \(String(cString: sqlite3_errmsg(aeAnnotationDB)))")
         }
     }
@@ -57,55 +60,75 @@ class DatabaseService {
     func getBooks() throws -> [Book] {
         try open()
         defer { close() }
-        
-        let query = """
-        SELECT 
-            a.ZASSETID,
-            a.ZTITLE,
-            a.ZAUTHOR,
-            SUM(CASE WHEN b.ZANNOTATIONTYPE IN (2,3) THEN 1 ELSE 0 END) as highlights,
-            SUM(CASE WHEN b.ZANNOTATIONTYPE = 1 THEN 1 ELSE 0 END) as notes,
-            SUM(CASE WHEN b.ZANNOTATIONTYPE = 0 THEN 1 ELSE 0 END) as bookmarks
-        FROM ZBKLIBRARYASSET a
-        INNER JOIN ZAEANNOTATION b ON a.ZASSETID = b.ZANNOTATIONASSETID
-        WHERE (b.ZANNOTATIONDELETED IS NULL OR b.ZANNOTATIONDELETED = 0)
-          AND (b.ZANNOTATIONSELECTEDTEXT IS NOT NULL OR b.ZANNOTATIONNOTE IS NOT NULL OR b.ZANNOTATIONTYPE = 0)
-        GROUP BY a.ZASSETID, a.ZTITLE, a.ZAUTHOR
-        ORDER BY COUNT(b.Z_PK) DESC
+
+        // Step 1: Query AEAnnotation for annotation counts per book
+        let countQuery = """
+        SELECT ZANNOTATIONASSETID,
+               SUM(CASE WHEN ZANNOTATIONTYPE IN (2,3) THEN 1 ELSE 0 END) as highlights,
+               SUM(CASE WHEN ZANNOTATIONTYPE = 1 THEN 1 ELSE 0 END) as notes,
+               SUM(CASE WHEN ZANNOTATIONTYPE = 0 THEN 1 ELSE 0 END) as bookmarks
+        FROM ZAEANNOTATION
+        WHERE (ZANNOTATIONDELETED IS NULL OR ZANNOTATIONDELETED = 0)
+        GROUP BY ZANNOTATIONASSETID
         """
-        
-        var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(bkLibraryDB, query, -1, &statement, nil) == SQLITE_OK else {
-            throw DatabaseError.queryFailed(String(cString: sqlite3_errmsg(bkLibraryDB)))
+
+        var countStatement: OpaquePointer?
+        guard sqlite3_prepare_v2(aeAnnotationDB, countQuery, -1, &countStatement, nil) == SQLITE_OK else {
+            throw DatabaseError.queryFailed(String(cString: sqlite3_errmsg(aeAnnotationDB)))
         }
-        defer { sqlite3_finalize(statement) }
-        
+        defer { sqlite3_finalize(countStatement) }
+
+        struct AnnotationCount {
+            let highlights: Int
+            let notes: Int
+            let bookmarks: Int
+            var total: Int { highlights + notes + bookmarks }
+        }
+
+        var countsByAssetId: [String: AnnotationCount] = [:]
+        while sqlite3_step(countStatement) == SQLITE_ROW {
+            guard let assetId = sqlite3_column_text(countStatement, 0) else { continue }
+            let h = Int(sqlite3_column_int(countStatement, 1))
+            let n = Int(sqlite3_column_int(countStatement, 2))
+            let b = Int(sqlite3_column_int(countStatement, 3))
+            countsByAssetId[String(cString: assetId)] = AnnotationCount(highlights: h, notes: n, bookmarks: b)
+        }
+
+        guard !countsByAssetId.isEmpty else { return [] }
+
+        // Step 2: Query BKLibrary for book details
+        let assetIds = Array(countsByAssetId.keys)
         var books: [Book] = []
-        
-        while sqlite3_step(statement) == SQLITE_ROW {
-            guard let id = sqlite3_column_text(statement, 0),
-                  let title = sqlite3_column_text(statement, 1),
-                  let author = sqlite3_column_text(statement, 2) else {
+
+        for assetId in assetIds {
+            let bookQuery = "SELECT ZASSETID, ZTITLE, ZAUTHOR FROM ZBKLIBRARYASSET WHERE ZASSETID = ?"
+            var bookStatement: OpaquePointer?
+            guard sqlite3_prepare_v2(bkLibraryDB, bookQuery, -1, &bookStatement, nil) == SQLITE_OK else {
                 continue
             }
-            
-            let highlights = sqlite3_column_int(statement, 3)
-            let notes = sqlite3_column_int(statement, 4)
-            let bookmarks = sqlite3_column_int(statement, 5)
-            let total = Int(highlights + notes + bookmarks)
-            
-            books.append(Book(
-                id: String(cString: id),
-                title: String(cString: title),
-                author: String(cString: author),
-                totalAnnotations: total,
-                highlightsCount: Int(highlights),
-                annotationsCount: 0,
-                notesCount: Int(notes),
-                bookmarksCount: Int(bookmarks)
-            ))
+            defer { sqlite3_finalize(bookStatement) }
+
+            sqlite3_bind_text(bookStatement, 1, assetId, -1, sqliteTransient)
+
+            if sqlite3_step(bookStatement) == SQLITE_ROW {
+                let title = sqlite3_column_text(bookStatement, 1).map { String(cString: $0) } ?? "未知书名"
+                let author = sqlite3_column_text(bookStatement, 2).map { String(cString: $0) } ?? "未知作者"
+                let count = countsByAssetId[assetId]!
+
+                books.append(Book(
+                    id: assetId,
+                    title: title,
+                    author: author,
+                    totalAnnotations: count.total,
+                    highlightsCount: count.highlights,
+                    annotationsCount: 0,
+                    notesCount: count.notes,
+                    bookmarksCount: count.bookmarks
+                ))
+            }
         }
-        
+
+        books.sort { $0.totalAnnotations > $1.totalAnnotations }
         return books
     }
     
@@ -115,17 +138,15 @@ class DatabaseService {
         
         let query = """
         SELECT
-            ZANNOTATIONUID,
+            COALESCE(ZANNOTATIONUUID, CAST(Z_PK AS TEXT)),
             ZANNOTATIONTYPE,
             ZANNOTATIONSELECTEDTEXT,
             ZANNOTATIONNOTE,
             ZANNOTATIONCREATIONDATE,
-            ZANNOTATIONLOCATION,
-            ZFOLDERTYPE
+            ZANNOTATIONLOCATION
         FROM ZAEANNOTATION
         WHERE ZANNOTATIONASSETID = ?
         AND (ZANNOTATIONDELETED IS NULL OR ZANNOTATIONDELETED = 0)
-        AND (ZANNOTATIONSELECTEDTEXT IS NOT NULL OR ZANNOTATIONNOTE IS NOT NULL OR ZANNOTATIONTYPE = 0)
         ORDER BY ZANNOTATIONCREATIONDATE
         """
         
@@ -135,7 +156,7 @@ class DatabaseService {
         }
         defer { sqlite3_finalize(statement) }
         
-        sqlite3_bind_text(statement, 1, bookId, -1, nil)
+        sqlite3_bind_text(statement, 1, bookId, -1, sqliteTransient)
         
         var annotations: [Annotation] = []
         
@@ -156,17 +177,13 @@ class DatabaseService {
             default: continue
             }
             
-            var createdAt = Date()
-            if createdAtRaw > 0 {
-                let appleEpoch = Date(timeIntervalSinceReferenceDate: 0).addingTimeInterval(-978278400)
-                createdAt = appleEpoch.addingTimeInterval(TimeInterval(createdAtRaw))
-            }
+            let createdAt = Date(timeIntervalSinceReferenceDate: TimeInterval(createdAtRaw))
             
             annotations.append(Annotation(
                 id: String(cString: uid),
                 type: type,
                 chapterTitle: "",
-                locationInfo: String(cString: location),
+                locationInfo: location,
                 contentText: content,
                 noteText: note,
                 createdAt: createdAt

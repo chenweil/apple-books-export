@@ -51,7 +51,7 @@ class BookService {
             content += "## \(type.displayName)\n\n"
             
             for (index, annotation) in typeAnnotations.enumerated() {
-                content += "### \(index + 1). \(annotation.chapterTitle.isEmpty ? "无章节" : annotation.chapterTitle)\n"
+                content += "### \(index + 1). \(annotation.displayLocation)\n"
                 content += "*\(formatDate(annotation.createdAt))*\n\n"
                 
                 if let text = annotation.contentText {

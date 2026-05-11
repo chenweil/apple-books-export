@@ -36,6 +36,12 @@ struct BookListView: View {
                     Text("请确保 Apple Books 中有做笔记的书籍")
                         .font(.caption)
                         .foregroundColor(.secondary)
+                    if let error = viewModel.currentError {
+                        Text(error.localizedDescription)
+                            .font(.caption2)
+                            .foregroundColor(.red)
+                            .padding(.top, 4)
+                    }
                     Spacer()
                 }
                 .frame(maxWidth: .infinity)

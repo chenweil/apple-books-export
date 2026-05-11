@@ -40,8 +40,9 @@
     A100000C /* DatabaseService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DatabaseService.swift; sourceTree = "<group>"; };
     A100000D /* BookListViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BookListViewModel.swift; sourceTree = "<group>"; };
     A100000E /* DetailViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DetailViewModel.swift; sourceTree = "<group>"; };
-    A100000F /* libsqlite3.tbd */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.framework"; name = libsqlite3.tbd; path = System/Library/Frameworks/libsqlite3.tbd; sourceTree = SDKROOT; };
+    A100000F /* libsqlite3.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libsqlite3.tbd; path = usr/lib/libsqlite3.tbd; sourceTree = SDKROOT; };
     A1000010 /* BooksExporter-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "BooksExporter-Bridging-Header.h"; sourceTree = "<group>"; };
+    A1000011 /* BooksExporter.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = BooksExporter.entitlements; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -73,6 +74,7 @@
         A3000005 /* Services */,
         A3000006 /* ViewModels */,
         A1000010 /* BooksExporter-Bridging-Header.h */,
+        A1000011 /* BooksExporter.entitlements */,
       );
       path = BooksExporter;
       sourceTree = "<group>";
@@ -274,6 +276,7 @@
       isa = XCBuildConfiguration;
       buildSettings = {
         ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+        CODE_SIGN_ENTITLEMENTS = BooksExporter/BooksExporter.entitlements;
         CODE_SIGN_STYLE = Automatic;
         COMBINE_HIDPI_IMAGES = YES;
         CURRENT_PROJECT_VERSION = 1;
@@ -299,6 +302,7 @@
       isa = XCBuildConfiguration;
       buildSettings = {
         ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+        CODE_SIGN_ENTITLEMENTS = BooksExporter/BooksExporter.entitlements;
         CODE_SIGN_STYLE = Automatic;
         COMBINE_HIDPI_IMAGES = YES;
         CURRENT_PROJECT_VERSION = 1;

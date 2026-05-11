@@ -12,4 +12,14 @@ struct Annotation: Identifiable, Codable, Hashable {
     var hasNote: Bool {
         return noteText != nil && !noteText!.isEmpty
     }
+
+    var displayLocation: String {
+        if !chapterTitle.isEmpty {
+            return chapterTitle
+        }
+        if !locationInfo.isEmpty {
+            return "位置: \(locationInfo)"
+        }
+        return "未知位置"
+    }
 }

@@ -17,6 +17,7 @@ class BookListViewModel {
         isLoading = true
         currentError = nil
         books = await bookService.listBooks()
+        currentError = bookService.currentError
         isLoading = false
     }
     

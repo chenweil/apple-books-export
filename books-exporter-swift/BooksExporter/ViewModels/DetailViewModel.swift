@@ -20,6 +20,7 @@ class DetailViewModel {
         isLoading = true
         currentError = nil
         annotations = await bookService.getAnnotations(for: book.id)
+        currentError = bookService.currentError
         isLoading = false
     }
     

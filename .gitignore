@@ -21,6 +21,10 @@ venv/
 .vscode/
 .idea/
 
+# Xcode user state
+xcuserdata/
+*.xcuserstate
+
 # AI
 .claude/
 

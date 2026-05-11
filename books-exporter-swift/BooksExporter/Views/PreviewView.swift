@@ -24,35 +24,35 @@ struct PreviewView: View {
                     let grouped = Dictionary(grouping: annotations) { $0.type }
                     
                     ForEach(AnnotationType.allCases.sorted(by: { $0.sortOrder < $1.sortOrder }), id: \.self) { type in
-                        guard let typeAnnotations = grouped[type], !typeAnnotations.isEmpty else { return }
-                        
-                        Text("## \(type.displayName)")
-                            .font(.title2)
-                            .fontWeight(.bold)
-                            .padding(.top, 8)
-                        
-                        ForEach(typeAnnotations.enumerated().map { (index: $0, annotation: $1) }, id: \.annotation.id) { item in
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text("### \(item.index + 1). \(item.annotation.chapterTitle.isEmpty ? "无章节" : item.annotation.chapterTitle)")
-                                    .font(.headline)
-                                
-                                Text("*\(formatDate(item.annotation.createdAt))*")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                                
-                                if let text = item.annotation.contentText {
-                                    Text("> \(text)")
-                                        .font(.body)
-                                        .padding(.leading, 8)
+                        if let typeAnnotations = grouped[type], !typeAnnotations.isEmpty {
+                            Text("## \(type.displayName)")
+                                .font(.title2)
+                                .fontWeight(.bold)
+                                .padding(.top, 8)
+
+                            ForEach(typeAnnotations.enumerated().map { (index: $0, annotation: $1) }, id: \.annotation.id) { item in
+                                VStack(alignment: .leading, spacing: 8) {
+                                    Text("### \(item.index + 1). \(item.annotation.displayLocation)")
+                                        .font(.headline)
+
+                                    Text("*\(formatDate(item.annotation.createdAt))*")
+                                        .font(.caption)
                                         .foregroundColor(.secondary)
+
+                                    if let text = item.annotation.contentText {
+                                        Text("> \(text)")
+                                            .font(.body)
+                                            .padding(.leading, 8)
+                                            .foregroundColor(.secondary)
+                                    }
+
+                                    if let note = item.annotation.noteText, !note.isEmpty {
+                                        Text("**笔记**: \(note)")
+                                            .font(.body)
+                                    }
+
+                                    Divider()
                                 }
-                                
-                                if let note = item.annotation.noteText, !note.isEmpty {
-                                    Text("**笔记**: \(note)")
-                                        .font(.body)
-                                }
-                                
-                                Divider()
                             }
                         }
                     }
