@@ -23,30 +23,34 @@ User mentions:
 
 **System Requirements**:
 - macOS only (Apple Books data is macOS-specific)
-- Python 3.14 with Tkinter
 - Full Disk Access permission
 
 **Permission Setup**:
 ```
-System Settings → Privacy & Security → Full Disk Access → Add Terminal or Python
+System Settings → Privacy & Security → Full Disk Access → Add Terminal or the binary
 ```
 
-**Install Dependencies**:
+**Installation**:
 ```bash
-brew install python@3.14 python-tk@3.14
-/opt/homebrew/bin/python3.14 -m pip install PySimpleGUI --break-system-packages
+# Option 1: Use binary directly
+./dist/books-exporter list
+
+# Option 2: Add to PATH
+cp dist/books-exporter /usr/local/bin/
+books-exporter list
 ```
 
 ## Quick Reference
 
 | Task | Command |
 |------|---------|
-| List books with notes | `python3 books_exporter.py list` |
-| Interactive export | `python3 books_exporter.py export` |
-| Export by book number | `python3 books_exporter.py export <number>` |
-| **Export by title** | `python3 books_exporter.py export -t "<title>"` |
-| Export to directory | `python3 books_exporter.py export -t "<title>" -o ~/Desktop` |
-| Launch GUI | `./run-gui.sh` or `python3.14 -m gui.main` |
+| List books with notes | `books-exporter list` |
+| Interactive export | `books-exporter export` |
+| Export by book number | `books-exporter export <number>` |
+| **Export by title** | `books-exporter export -t "<title>"` |
+| Export to directory | `books-exporter export -t "<title>" -o ~/Desktop` |
+
+**Binary Location**: `dist/books-exporter` (or add to PATH)
 
 ## Title Search Workflow
 
@@ -83,7 +87,7 @@ digraph title_search {
 ```bash
 # User: "导出宝典的笔记"
 # Agent: 
-python3 books_exporter.py export -t "宝典" -o ~/Desktop
+books-exporter export -t "宝典" -o ~/Desktop
 
 # If no matches:
 # "您的书籍中不存在包含 'XXX' 的书籍"
@@ -94,6 +98,18 @@ python3 books_exporter.py export -t "宝典" -o ~/Desktop
 # 2. 穷查理宝典 - 50 条笔记
 # 3. XXX宝典 - 30 条笔记
 # 请确认要导出哪一本？"
+```
+
+## Build Binary
+
+```bash
+# Install PyInstaller (one-time)
+pip install pyinstaller
+
+# Build
+pyinstaller --onefile --name books-exporter books_exporter.py
+
+# Output: dist/books-exporter
 ```
 
 ## Workflow
@@ -134,18 +150,15 @@ Apple Books data stored in:
 
 | Issue | Solution |
 |-------|----------|
-| Permission denied | Grant Full Disk Access to Terminal/Python |
-| Python not found | Install via `brew install python@3.14` |
-| Tkinter missing | Install via `brew install python-tk@3.14` |
+| Permission denied | Grant Full Disk Access to Terminal or the binary |
+| Binary not found | Build with `pyinstaller --onefile --name books-exporter books_exporter.py` |
 | No books found | User needs to add notes in Apple Books first |
-| GUI won't start | Check Tkinter installation |
 
 ## CLI vs GUI
 
-**Always use CLI by default.** Use GUI only if user explicitly requests it.
+**This skill uses the CLI binary only.** No Python installation required.
 
-- **CLI** (default): `python3 books_exporter.py list` / `export`
-- **GUI**: `./run-gui.sh` (only on explicit user request)
+Binary: `dist/books-exporter` (8.8MB, standalone)
 
 ## Red Flags - Check Before Acting
 

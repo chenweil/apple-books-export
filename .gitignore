@@ -39,3 +39,6 @@ exports/
 !AGENTS.md
 !.gitignore
 !skills/**/*.md
+dist/
+build/
+*.spec
