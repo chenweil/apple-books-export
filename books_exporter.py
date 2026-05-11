@@ -295,6 +295,22 @@ def list_books():
     print(f"总计: {len(books)} 本书, {sum(b['note_count'] for b in books)} 条笔记")
 
 
+def search_books_by_title(title_query):
+    """按书名搜索书籍（模糊匹配）"""
+    books = get_books_with_notes()
+    if not books:
+        return []
+    
+    query = title_query.lower().strip()
+    matches = []
+    
+    for book in books:
+        if query in book['title'].lower():
+            matches.append(book)
+    
+    return matches
+
+
 def export_book(book_index, output_dir):
     """导出指定书籍的笔记"""
     books = get_books_with_notes()
@@ -318,6 +334,56 @@ def export_book(book_index, output_dir):
     filepath = export_book_to_markdown(book, annotations, output_path)
     print(f"\n导出成功: {filepath}")
     return filepath
+
+
+def export_book_by_title(title_query, output_dir):
+    """按书名搜索并导出"""
+    matches = search_books_by_title(title_query)
+    
+    if not matches:
+        print(f"您的书籍中不存在包含 '{title_query}' 的书籍")
+        print(f"\n提示：使用 'python3 books_exporter.py list | grep \"{title_query}\"' 查看所有书籍")
+        return None
+    
+    if len(matches) == 1:
+        book = matches[0]
+        print(f"\n找到匹配: {book['title']}")
+        print(f"作者: {book['author']}")
+        print(f"笔记数量: {book['note_count']}")
+        
+        annotations = get_annotations_for_book(book['asset_id'])
+        output_path = Path(output_dir)
+        output_path.mkdir(parents=True, exist_ok=True)
+        
+        filepath = export_book_to_markdown(book, annotations, output_path)
+        print(f"\n导出成功: {filepath}")
+        return filepath
+    
+    # 多个匹配，让用户选择
+    print(f"\n找到 {len(matches)} 本匹配的书籍:\n")
+    for i, book in enumerate(matches, 1):
+        print(f"{i}. {book['title']} - {book['author']} ({book['note_count']} 条笔记)")
+    
+    while True:
+        print(f"\n请选择要导出的书籍 (1-{len(matches)}，输入 q 退出): ", end="")
+        choice = input().strip()
+        if choice.lower() == 'q':
+            print("已取消")
+            return None
+        try:
+            idx = int(choice)
+            if 1 <= idx <= len(matches):
+                book = matches[idx - 1]
+                annotations = get_annotations_for_book(book['asset_id'])
+                output_path = Path(output_dir)
+                output_path.mkdir(parents=True, exist_ok=True)
+                
+                filepath = export_book_to_markdown(book, annotations, output_path)
+                print(f"\n导出成功: {filepath}")
+                return filepath
+            print(f"请输入 1-{len(matches)} 之间的数字")
+        except ValueError:
+            print("请输入有效的数字")
 
 
 def interactive_select_and_export(output_dir):
@@ -366,10 +432,12 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 用法示例:
-  %(prog)s list                    # 列出所有书籍
-  %(prog)s export                   # 交互式选择书籍并导出
-  %(prog)s export 3                # 导出第3本书的笔记
-  %(prog)s export 3 -o ~/Desktop   # 导出到指定目录
+  %(prog)s list                       # 列出所有书籍
+  %(prog)s export                      # 交互式选择书籍并导出
+  %(prog)s export 3                   # 导出第3本书的笔记
+  %(prog)s export 3 -o ~/Desktop      # 导出到指定目录
+  %(prog)s export -t "纳瓦尔"          # 按书名搜索并导出
+  %(prog)s export -t "纳瓦尔" -o ~/Desktop  # 按书名导出到指定目录
         """
     )
 
@@ -379,13 +447,17 @@ def main():
                         help='书籍序号 (从 list 命令获取)')
     parser.add_argument('-o', '--output', default='.',
                         help='导出目录 (默认: 当前目录)')
+    parser.add_argument('-t', '--title', type=str,
+                        help='按书名搜索并导出 (支持模糊匹配)')
 
     args = parser.parse_args()
 
     if args.command == 'list':
         list_books()
     elif args.command == 'export':
-        if args.book_index:
+        if args.title:
+            export_book_by_title(args.title, args.output)
+        elif args.book_index:
             export_book(args.book_index, args.output)
         else:
             interactive_select_and_export(args.output)
