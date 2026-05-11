@@ -1,0 +1,348 @@
+// !$*UTF8*$!
+{
+  archiveVersion = 1;
+  classes = {
+  };
+  objectVersion = 56;
+  objects = {
+
+/* Begin PBXBuildFile section */
+    A0000001 /* BooksExporterApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000001 /* BooksExporterApp.swift */; };
+    A0000002 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000002 /* ContentView.swift */; };
+    A0000003 /* BookListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000003 /* BookListView.swift */; };
+    A0000004 /* BookRowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000004 /* BookRowView.swift */; };
+    A0000005 /* DetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000005 /* DetailView.swift */; };
+    A0000006 /* PreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000006 /* PreviewView.swift */; };
+    A0000007 /* ExportProgressView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000007 /* ExportProgressView.swift */; };
+    A0000008 /* Book.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000008 /* Book.swift */; };
+    A0000009 /* Annotation.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000009 /* Annotation.swift */; };
+    A000000A /* AnnotationType.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000A /* AnnotationType.swift */; };
+    A000000B /* BookService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000B /* BookService.swift */; };
+    A000000C /* DatabaseService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000C /* DatabaseService.swift */; };
+    A000000D /* BookListViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000D /* BookListViewModel.swift */; };
+    A000000E /* DetailViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000E /* DetailViewModel.swift */; };
+    A000000F /* libsqlite3.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = A100000F /* libsqlite3.tbd */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+    A1000000 /* BooksExporter.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = BooksExporter.app; sourceTree = BUILT_PRODUCTS_DIR; };
+    A1000001 /* BooksExporterApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BooksExporterApp.swift; sourceTree = "<group>"; };
+    A1000002 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+    A1000003 /* BookListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BookListView.swift; sourceTree = "<group>"; };
+    A1000004 /* BookRowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BookRowView.swift; sourceTree = "<group>"; };
+    A1000005 /* DetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DetailView.swift; sourceTree = "<group>"; };
+    A1000006 /* PreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreviewView.swift; sourceTree = "<group>"; };
+    A1000007 /* ExportProgressView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportProgressView.swift; sourceTree = "<group>"; };
+    A1000008 /* Book.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Book.swift; sourceTree = "<group>"; };
+    A1000009 /* Annotation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Annotation.swift; sourceTree = "<group>"; };
+    A100000A /* AnnotationType.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnnotationType.swift; sourceTree = "<group>"; };
+    A100000B /* BookService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BookService.swift; sourceTree = "<group>"; };
+    A100000C /* DatabaseService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DatabaseService.swift; sourceTree = "<group>"; };
+    A100000D /* BookListViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BookListViewModel.swift; sourceTree = "<group>"; };
+    A100000E /* DetailViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DetailViewModel.swift; sourceTree = "<group>"; };
+    A100000F /* libsqlite3.tbd */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.framework"; name = libsqlite3.tbd; path = System/Library/Frameworks/libsqlite3.tbd; sourceTree = SDKROOT; };
+    A1000010 /* BooksExporter-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "BooksExporter-Bridging-Header.h"; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+    A2000001 /* Frameworks */ = {
+      isa = PBXFrameworksBuildPhase;
+      buildActionMask = 2147483647;
+      files = (
+        A000000F /* libsqlite3.tbd in Frameworks */,
+      );
+      runOnlyForDeploymentPostprocessing = 0;
+    };
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+    A3000000 = {
+      isa = PBXGroup;
+      children = (
+        A3000001 /* BooksExporter */,
+        A3000002 /* Products */,
+      );
+      sourceTree = "<group>";
+    };
+    A3000001 /* BooksExporter */ = {
+      isa = PBXGroup;
+      children = (
+        A1000001 /* BooksExporterApp.swift */,
+        A3000003 /* Views */,
+        A3000004 /* Models */,
+        A3000005 /* Services */,
+        A3000006 /* ViewModels */,
+        A1000010 /* BooksExporter-Bridging-Header.h */,
+      );
+      path = BooksExporter;
+      sourceTree = "<group>";
+    };
+    A3000002 /* Products */ = {
+      isa = PBXGroup;
+      children = (
+        A1000000 /* BooksExporter.app */,
+      );
+      name = Products;
+      sourceTree = "<group>";
+    };
+    A3000003 /* Views */ = {
+      isa = PBXGroup;
+      children = (
+        A1000002 /* ContentView.swift */,
+        A1000003 /* BookListView.swift */,
+        A1000004 /* BookRowView.swift */,
+        A1000005 /* DetailView.swift */,
+        A1000006 /* PreviewView.swift */,
+        A1000007 /* ExportProgressView.swift */,
+      );
+      path = Views;
+      sourceTree = "<group>";
+    };
+    A3000004 /* Models */ = {
+      isa = PBXGroup;
+      children = (
+        A1000008 /* Book.swift */,
+        A1000009 /* Annotation.swift */,
+        A100000A /* AnnotationType.swift */,
+      );
+      path = Models;
+      sourceTree = "<group>";
+    };
+    A3000005 /* Services */ = {
+      isa = PBXGroup;
+      children = (
+        A100000B /* BookService.swift */,
+        A100000C /* DatabaseService.swift */,
+      );
+      path = Services;
+      sourceTree = "<group>";
+    };
+    A3000006 /* ViewModels */ = {
+      isa = PBXGroup;
+      children = (
+        A100000D /* BookListViewModel.swift */,
+        A100000E /* DetailViewModel.swift */,
+      );
+      path = ViewModels;
+      sourceTree = "<group>";
+    };
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+    A4000001 /* BooksExporter */ = {
+      isa = PBXNativeTarget;
+      buildConfigurationList = A5000001 /* Build configuration list for PBXNativeTarget "BooksExporter" */;
+      buildPhases = (
+        A4000002 /* Sources */,
+        A2000001 /* Frameworks */,
+        A4000003 /* Resources */,
+      );
+      buildRules = (
+      );
+      dependencies = (
+      );
+      name = BooksExporter;
+      productName = BooksExporter;
+      productReference = A1000000 /* BooksExporter.app */;
+      productType = "com.apple.product-type.application";
+    };
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+    A6000001 /* Project object */ = {
+      isa = PBXProject;
+      attributes = {
+        BuildIndependentTargetsInParallel = 1;
+        LastSwiftUpdateCheck = 1500;
+        LastUpgradeCheck = 1500;
+        TargetAttributes = {
+          A4000001 = {
+            CreatedOnToolsVersion = 15.0;
+          };
+        };
+      };
+      buildConfigurationList = A5000002 /* Build configuration list for PBXProject "books-exporter" */;
+      compatibilityVersion = "Xcode 14.0";
+      developmentRegion = "zh-Hans";
+      hasScannedForEncodings = 0;
+      knownRegions = (
+        en,
+        "zh-Hans",
+      );
+      mainGroup = A3000000;
+      productRefGroup = A3000002 /* Products */;
+      projectDirPath = "";
+      projectRoot = "";
+      targets = (
+        A4000001 /* BooksExporter */,
+      );
+    };
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+    A4000003 /* Resources */ = {
+      isa = PBXResourcesBuildPhase;
+      buildActionMask = 2147483647;
+      files = (
+      );
+      runOnlyForDeploymentPostprocessing = 0;
+    };
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+    A4000002 /* Sources */ = {
+      isa = PBXSourcesBuildPhase;
+      buildActionMask = 2147483647;
+      files = (
+        A0000001 /* BooksExporterApp.swift in Sources */,
+        A0000002 /* ContentView.swift in Sources */,
+        A0000003 /* BookListView.swift in Sources */,
+        A0000004 /* BookRowView.swift in Sources */,
+        A0000005 /* DetailView.swift in Sources */,
+        A0000006 /* PreviewView.swift in Sources */,
+        A0000007 /* ExportProgressView.swift in Sources */,
+        A0000008 /* Book.swift in Sources */,
+        A0000009 /* Annotation.swift in Sources */,
+        A000000A /* AnnotationType.swift in Sources */,
+        A000000B /* BookService.swift in Sources */,
+        A000000C /* DatabaseService.swift in Sources */,
+        A000000D /* BookListViewModel.swift in Sources */,
+        A000000E /* DetailViewModel.swift in Sources */,
+      );
+      runOnlyForDeploymentPostprocessing = 0;
+    };
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+    A7000001 /* Debug */ = {
+      isa = XCBuildConfiguration;
+      buildSettings = {
+        ALWAYS_SEARCH_USER_PATHS = NO;
+        ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+        CLANG_ANALYZER_NONNULL = YES;
+        CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+        CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+        CLANG_DIAGNOSTIC_GROUP = "unused-command-line-argument";
+        CLANG_ENABLE_MODULES = YES;
+        CLANG_ENABLE_OBJC_ARC = YES;
+        COPY_PHASE_STRIP = NO;
+        DEBUG_INFORMATION_FORMAT = dwarf;
+        ENABLE_STRICT_OBJC_MSGSEND = YES;
+        ENABLE_TESTABILITY = YES;
+        GCC_DYNAMIC_NO_PIC = NO;
+        GCC_NO_COMMON_BLOCKS = YES;
+        GCC_OPTIMIZATION_LEVEL = 0;
+        GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+        GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+        LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+        MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+        MTL_FAST_MATH = YES;
+        ONLY_ACTIVE_ARCH = YES;
+        SDKROOT = macosx;
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+        SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+      };
+      name = Debug;
+    };
+    A7000002 /* Release */ = {
+      isa = XCBuildConfiguration;
+      buildSettings = {
+        ALWAYS_SEARCH_USER_PATHS = NO;
+        ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+        CLANG_ANALYZER_NONNULL = YES;
+        CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+        CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+        CLANG_DIAGNOSTIC_GROUP = "unused-command-line-argument";
+        CLANG_ENABLE_MODULES = YES;
+        CLANG_ENABLE_OBJC_ARC = YES;
+        COPY_PHASE_STRIP = NO;
+        DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+        ENABLE_NS_ASSERTIONS = NO;
+        ENABLE_STRICT_OBJC_MSGSEND = YES;
+        GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+        GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+        LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+        MTL_ENABLE_DEBUG_INFO = NO;
+        MTL_FAST_MATH = YES;
+        SDKROOT = macosx;
+        SWIFT_COMPILATION_MODE = wholemodule;
+        VALIDATE_PRODUCT = YES;
+      };
+      name = Release;
+    };
+    A7000003 /* Debug */ = {
+      isa = XCBuildConfiguration;
+      buildSettings = {
+        ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+        CODE_SIGN_STYLE = Automatic;
+        COMBINE_HIDPI_IMAGES = YES;
+        CURRENT_PROJECT_VERSION = 1;
+        DEVELOPMENT_ASSET_PATHS = "";
+        ENABLE_PREVIEWS = YES;
+        GENERATE_INFOPLIST_FILE = YES;
+        INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright 2026. All rights reserved.";
+        INFOPLIST_KEY_NSPrincipalClass = NSApplication;
+        LD_RUNPATH_SEARCH_PATHS = (
+          "$(inherited)",
+          "@executable_path/../Frameworks",
+        );
+        MACOSX_DEPLOYMENT_TARGET = 14.0;
+        MARKETING_VERSION = 1.0;
+        PRODUCT_BUNDLE_IDENTIFIER = com.books-exporter.app;
+        PRODUCT_NAME = "$(TARGET_NAME)";
+        SWIFT_EMIT_LOC_STRINGS = YES;
+        SWIFT_VERSION = 5.0;
+      };
+      name = Debug;
+    };
+    A7000004 /* Release */ = {
+      isa = XCBuildConfiguration;
+      buildSettings = {
+        ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+        CODE_SIGN_STYLE = Automatic;
+        COMBINE_HIDPI_IMAGES = YES;
+        CURRENT_PROJECT_VERSION = 1;
+        DEVELOPMENT_ASSET_PATHS = "";
+        ENABLE_PREVIEWS = YES;
+        GENERATE_INFOPLIST_FILE = YES;
+        INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright 2026. All rights reserved.";
+        INFOPLIST_KEY_NSPrincipalClass = NSApplication;
+        LD_RUNPATH_SEARCH_PATHS = (
+          "$(inherited)",
+          "@executable_path/../Frameworks",
+        );
+        MACOSX_DEPLOYMENT_TARGET = 14.0;
+        MARKETING_VERSION = 1.0;
+        PRODUCT_BUNDLE_IDENTIFIER = com.books-exporter.app;
+        PRODUCT_NAME = "$(TARGET_NAME)";
+        SWIFT_EMIT_LOC_STRINGS = YES;
+        SWIFT_VERSION = 5.0;
+      };
+      name = Release;
+    };
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+    A5000001 /* Build configuration list for PBXNativeTarget "BooksExporter" */ = {
+      isa = XCConfigurationList;
+      buildConfigurations = (
+        A7000003 /* Debug */,
+        A7000004 /* Release */,
+      );
+      defaultConfigurationIsVisible = 0;
+      defaultConfigurationName = Release;
+    };
+    A5000002 /* Build configuration list for PBXProject "books-exporter" */ = {
+      isa = XCConfigurationList;
+      buildConfigurations = (
+        A7000001 /* Debug */,
+        A7000002 /* Release */,
+      );
+      defaultConfigurationIsVisible = 0;
+      defaultConfigurationName = Release;
+    };
+/* End XCConfigurationList section */
+
+  };
+  rootObject = A6000001 /* Project object */;
+}
