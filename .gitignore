@@ -24,6 +24,11 @@ venv/
 # AI
 .claude/
 
+# Swift/Xcode (不在 main 分支维护)
+books-exporter-swift/
+*.xcodeproj/
+*.xcworkspace/
+
 # 导出结果（用户自行创建）
 exports/
 *.md
