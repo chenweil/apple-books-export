@@ -30,25 +30,24 @@ User mentions:
 System Settings → Privacy & Security → Full Disk Access → Add Terminal or the binary
 ```
 
-**Installation**:
+**Binary Location**:
 ```bash
-# Option 1: Use binary directly
-./dist/books-exporter list
+# Installed at (use this path):
+~/.agents/skills/apple-books-export/scripts/books-exporter
 
-# Option 2: Add to PATH
-cp dist/books-exporter /usr/local/bin/
-books-exporter list
+# Or add to PATH:
+cp ~/.agents/skills/apple-books-export/scripts/books-exporter /usr/local/bin/
 ```
 
 ## Quick Reference
 
 | Task | Command |
 |------|---------|
-| List books with notes | `books-exporter list` |
-| Interactive export | `books-exporter export` |
-| Export by book number | `books-exporter export <number>` |
-| **Export by title** | `books-exporter export -t "<title>"` |
-| Export to directory | `books-exporter export -t "<title>" -o ~/Desktop` |
+| List books with notes | `~/.agents/skills/apple-books-export/scripts/books-exporter list` |
+| Interactive export | `~/.agents/skills/apple-books-export/scripts/books-exporter export` |
+| Export by book number | `~/.agents/skills/apple-books-export/scripts/books-exporter export <number>` |
+| **Export by title** | `~/.agents/skills/apple-books-export/scripts/books-exporter export -t "<title>"` |
+| Export to directory | `~/.agents/skills/apple-books-export/scripts/books-exporter export -t "<title>" -o ~/Desktop` |
 
 **Binary Location**: `dist/books-exporter` (or add to PATH)
 
@@ -87,7 +86,7 @@ digraph title_search {
 ```bash
 # User: "导出宝典的笔记"
 # Agent: 
-books-exporter export -t "宝典" -o ~/Desktop
+~/.agents/skills/apple-books-export/scripts/books-exporter export -t "宝典" -o ~/Desktop
 
 # If no matches:
 # "您的书籍中不存在包含 'XXX' 的书籍"
@@ -100,16 +99,17 @@ books-exporter export -t "宝典" -o ~/Desktop
 # 请确认要导出哪一本？"
 ```
 
-## Build Binary
+## CLI Binary
 
+**This skill uses a standalone binary.** No Python installation required.
+
+Binary: `~/.agents/skills/apple-books-export/scripts/books-exporter` (8.8MB)
+
+If binary missing, build from source:
 ```bash
-# Install PyInstaller (one-time)
-pip install pyinstaller
-
-# Build
-pyinstaller --onefile --name books-exporter books_exporter.py
-
-# Output: dist/books-exporter
+cd /path/to/books-exporter
+./build.sh  # Creates dist/books-exporter
+cp dist/books-exporter ~/.agents/skills/apple-books-export/scripts/
 ```
 
 ## Workflow
@@ -151,14 +151,14 @@ Apple Books data stored in:
 | Issue | Solution |
 |-------|----------|
 | Permission denied | Grant Full Disk Access to Terminal or the binary |
-| Binary not found | Build with `pyinstaller --onefile --name books-exporter books_exporter.py` |
+| Binary not found | Build with `./build.sh` and copy to scripts/ |
 | No books found | User needs to add notes in Apple Books first |
 
 ## CLI vs GUI
 
 **This skill uses the CLI binary only.** No Python installation required.
 
-Binary: `dist/books-exporter` (8.8MB, standalone)
+Binary: `~/.agents/skills/apple-books-export/scripts/books-exporter` (8.8MB, standalone)
 
 ## Red Flags - Check Before Acting
 
