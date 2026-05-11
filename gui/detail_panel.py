@@ -80,7 +80,7 @@ class DetailPanel(ctk.CTkFrame):
 
         # 笔记数量统计
         highlight_card = ctk.CTkFrame(stats_frame, corner_radius=10, fg_color="#fff8e1")
-        highlight_card.grid(row=0, column=0, sticky="nsew")
+        highlight_card.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
         highlight_card.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(
             highlight_card, text="笔记数量",
@@ -94,14 +94,69 @@ class DetailPanel(ctk.CTkFrame):
         )
         self.highlight_count.grid(row=1, column=0, pady=(0, 10))
 
+        # 阅读进度
+        progress_card = ctk.CTkFrame(stats_frame, corner_radius=10, fg_color="#e3f2fd")
+        progress_card.grid(row=0, column=1, sticky="nsew", padx=(6, 6))
+        progress_card.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(
+            progress_card, text="阅读进度",
+            font=ctk.CTkFont(size=11), text_color="#1e88e5",
+            anchor="center"
+        ).grid(row=0, column=0, pady=(10, 0))
+        self.progress_label = ctk.CTkLabel(
+            progress_card, text="—",
+            font=ctk.CTkFont(size=22, weight="bold"), text_color="#1565c0",
+            anchor="center"
+        )
+        self.progress_label.grid(row=1, column=0, pady=(0, 10))
+
+        # 页数
+        page_card = ctk.CTkFrame(stats_frame, corner_radius=10, fg_color="#f3e5f5")
+        page_card.grid(row=0, column=2, sticky="nsew", padx=(6, 0))
+        page_card.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(
+            page_card, text="总页数",
+            font=ctk.CTkFont(size=11), text_color="#8e24aa",
+            anchor="center"
+        ).grid(row=0, column=0, pady=(10, 0))
+        self.page_label = ctk.CTkLabel(
+            page_card, text="—",
+            font=ctk.CTkFont(size=22, weight="bold"), text_color="#6a1b9a",
+            anchor="center"
+        )
+        self.page_label.grid(row=1, column=0, pady=(0, 10))
+
+        # 阅读时间信息
+        self.time_info_frame = ctk.CTkFrame(self.detail_frame, fg_color="transparent")
+        self.time_info_frame.grid(row=4, column=0, sticky="ew", padx=(20, 20), pady=(0, 12))
+        self.time_info_frame.grid_columnconfigure(1, weight=1)
+
+        self.last_open_label = ctk.CTkLabel(
+            self.time_info_frame,
+            text="",
+            font=ctk.CTkFont(size=12),
+            text_color="#888888",
+            anchor="w"
+        )
+        self.last_open_label.grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 4))
+
+        self.added_label = ctk.CTkLabel(
+            self.time_info_frame,
+            text="",
+            font=ctk.CTkFont(size=12),
+            text_color="#888888",
+            anchor="w"
+        )
+        self.added_label.grid(row=1, column=0, columnspan=2, sticky="w")
+
         # 分隔线
         ctk.CTkFrame(
             self.detail_frame, height=1, fg_color="#e8e8e8"
-        ).grid(row=5, column=0, sticky="ew", padx=(20, 20), pady=(0, 16))
+        ).grid(row=6, column=0, sticky="ew", padx=(20, 20), pady=(0, 16))
 
         # 操作按钮
         btn_frame = ctk.CTkFrame(self.detail_frame, fg_color="transparent")
-        btn_frame.grid(row=6, column=0, sticky="ew", padx=(20, 20), pady=(0, 20))
+        btn_frame.grid(row=7, column=0, sticky="ew", padx=(20, 20), pady=(0, 20))
         btn_frame.grid_columnconfigure((0, 1), weight=1)
 
         self.preview_btn = ctk.CTkButton(
@@ -157,6 +212,45 @@ class DetailPanel(ctk.CTkFrame):
                 self.author_label.configure(text=f"作者：{author}")
             else:
                 self.author_label.configure(text="")
+
+            # 更新阅读进度和页数
+            progress = book.get('reading_progress')
+            if progress is not None:
+                progress_pct = int(progress * 100)
+                self.progress_label.configure(text=f"{progress_pct}%")
+            else:
+                self.progress_label.configure(text="—")
+
+            page_count = book.get('page_count')
+            if page_count:
+                self.page_label.configure(text=str(page_count))
+            else:
+                self.page_label.configure(text="—")
+
+            # 更新时间信息
+            from books_exporter import apple_timestamp_to_datetime
+            
+            last_open = book.get('last_open_date')
+            if last_open:
+                try:
+                    dt = apple_timestamp_to_datetime(last_open)
+                    local = dt.astimezone()
+                    self.last_open_label.configure(text=f"最后打开：{local.strftime('%Y-%m-%d %H:%M')}")
+                except Exception:
+                    self.last_open_label.configure(text="")
+            else:
+                self.last_open_label.configure(text="")
+
+            added = book.get('creation_date')
+            if added:
+                try:
+                    dt = apple_timestamp_to_datetime(added)
+                    local = dt.astimezone()
+                    self.added_label.configure(text=f"添加时间：{local.strftime('%Y-%m-%d')}")
+                except Exception:
+                    self.added_label.configure(text="")
+            else:
+                self.added_label.configure(text="")
 
             if stats:
                 self.highlight_count.configure(text=str(stats.get('highlights', 0)))

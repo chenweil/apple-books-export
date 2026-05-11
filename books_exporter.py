@@ -168,7 +168,9 @@ def get_books_with_notes():
     books = []
     for asset_id, count in annotation_counts.items():
         cursor.execute("""
-            SELECT ZASSETID, ZTITLE, ZAUTHOR, ZPATH
+            SELECT ZASSETID, ZTITLE, ZAUTHOR, ZPATH,
+                   ZPAGECOUNT, ZREADINGPROGRESS, ZLASTOPENDATE,
+                   ZCREATIONDATE, ZDATEFINISHED, ZISFINISHED
             FROM ZBKLIBRARYASSET
             WHERE ZASSETID = ?
         """, (asset_id,))
@@ -179,7 +181,13 @@ def get_books_with_notes():
                 'title': row[1] or '未知书名',
                 'author': row[2] or '未知作者',
                 'path': row[3] or '',
-                'note_count': count
+                'note_count': count,
+                'page_count': row[4],
+                'reading_progress': row[5],
+                'last_open_date': row[6],
+                'creation_date': row[7],
+                'date_finished': row[8],
+                'is_finished': row[9]
             })
     conn.close()
 
