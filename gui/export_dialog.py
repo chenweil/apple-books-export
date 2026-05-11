@@ -67,29 +67,23 @@ class ExportDialog:
         self._event_loop(window)
 
     def _event_loop(self, main_window):
-        """事件循环"""
+        """事件循环——读弹窗自己的事件，导出完成由主窗口处理"""
         while True:
-            # 优先检查主窗口的事件
-            event, values = main_window.read(timeout=100)
+            # 读取弹窗自身事件（取消按钮）
+            event, _ = self.window.read(timeout=100)
 
-            # 主窗口的事件（导出进度/完成）
-            if event == '-EXPORT_PROGRESS-':
-                status, current, total = values[event]
-                self._update_progress(status, current, total)
-                if status == 'done':
-                    break
-            elif event == '-EXPORT_COMPLETE-':
-                self._result = (
-                    values[event]['success'],
-                    values[event]['filepath'],
-                    values[event]['error']
-                )
-                break
-
-            # 检查我们的 modal 窗口事件
             if event in (None, '-CANCEL-'):
                 self.cancelled = True
                 self._result = (False, None, '用户取消')
+                break
+
+            # 每轮也读一下主窗口的事件（导出进度/完成）
+            main_evt, main_vals = main_window.read(timeout=0)
+            if main_evt == '-EXPORT_PROGRESS-':
+                status, current, total = main_vals[main_evt]
+                self._update_progress(status, current, total)
+            elif main_evt == '-EXPORT_COMPLETE-':
+                # 弹窗不消费结果，只关窗；结果由主窗口处理
                 break
 
         if self.window:
