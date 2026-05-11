@@ -73,9 +73,11 @@ class BookListPanel(ctk.CTkFrame):
         # 分页
         self.page_frame = ctk.CTkFrame(self, fg_color="transparent", height=36)
         self.page_frame.grid(row=2, column=0, columnspan=2, sticky="ew", padx=(16, 16), pady=(4, 8))
+        self.page_frame.grid_columnconfigure(0, weight=1)
         self.page_frame.grid_columnconfigure(1, weight=0)
-        self.page_frame.grid_columnconfigure(2, weight=1)
+        self.page_frame.grid_columnconfigure(2, weight=0)
         self.page_frame.grid_columnconfigure(3, weight=0)
+        self.page_frame.grid_columnconfigure(4, weight=1)
 
         self.prev_btn = ctk.CTkButton(
             self.page_frame, text="上一页", width=70, height=30,
@@ -86,7 +88,7 @@ class BookListPanel(ctk.CTkFrame):
             hover_color="#d0d0d0",
             command=self._prev_page
         )
-        self.prev_btn.grid(row=0, column=0, padx=(0, 8))
+        self.prev_btn.grid(row=0, column=1, padx=(0, 8))
 
         # 页码输入框
         self.page_entry = ctk.CTkEntry(
@@ -96,7 +98,7 @@ class BookListPanel(ctk.CTkFrame):
             font=ctk.CTkFont(size=12),
             justify="center"
         )
-        self.page_entry.grid(row=0, column=1, padx=(0, 4))
+        self.page_entry.grid(row=0, column=2, padx=(0, 4))
         self.page_entry.bind("<Return>", self._on_page_jump)
 
         self.page_label = ctk.CTkLabel(
@@ -104,7 +106,7 @@ class BookListPanel(ctk.CTkFrame):
             font=ctk.CTkFont(size=12),
             text_color="#888888"
         )
-        self.page_label.grid(row=0, column=2, sticky="w")
+        self.page_label.grid(row=0, column=3, sticky="w")
 
         self.next_btn = ctk.CTkButton(
             self.page_frame, text="下一页", width=70, height=30,
@@ -115,7 +117,7 @@ class BookListPanel(ctk.CTkFrame):
             hover_color="#d0d0d0",
             command=self._next_page
         )
-        self.next_btn.grid(row=0, column=3, padx=(8, 0))
+        self.next_btn.grid(row=0, column=4, padx=(8, 0))
 
         # 空状态提示
         self.empty_label = ctk.CTkLabel(
