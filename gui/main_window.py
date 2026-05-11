@@ -1,8 +1,12 @@
 """
-主窗口 - Apple Books 笔记导出工具主界面
-所有 UI 更新都在主线程的事件循环中处理，确保线程安全
+主窗口 - Apple Books 笔记导出工具主界面 (CustomTkinter 现代化版本)
 """
-import PySimpleGUI as sg
+import customtkinter as ctk
+import tkinter as tk
+from tkinter import filedialog, messagebox
+import threading
+import queue
+
 from gui.book_list import BookListPanel
 from gui.detail_panel import DetailPanel
 from gui.preview_window import PreviewWindow
@@ -10,220 +14,262 @@ from gui.export_dialog import ExportDialog
 from services.book_service import BookService
 
 
-class MainWindow:
+class MainWindow(ctk.CTk):
     """主窗口类"""
 
     TITLE = "Apple Books 笔记导出工具"
 
     def __init__(self):
+        super().__init__()
+
+        # 设置外观
+        ctk.set_appearance_mode("Light")
+        ctk.set_default_color_theme("blue")
+
+        # 窗口配置
+        self.title(self.TITLE)
+        self.geometry("900x620")
+        self.minsize(700, 500)
+        self.configure(fg_color="#fafafa")
+
         # 初始化服务
         self.book_service = BookService()
 
-        # 初始化组件
-        self.book_list_panel = BookListPanel(on_select_callback=self._on_book_selected)
-        self.detail_panel = DetailPanel(
-            on_preview_callback=self._on_preview,
-            on_export_callback=self._on_export
-        )
-
-        # 初始化子窗口
-        self.preview_window = PreviewWindow()
-        self.export_dialog = ExportDialog()
+        # 事件队列（用于线程间通信）
+        self.event_queue = queue.Queue()
 
         # 状态
         self.selected_book = None
         self.selected_annotations = None
         self.loading_annotations = False
 
-        # 创建主窗口
-        self.window = self._create_window()
+        # 子窗口引用
+        self.preview_window = None
+        self.export_dialog = None
 
-    def _create_window(self):
-        """创建主窗口"""
-        # 主布局
-        layout = [
-            [sg.Text(self.TITLE, font=('Helvetica', 16, 'bold'), size=(60, 1))],
-            [sg.HorizontalSeparator()],
-            [
-                # 左侧：书籍列表
-                sg.Column(
-                    self.book_list_panel.get_layout(),
-                    key='-LEFT_PANEL-',
-                    size=(400, 500),
-                    scrollable=True,
-                    vertical_scroll_only=True
-                ),
-                sg.VerticalSeparator(),
-                # 右侧：详情面板
-                sg.Column(
-                    self.detail_panel.get_layout(),
-                    key='-RIGHT_PANEL-',
-                    size=(400, 500),
-                    scrollable=True,
-                    vertical_scroll_only=True
-                ),
-            ],
-            [sg.HorizontalSeparator()],
-            [
-                sg.StatusBar('', key='-STATUS_BAR-', size=(60, 1)),
-            ],
-        ]
+        # 创建 UI
+        self._create_ui()
 
-        window = sg.Window(
-            self.TITLE,
-            layout,
-            size=(850, 600),
-            resizable=True,
-            finalize=True
+        # 启动事件轮询
+        self._poll_events()
+
+        # 异步加载书籍
+        self._load_books()
+
+    def _create_ui(self):
+        """创建主界面"""
+        self.grid_columnconfigure(0, weight=2)
+        self.grid_columnconfigure(1, weight=1)
+        self.grid_rowconfigure(0, weight=1)
+
+        # 左侧：书籍列表
+        self.book_list_panel = BookListPanel(
+            self,
+            on_select_callback=self._on_book_selected
         )
+        self.book_list_panel.grid(row=0, column=0, sticky="nsew", padx=(12, 6), pady=(12, 12))
 
-        # 初始状态
-        window['-STATUS_BAR-'].update('正在加载书籍列表...')
+        # 右侧：详情面板
+        self.detail_panel = DetailPanel(
+            self,
+            on_preview_callback=self._on_preview,
+            on_export_callback=self._on_export
+        )
+        self.detail_panel.grid(row=0, column=1, sticky="nsew", padx=(6, 12), pady=(12, 12))
 
-        return window
+        # 底部状态栏
+        self.status_bar = ctk.CTkLabel(
+            self,
+            text="正在加载书籍列表...",
+            font=ctk.CTkFont(size=11),
+            text_color="#888888",
+            anchor="w",
+            height=28,
+            fg_color="#f0f0f0",
+            corner_radius=0
+        )
+        self.status_bar.grid(row=1, column=0, columnspan=2, sticky="ew", padx=0, pady=0)
 
-    def run(self):
-        """运行主窗口"""
-        # 异步加载书籍（结果通过事件回到主线程）
-        self.book_service.load_books_async(self.window)
+    def _poll_events(self):
+        """轮询事件队列"""
+        try:
+            while True:
+                event_type, data = self.event_queue.get_nowait()
+                self._handle_event(event_type, data)
+        except queue.Empty:
+            pass
 
-        # 事件循环（所有 UI 更新都在主线程）
-        while True:
-            event, values = self.window.read(timeout=100)
+        # 继续轮询
+        self.after(100, self._poll_events)
 
-            if event in (None, 'Exit'):
-                break
+    def _load_books(self):
+        """异步加载书籍"""
+        def worker():
+            try:
+                books = self.book_service.load_books()
+                self.event_queue.put(('BOOKS_LOADED', {'books': books, 'error': None}))
+            except Exception as e:
+                self.event_queue.put(('BOOKS_LOADED', {'books': [], 'error': str(e)}))
 
-            self._handle_event(event, values)
+        thread = threading.Thread(target=worker, daemon=True)
+        thread.start()
 
-            # 导出弹窗有自己的窗口，需要单独轮询其事件
-            if self.export_dialog.window:
-                evt, _ = self.export_dialog.window.read(timeout=0)
-                if evt in (None, '-CANCEL-'):
-                    self.export_dialog.cancelled = True
-                    self.export_dialog.close()
-
-        self.window.close()
-
-    def _handle_event(self, event, values):
+    def _handle_event(self, event_type, data):
         """处理事件"""
-        # ---- 书籍加载完成（来自 worker 线程）----
-        if event == '-BOOKS_LOADED-':
-            books, error = values[event]
+        if event_type == 'BOOKS_LOADED':
+            books = data['books']
+            error = data.get('error')
+
             if error:
-                self.window['-STATUS_BAR-'].update(f'加载失败: {error}')
-                sg.popup_error(f'加载书籍失败:\n{error}', title='错误')
+                self.status_bar.configure(text=f'加载失败: {error}')
+                messagebox.showerror('错误', f'加载书籍失败:\n{error}')
                 return
+
             if not books:
-                self.window['-STATUS_BAR-'].update('未找到任何书籍笔记数据')
-                sg.popup_info(
-                    '未找到任何书籍笔记数据\n\n请确保 Apple Books 中有书籍并已经做了笔记/标注',
-                    title='提示'
-                )
+                self.status_bar.configure(text='未找到任何书籍笔记数据')
+                messagebox.showinfo('提示', '未找到任何书籍笔记数据\n\n请确保 Apple Books 中有书籍并已经做了笔记/标注')
                 return
+
             self.book_list_panel.update_books(books)
-            self.book_list_panel.refresh(self.window)
             total_notes = sum(b['note_count'] for b in books)
-            self.window['-STATUS_BAR-'].update(
-                f'已加载 {len(books)} 本书, 共 {total_notes} 条笔记'
-            )
-            return
+            self.status_bar.configure(text=f'已加载 {len(books)} 本书, 共 {total_notes} 条笔记')
 
-        # ---- 笔记加载完成（来自 worker 线程，带 asset_id 校验）----
-        if event == '-ANNOTATIONS_LOADED-':
-            payload = values[event]
-            asset_id = payload['asset_id']
-            error = payload['error']
+        elif event_type == 'ANNOTATIONS_LOADED':
+            asset_id = data['asset_id']
+            error = data.get('error')
 
-            # P1-1 防抖：检查这本书是否还是当前选中的
+            # 防抖：检查这本书是否还是当前选中的
             if self.selected_book is None or self.selected_book['asset_id'] != asset_id:
-                return  # 书已切换，忽略过期回调
+                return
 
             self.loading_annotations = False
 
             if error:
-                sg.popup_error(f'加载笔记失败:\n{error}', title='错误')
+                messagebox.showerror('错误', f'加载笔记失败:\n{error}')
                 return
 
-            annotations = payload['annotations']
-            stats = payload['stats']
+            annotations = data['annotations']
+            stats = data['stats']
             self.selected_annotations = annotations
 
             # 更新详情面板
             self.detail_panel.set_book(self.selected_book, annotations)
-            self.detail_panel.update_display(self.window, stats)
-            return
+            self.detail_panel.update_display(stats)
 
-        # ---- 导出进度（来自 worker 线程）----
-        if event == '-EXPORT_PROGRESS-':
-            status, current, total = values[event]
-            self.export_dialog.update_progress(status, current, total)
-            return
+        elif event_type == 'EXPORT_PROGRESS':
+            status = data['status']
+            current = data['current']
+            total = data['total']
+            if self.export_dialog:
+                self.export_dialog.update_progress(status, current, total)
 
-        # ---- 导出完成（来自 worker 线程）----
-        if event == '-EXPORT_COMPLETE-':
-            payload = values[event]
-            cancelled = self.export_dialog.cancelled
-            self.export_dialog.close()
-            if cancelled:
-                return
-            success = payload['success']
-            filepath = payload['filepath']
-            error = payload['error']
+        elif event_type == 'EXPORT_COMPLETE':
+            if self.export_dialog:
+                self.export_dialog.close()
+                self.export_dialog = None
+
+            success = data['success']
+            filepath = data.get('filepath')
+            error = data.get('error')
+
             if success:
-                sg.popup_ok(
-                    f'导出成功!\n\n文件已保存至:\n{filepath}',
-                    title='导出完成',
-                    modal=True
-                )
+                messagebox.showinfo('导出完成', f'导出成功!\n\n文件已保存至:\n{filepath}')
             elif error:
-                sg.popup_error(f'导出失败:\n{error}', title='错误', modal=True)
-            return
-
-        # ---- 书籍列表内部事件 ----
-        handled, book = self.book_list_panel.handle_event(event, self.window)
-        if handled:
-            return
-
-        # ---- 详情面板事件 ----
-        handled, action, book = self.detail_panel.handle_event(event, self.window)
-        if handled:
-            return
+                messagebox.showerror('错误', f'导出失败:\n{error}')
 
     def _on_book_selected(self, book, index):
-        """书籍选中回调（主线程）"""
+        """书籍选中回调"""
         self.selected_book = book
         self.selected_annotations = None
         self.loading_annotations = True
 
         # 显示加载状态
         self.detail_panel.set_book(book)
-        self.detail_panel.update_display(self.window, {
+        self.detail_panel.update_display({
             'highlights': '...',
             'notes': '...',
             'bookmarks': '...'
         })
 
-        # 异步加载笔记详情（结果通过事件回到主线程）
-        self.book_service.get_annotations_async(self.window, book['asset_id'])
+        # 异步加载笔记详情
+        def worker():
+            try:
+                annotations = self.book_service.get_annotations(book['asset_id'])
+                stats = BookService.classify_annotations(annotations)
+                self.event_queue.put(('ANNOTATIONS_LOADED', {
+                    'asset_id': book['asset_id'],
+                    'annotations': annotations,
+                    'stats': stats,
+                    'error': None
+                }))
+            except Exception as e:
+                self.event_queue.put(('ANNOTATIONS_LOADED', {
+                    'asset_id': book['asset_id'],
+                    'annotations': [],
+                    'stats': None,
+                    'error': str(e)
+                }))
+
+        thread = threading.Thread(target=worker, daemon=True)
+        thread.start()
 
     def _on_preview(self, book, annotations):
         """预览按钮回调"""
         if not annotations:
-            sg.popup_info('这本书没有任何笔记', title='预览')
+            messagebox.showinfo('预览', '这本书没有任何笔记')
             return
+
+        self.preview_window = PreviewWindow(self)
         self.preview_window.show(book, annotations)
 
     def _on_export(self, book):
         """导出按钮回调"""
-        output_dir = sg.popup_get_folder(
-            '选择导出目录',
-            title='选择导出位置',
-            default_path='.',
-            modal=True
-        )
+        output_dir = filedialog.askdirectory(title='选择导出目录')
         if not output_dir:
             return
 
-        self.selected_output_dir = output_dir
-        self.export_dialog.show(book, output_dir, self.window)
+        self.export_dialog = ExportDialog(self)
+
+        # 异步导出
+        def worker():
+            try:
+                self.event_queue.put(('EXPORT_PROGRESS', {'status': 'loading', 'current': 0, 'total': 1}))
+
+                annotations = self.book_service.get_annotations(book['asset_id'])
+                total = len(annotations)
+
+                self.event_queue.put(('EXPORT_PROGRESS', {'status': 'exporting', 'current': 0, 'total': total}))
+
+                from pathlib import Path
+                from books_exporter import export_book_to_markdown
+
+                output_path = Path(output_dir)
+                output_path.mkdir(parents=True, exist_ok=True)
+
+                filepath = export_book_to_markdown(book, annotations, output_path)
+
+                self.event_queue.put(('EXPORT_PROGRESS', {'status': 'done', 'current': total, 'total': total}))
+                self.event_queue.put(('EXPORT_COMPLETE', {'success': True, 'filepath': str(filepath), 'error': None}))
+
+            except Exception as e:
+                self.event_queue.put(('EXPORT_PROGRESS', {'status': 'error', 'current': 0, 'total': 0}))
+                self.event_queue.put(('EXPORT_COMPLETE', {'success': False, 'filepath': None, 'error': str(e)}))
+
+        self.export_dialog.show(book, output_dir)
+        thread = threading.Thread(target=worker, daemon=True)
+        thread.start()
+
+
+def main():
+    """主函数"""
+    print("正在启动 Apple Books 笔记导出工具...")
+    print("GUI 窗口即将打开...")
+
+    app = MainWindow()
+    app.mainloop()
+
+    print("程序已退出")
+
+
+if __name__ == '__main__':
+    main()

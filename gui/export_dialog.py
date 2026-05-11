@@ -1,8 +1,7 @@
 """
-导出进度对话框 - 纯进度显示器，不含事件循环
-所有事件由 MainWindow 统一处理
+导出进度对话框 - 现代化进度弹窗
 """
-import PySimpleGUI as sg
+import customtkinter as ctk
 import sys
 from pathlib import Path
 
@@ -10,70 +9,137 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from services.book_service import BookService
 
 
-class ExportDialog:
-    """导出进度对话框，纯 UI 组件"""
+class ExportDialog(ctk.CTkToplevel):
+    """导出进度对话框"""
 
-    def __init__(self):
-        self.window = None
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.title("导出进度")
+        self.geometry("460x220")
+        self.resizable(False, False)
+
         self.cancelled = False
+        self.parent_window = parent
+
+        self.transient(parent)
+        self.grab_set()
+        self.protocol("WM_DELETE_WINDOW", self._on_cancel)
+
+        self.after(200, self._center_on_parent)
+
+    def _center_on_parent(self):
+        if self.master:
+            self.update_idletasks()
+            x = self.master.winfo_x() + (self.master.winfo_width() - self.winfo_width()) // 2
+            y = self.master.winfo_y() + (self.master.winfo_height() - self.winfo_height()) // 2
+            self.geometry(f"+{x}+{y}")
 
     def show(self, book, output_dir, main_window):
-        """
-        创建导出进度弹窗并启动异步导出。
-        不阻塞，由 MainWindow 事件循环统一驱动。
-
-        Args:
-            book: 书籍信息
-            output_dir: 输出目录
-            main_window: 主窗口（导出事件发到这里）
-        """
+        """创建导出进度弹窗并启动异步导出"""
         self.cancelled = False
+        self.parent_window = main_window
 
-        layout = [
-            [sg.Text('正在导出', font=('Helvetica', 12, 'bold'))],
-            [sg.Text(f'书名: {book["title"][:40]}', key='-EXPORT_TITLE-', size=(50, 1))],
-            [sg.Text(f'输出: {output_dir}', key='-OUTPUT_DIR-', size=(50, 1))],
-            [sg.HorizontalSeparator()],
-            [sg.Text('', key='-STATUS_TEXT-', size=(50, 1))],
-            [
-                sg.ProgressBar(100, key='-PROGRESS-', size=(40, 20), bar_color=('blue', 'lightgray')),
-                sg.Text('', key='-PROGRESS_TEXT-', size=(10, 1))
-            ],
-            [sg.HorizontalSeparator()],
-            [sg.Button('取消', key='-CANCEL-', size=(10, 1))]
-        ]
+        self.configure(fg_color="#fafafa")
+        self.grid_columnconfigure(0, weight=1)
 
-        self.window = sg.Window(
-            '导出进度',
-            layout,
-            modal=False,
-            finalize=True,
-            disable_close=False,
-            size=(500, 200)
+        # 标题
+        ctk.CTkLabel(
+            self, text="正在导出",
+            font=ctk.CTkFont(size=15, weight="bold"),
+            anchor="w"
+        ).grid(row=0, column=0, sticky="w", padx=(24, 24), pady=(20, 4))
+
+        # 书名
+        title_text = book['title']
+        if len(title_text) > 40:
+            title_text = title_text[:40] + "…"
+        ctk.CTkLabel(
+            self, text=f"书名：{title_text}",
+            font=ctk.CTkFont(size=12),
+            text_color="#666666",
+            anchor="w"
+        ).grid(row=1, column=0, sticky="w", padx=(24, 24), pady=(0, 2))
+
+        # 输出路径
+        ctk.CTkLabel(
+            self, text=f"输出：{output_dir}",
+            font=ctk.CTkFont(size=12),
+            text_color="#666666",
+            anchor="w"
+        ).grid(row=2, column=0, sticky="w", padx=(24, 24), pady=(0, 12))
+
+        # 状态文字
+        self.status_label = ctk.CTkLabel(
+            self, text="准备中...",
+            font=ctk.CTkFont(size=12),
+            text_color="#888888",
+            anchor="w"
         )
+        self.status_label.grid(row=3, column=0, sticky="w", padx=(24, 24), pady=(0, 8))
 
+        # 进度条
+        self.progress_bar = ctk.CTkProgressBar(
+            self, height=8, corner_radius=4,
+            fg_color="#e0e0e0",
+            progress_color="#2196F3"
+        )
+        self.progress_bar.grid(row=4, column=0, sticky="ew", padx=(24, 24), pady=(0, 4))
+        self.progress_bar.set(0)
+
+        # 百分比
+        self.percent_label = ctk.CTkLabel(
+            self, text="",
+            font=ctk.CTkFont(size=11),
+            text_color="#aaaaaa",
+            anchor="e"
+        )
+        self.percent_label.grid(row=5, column=0, sticky="e", padx=(24, 24), pady=(0, 12))
+
+        # 取消按钮
+        ctk.CTkButton(
+            self, text="取消",
+            width=80, height=32,
+            font=ctk.CTkFont(size=12),
+            corner_radius=8,
+            fg_color="#e0e0e0",
+            text_color="#333333",
+            hover_color="#d0d0d0",
+            command=self._on_cancel
+        ).grid(row=6, column=0, sticky="e", padx=(24, 24), pady=(0, 16))
+
+        # 启动异步导出
         BookService().export_async(main_window, book, output_dir)
+
+    def _on_cancel(self):
+        self.cancelled = True
+        self.destroy()
 
     def update_progress(self, status, current, total):
         """更新进度显示"""
-        if not self.window or self.cancelled:
+        try:
+            if not self.winfo_exists():
+                return
+        except Exception:
             return
+
         if status == 'loading':
-            self.window['-STATUS_TEXT-'].update('正在加载笔记...')
-            self.window['-PROGRESS-'].update(0)
-            self.window['-PROGRESS_TEXT-'].update('')
+            self.status_label.configure(text="正在加载笔记...")
+            self.progress_bar.set(0)
+            self.percent_label.configure(text="")
         elif status == 'exporting':
-            percent = int(current / total * 100) if total > 0 else 0
-            self.window['-STATUS_TEXT-'].update(f'正在导出 ({current}/{total})')
-            self.window['-PROGRESS-'].update(percent)
-            self.window['-PROGRESS_TEXT-'].update(f'{percent}%')
+            percent = current / total if total > 0 else 0
+            self.status_label.configure(text=f"正在导出 ({current}/{total})")
+            self.progress_bar.set(percent)
+            self.percent_label.configure(text=f"{int(percent * 100)}%")
         elif status == 'done':
-            self.window['-STATUS_TEXT-'].update('导出完成!')
-            self.window['-PROGRESS-'].update(100)
-            self.window['-PROGRESS_TEXT-'].update('100%')
+            self.status_label.configure(text="导出完成！")
+            self.progress_bar.set(1.0)
+            self.percent_label.configure(text="100%")
 
     def close(self):
         """关闭窗口"""
-        if self.window:
-            self.window.close()
-            self.window = None
+        try:
+            if self.winfo_exists():
+                self.destroy()
+        except Exception:
+            pass
