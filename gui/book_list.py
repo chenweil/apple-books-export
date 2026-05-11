@@ -106,7 +106,7 @@ class BookListPanel(ctk.CTkFrame):
             font=ctk.CTkFont(size=12),
             text_color="#888888"
         )
-        self.page_label.grid(row=0, column=3, padx=(4, 8))
+        self.page_label.grid(row=0, column=3, padx=(4, 4))
 
         self.next_btn = ctk.CTkButton(
             self.page_frame, text="下一页", width=70, height=30,
