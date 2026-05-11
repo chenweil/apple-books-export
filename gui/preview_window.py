@@ -116,7 +116,8 @@ class PreviewWindow:
                 if ann.get('created_date'):
                     try:
                         date = apple_timestamp_to_datetime(ann['created_date'])
-                        lines.append(f'时间: {date.strftime("%Y-%m-%d %H:%M")}')
+                        local = date.astimezone()
+                        lines.append(f'时间: {local.strftime("%Y-%m-%d %H:%M")} (UTC)')
                     except Exception:
                         pass
 
@@ -146,7 +147,8 @@ class PreviewWindow:
                 if ann.get('created_date'):
                     try:
                         date = apple_timestamp_to_datetime(ann['created_date'])
-                        lines.append(f'时间: {date.strftime("%Y-%m-%d %H:%M")}')
+                        local = date.astimezone()
+                        lines.append(f'时间: {local.strftime("%Y-%m-%d %H:%M")} (UTC)')
                     except Exception:
                         pass
 
