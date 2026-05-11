@@ -33,4 +33,5 @@ books-exporter-swift/
 exports/
 *.md
 !README.md
+!AGENTS.md
 !.gitignore
