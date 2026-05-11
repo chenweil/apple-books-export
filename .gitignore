@@ -21,6 +21,9 @@ venv/
 .vscode/
 .idea/
 
+# AI
+.claude/
+
 # 导出结果（用户自行创建）
 exports/
 *.md
