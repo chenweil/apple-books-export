@@ -1,7 +1,7 @@
 import Foundation
 import SQLite3
 
-actor DatabaseService {
+class DatabaseService {
     private var bkLibraryDB: OpaquePointer?
     private var aeAnnotationDB: OpaquePointer?
     
@@ -54,7 +54,7 @@ actor DatabaseService {
         aeAnnotationDB = nil
     }
     
-    func getBooks() async throws -> [Book] {
+    func getBooks() throws -> [Book] {
         try open()
         defer { close() }
         
@@ -109,7 +109,7 @@ actor DatabaseService {
         return books
     }
     
-    func getAnnotations(for bookId: String) async throws -> [Annotation] {
+    func getAnnotations(for bookId: String) throws -> [Annotation] {
         try open()
         defer { close() }
         

@@ -12,7 +12,7 @@ class BookService {
         currentError = nil
         
         do {
-            let books = try await databaseService.getBooks()
+            let books = try databaseService.getBooks()
             isBusy = false
             return books
         } catch {
@@ -24,7 +24,7 @@ class BookService {
     
     func getAnnotations(for bookId: String) async -> [Annotation] {
         do {
-            return try await databaseService.getAnnotations(for: bookId)
+            return try databaseService.getAnnotations(for: bookId)
         } catch {
             currentError = error
             return []
