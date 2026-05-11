@@ -73,7 +73,9 @@ class BookListPanel(ctk.CTkFrame):
         # 分页
         self.page_frame = ctk.CTkFrame(self, fg_color="transparent", height=36)
         self.page_frame.grid(row=2, column=0, columnspan=2, sticky="ew", padx=(16, 16), pady=(4, 8))
-        self.page_frame.grid_columnconfigure(1, weight=1)
+        self.page_frame.grid_columnconfigure(1, weight=0)
+        self.page_frame.grid_columnconfigure(2, weight=1)
+        self.page_frame.grid_columnconfigure(3, weight=0)
 
         self.prev_btn = ctk.CTkButton(
             self.page_frame, text="上一页", width=70, height=30,
@@ -86,12 +88,23 @@ class BookListPanel(ctk.CTkFrame):
         )
         self.prev_btn.grid(row=0, column=0, padx=(0, 8))
 
+        # 页码输入框
+        self.page_entry = ctk.CTkEntry(
+            self.page_frame,
+            width=50,
+            height=30,
+            font=ctk.CTkFont(size=12),
+            justify="center"
+        )
+        self.page_entry.grid(row=0, column=1, padx=(0, 4))
+        self.page_entry.bind("<Return>", self._on_page_jump)
+
         self.page_label = ctk.CTkLabel(
-            self.page_frame, text="",
+            self.page_frame, text="/ 1",
             font=ctk.CTkFont(size=12),
             text_color="#888888"
         )
-        self.page_label.grid(row=0, column=1)
+        self.page_label.grid(row=0, column=2, sticky="w")
 
         self.next_btn = ctk.CTkButton(
             self.page_frame, text="下一页", width=70, height=30,
@@ -102,7 +115,7 @@ class BookListPanel(ctk.CTkFrame):
             hover_color="#d0d0d0",
             command=self._next_page
         )
-        self.next_btn.grid(row=0, column=2, padx=(8, 0))
+        self.next_btn.grid(row=0, column=3, padx=(8, 0))
 
         # 空状态提示
         self.empty_label = ctk.CTkLabel(
@@ -137,7 +150,8 @@ class BookListPanel(ctk.CTkFrame):
         filtered = self._get_filtered_books()
         if not filtered:
             self.empty_label.grid(row=0, column=0, pady=40)
-            self.page_label.configure(text="")
+            self.page_entry.configure(state="disabled")
+            self.page_label.configure(text="/ 1")
             self.prev_btn.configure(state="disabled")
             self.next_btn.configure(state="disabled")
             return
@@ -218,9 +232,13 @@ class BookListPanel(ctk.CTkFrame):
 
         # 更新分页
         if self.total_pages > 1:
-            self.page_label.configure(text=f"{self.current_page} / {self.total_pages}")
+            self.page_entry.configure(state="normal")
+            self.page_entry.delete(0, "end")
+            self.page_entry.insert(0, str(self.current_page))
+            self.page_label.configure(text=f"/ {self.total_pages}")
         else:
-            self.page_label.configure(text="")
+            self.page_entry.configure(state="disabled")
+            self.page_label.configure(text="/ 1")
         self.prev_btn.configure(state="normal" if self.current_page > 1 else "disabled")
         self.next_btn.configure(state="normal" if self.current_page < self.total_pages else "disabled")
 
@@ -243,6 +261,23 @@ class BookListPanel(ctk.CTkFrame):
                     frame.configure(fg_color="transparent")
             if self.on_select_callback:
                 self.on_select_callback(filtered[index], index)
+
+    def _on_page_jump(self, event):
+        """页码跳转"""
+        try:
+            page = int(self.page_entry.get())
+            if 1 <= page <= self.total_pages:
+                self.current_page = page
+                self.selected_index = None
+                self._refresh_list()
+            else:
+                # 恢复当前页码
+                self.page_entry.delete(0, "end")
+                self.page_entry.insert(0, str(self.current_page))
+        except ValueError:
+            # 输入无效，恢复当前页码
+            self.page_entry.delete(0, "end")
+            self.page_entry.insert(0, str(self.current_page))
 
     def _prev_page(self):
         if self.current_page > 1:
