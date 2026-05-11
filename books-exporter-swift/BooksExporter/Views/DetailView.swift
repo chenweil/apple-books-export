@@ -154,7 +154,6 @@ extension AnnotationType {
         case .highlight: return "highlighter"
         case .note: return "note.text"
         case .bookmark: return "bookmark"
-        case .annotation: return "text.badge.plus"
         }
     }
 }
