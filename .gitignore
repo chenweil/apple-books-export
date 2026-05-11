@@ -24,3 +24,5 @@ venv/
 # 导出结果（用户自行创建）
 exports/
 *.md
+!README.md
+!.gitignore
