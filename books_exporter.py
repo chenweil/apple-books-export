@@ -160,7 +160,7 @@ def export_book_to_markdown(book, annotations, output_dir):
                     date = apple_timestamp_to_datetime(ann['created_date'])
                     if date:
                         local = date.astimezone()  # 转为本机时区
-                        f.write(f"*{local.strftime('%Y-%m-%d %H:%M')} (UTC)*\n\n")
+                        f.write(f"*{local.strftime('%Y-%m-%d %H:%M %Z')}*\n\n")
                 f.write("---\n\n")
 
         # 写入独立笔记
@@ -177,7 +177,7 @@ def export_book_to_markdown(book, annotations, output_dir):
                     date = apple_timestamp_to_datetime(ann['created_date'])
                     if date:
                         local = date.astimezone()  # 转为本机时区
-                        f.write(f"*{local.strftime('%Y-%m-%d %H:%M')} (UTC)*\n\n")
+                        f.write(f"*{local.strftime('%Y-%m-%d %H:%M %Z')}*\n\n")
                 f.write("---\n\n")
 
         # 写入书签

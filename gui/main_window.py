@@ -89,12 +89,19 @@ class MainWindow:
 
         # 事件循环（所有 UI 更新都在主线程）
         while True:
-            event, values = self.window.read()
+            event, values = self.window.read(timeout=100)
 
             if event in (None, 'Exit'):
                 break
 
             self._handle_event(event, values)
+
+            # 导出弹窗有自己的窗口，需要单独轮询其事件
+            if self.export_dialog.window:
+                evt, _ = self.export_dialog.window.read(timeout=0)
+                if evt in (None, '-CANCEL-'):
+                    self.export_dialog.cancelled = True
+                    self.export_dialog.close()
 
         self.window.close()
 
@@ -156,7 +163,10 @@ class MainWindow:
         # ---- 导出完成（来自 worker 线程）----
         if event == '-EXPORT_COMPLETE-':
             payload = values[event]
-            self.export_dialog.on_complete()
+            cancelled = self.export_dialog.cancelled
+            self.export_dialog.close()
+            if cancelled:
+                return
             success = payload['success']
             filepath = payload['filepath']
             error = payload['error']
@@ -216,8 +226,4 @@ class MainWindow:
             return
 
         self.selected_output_dir = output_dir
-        self.export_dialog.show(
-            book,
-            output_dir,
-            window=self.window  # 传递 window 用于事件回调
-        )
+        self.export_dialog.show(book, output_dir, self.window)

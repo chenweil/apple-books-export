@@ -1,8 +1,8 @@
 """
-导出进度对话框 - 完全事件驱动，不在 worker 线程直接操作 UI
+导出进度对话框 - 纯进度显示器，不含事件循环
+所有事件由 MainWindow 统一处理
 """
 import PySimpleGUI as sg
-import threading
 import sys
 from pathlib import Path
 
@@ -11,32 +11,24 @@ from services.book_service import BookService
 
 
 class ExportDialog:
-    """导出进度对话框，事件驱动"""
+    """导出进度对话框，纯 UI 组件"""
 
     def __init__(self):
         self.window = None
         self.cancelled = False
-        self.export_done = False
-        self._book = None
-        self._output_dir = None
-        self._result = None  # (success, filepath, error)
 
-    def show(self, book, output_dir, window):
+    def show(self, book, output_dir, main_window):
         """
-        显示导出进度对话框并开始导出
+        创建导出进度弹窗并启动异步导出。
+        不阻塞，由 MainWindow 事件循环统一驱动。
 
         Args:
             book: 书籍信息
             output_dir: 输出目录
-            window: 主窗口（事件发到这里）
+            main_window: 主窗口（导出事件发到这里）
         """
         self.cancelled = False
-        self.export_done = False
-        self._book = book
-        self._output_dir = output_dir
-        self._result = None
 
-        # 创建布局
         layout = [
             [sg.Text('正在导出', font=('Helvetica', 12, 'bold'))],
             [sg.Text(f'书名: {book["title"][:40]}', key='-EXPORT_TITLE-', size=(50, 1))],
@@ -54,44 +46,16 @@ class ExportDialog:
         self.window = sg.Window(
             '导出进度',
             layout,
-            modal=True,
+            modal=False,
             finalize=True,
             disable_close=False,
             size=(500, 200)
         )
 
-        # 通过主窗口启动异步导出（结果发回主窗口）
-        BookService().export_async(window, book, output_dir)
+        BookService().export_async(main_window, book, output_dir)
 
-        # 事件循环（modal 窗口自己的循环）
-        self._event_loop(window)
-
-    def _event_loop(self, main_window):
-        """事件循环——读弹窗自己的事件，导出完成由主窗口处理"""
-        while True:
-            # 读取弹窗自身事件（取消按钮）
-            event, _ = self.window.read(timeout=100)
-
-            if event in (None, '-CANCEL-'):
-                self.cancelled = True
-                self._result = (False, None, '用户取消')
-                break
-
-            # 每轮也读一下主窗口的事件（导出进度/完成）
-            main_evt, main_vals = main_window.read(timeout=0)
-            if main_evt == '-EXPORT_PROGRESS-':
-                status, current, total = main_vals[main_evt]
-                self._update_progress(status, current, total)
-            elif main_evt == '-EXPORT_COMPLETE-':
-                # 弹窗不消费结果，只关窗；结果由主窗口处理
-                break
-
-        if self.window:
-            self.window.close()
-            self.window = None
-
-    def _update_progress(self, status, current, total):
-        """更新进度（主线程调用，安全）"""
+    def update_progress(self, status, current, total):
+        """更新进度显示"""
         if not self.window or self.cancelled:
             return
         if status == 'loading':
@@ -107,14 +71,6 @@ class ExportDialog:
             self.window['-STATUS_TEXT-'].update('导出完成!')
             self.window['-PROGRESS-'].update(100)
             self.window['-PROGRESS_TEXT-'].update('100%')
-
-    def update_progress(self, status, current, total):
-        """外部进度更新接口（兼容旧回调式调用）"""
-        self._update_progress(status, current, total)
-
-    def on_complete(self):
-        """导出完成回调（由 main_window 调用）"""
-        self.export_done = True
 
     def close(self):
         """关闭窗口"""

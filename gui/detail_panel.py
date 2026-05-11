@@ -80,6 +80,9 @@ class DetailPanel:
             if stats_loaded:
                 window['-PREVIEW-'].update(disabled=False, button_color=('white', 'blue'))
                 window['-EXPORT-'].update(disabled=False, button_color=('white', 'green'))
+            else:
+                window['-PREVIEW-'].update(disabled=True, button_color=('white', 'gray'))
+                window['-EXPORT-'].update(disabled=True, button_color=('white', 'gray'))
         else:
             # 清空显示
             window['-BOOK_TITLE-'].update('')
