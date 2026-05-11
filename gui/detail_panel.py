@@ -73,9 +73,13 @@ class DetailPanel:
                 window['-ANNOTATION_COUNT-'].update(str(stats.get('notes', 0)))
                 window['-BOOKMARK_COUNT-'].update(str(stats.get('bookmarks', 0)))
 
-            # 启用按钮
-            window['-PREVIEW-'].update(disabled=False, button_color=('white', 'blue'))
-            window['-EXPORT-'].update(disabled=False, button_color=('white', 'green'))
+            # 只有笔记真正加载完成后（stats 含实际数字，不是 '...'）才启用按钮
+            stats_loaded = stats and all(
+                isinstance(v, int) for v in stats.values()
+            )
+            if stats_loaded:
+                window['-PREVIEW-'].update(disabled=False, button_color=('white', 'blue'))
+                window['-EXPORT-'].update(disabled=False, button_color=('white', 'green'))
         else:
             # 清空显示
             window['-BOOK_TITLE-'].update('')
