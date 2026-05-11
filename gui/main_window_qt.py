@@ -422,9 +422,14 @@ class MainWindow(QMainWindow):
         
         # 定时器处理事件队列
         from PyQt6.QtCore import QTimer
-        self.timer = QTimer()
+        self.timer = QTimer(self)
         self.timer.timeout.connect(self._poll_events)
         self.timer.start(100)
+    
+    def closeEvent(self, event):
+        """窗口关闭时停止定时器"""
+        self.timer.stop()
+        event.accept()
     
     def _build_ui(self):
         central = QWidget()
