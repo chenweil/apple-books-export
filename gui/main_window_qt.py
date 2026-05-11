@@ -657,7 +657,9 @@ class MainWindow(QMainWindow):
         
         # 副标题
         author = self.selected_book['author']
-        sub = f"{author}  ·  {len(self.selected_annotations)} 条笔记" if author and author != '未知作者' else f"{len(self.selected_annotations)} 条笔记"
+        # 只统计有实际内容的笔记
+        highlights = [ann for ann in self.selected_annotations if ann.get('selected_text') or ann.get('note')]
+        sub = f"{author}  ·  {len(highlights)} 条笔记" if author and author != '未知作者' else f"{len(highlights)} 条笔记"
         sub_label = QLabel(sub)
         sub_label.setStyleSheet(f"""
             color: {COLORS['text_secondary']};
