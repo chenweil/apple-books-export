@@ -78,12 +78,12 @@ class DetailPanel(ctk.CTkFrame):
         stats_frame.grid(row=3, column=0, sticky="ew", padx=(20, 20), pady=(0, 16))
         stats_frame.grid_columnconfigure((0, 1, 2), weight=1)
 
-        # 高亮与笔记统计
+        # 笔记数量统计
         highlight_card = ctk.CTkFrame(stats_frame, corner_radius=10, fg_color="#fff8e1")
-        highlight_card.grid(row=0, column=0, padx=(0, 6), sticky="nsew")
+        highlight_card.grid(row=0, column=0, sticky="nsew")
         highlight_card.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(
-            highlight_card, text="高亮与笔记",
+            highlight_card, text="笔记数量",
             font=ctk.CTkFont(size=11), text_color="#f9a825",
             anchor="center"
         ).grid(row=0, column=0, pady=(10, 0))
@@ -93,22 +93,6 @@ class DetailPanel(ctk.CTkFrame):
             anchor="center"
         )
         self.highlight_count.grid(row=1, column=0, pady=(0, 10))
-
-        # 总计
-        total_card = ctk.CTkFrame(stats_frame, corner_radius=10, fg_color="#f3e5f5")
-        total_card.grid(row=0, column=1, padx=(6, 0), sticky="nsew")
-        total_card.grid_columnconfigure(0, weight=1)
-        ctk.CTkLabel(
-            total_card, text="总计",
-            font=ctk.CTkFont(size=11), text_color="#8e24aa",
-            anchor="center"
-        ).grid(row=0, column=0, pady=(10, 0))
-        self.total_count = ctk.CTkLabel(
-            total_card, text="—",
-            font=ctk.CTkFont(size=22, weight="bold"), text_color="#6a1b9a",
-            anchor="center"
-        )
-        self.total_count.grid(row=1, column=0, pady=(0, 10))
         self.total_label = ctk.CTkLabel(
             self.detail_frame,
             text="",
@@ -186,7 +170,6 @@ class DetailPanel(ctk.CTkFrame):
 
             if stats:
                 self.highlight_count.configure(text=str(stats.get('highlights', 0)))
-                self.total_count.configure(text=str(stats.get('total', 0)))
 
                 # 只有数据真正加载完成才启用按钮
                 stats_loaded = all(isinstance(v, int) for v in stats.values())
@@ -198,7 +181,6 @@ class DetailPanel(ctk.CTkFrame):
                     self.export_btn.configure(state="disabled")
             else:
                 self.highlight_count.configure(text="—")
-                self.total_count.configure(text="—")
                 self.preview_btn.configure(state="disabled")
                 self.export_btn.configure(state="disabled")
         else:
