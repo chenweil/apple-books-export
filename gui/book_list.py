@@ -98,7 +98,7 @@ class BookListPanel(ctk.CTkFrame):
             font=ctk.CTkFont(size=12),
             justify="center"
         )
-        self.page_entry.grid(row=0, column=2, padx=(0, 4))
+        self.page_entry.grid(row=0, column=2)
         self.page_entry.bind("<Return>", self._on_page_jump)
 
         self.page_label = ctk.CTkLabel(
@@ -106,7 +106,7 @@ class BookListPanel(ctk.CTkFrame):
             font=ctk.CTkFont(size=12),
             text_color="#888888"
         )
-        self.page_label.grid(row=0, column=3, padx=(0, 8))
+        self.page_label.grid(row=0, column=3, padx=(8, 8))
 
         self.next_btn = ctk.CTkButton(
             self.page_frame, text="下一页", width=70, height=30,
