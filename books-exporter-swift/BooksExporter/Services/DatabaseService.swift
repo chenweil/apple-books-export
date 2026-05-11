@@ -5,10 +5,28 @@ actor DatabaseService {
     private var bkLibraryDB: OpaquePointer?
     private var aeAnnotationDB: OpaquePointer?
     
-    private let bkLibraryPath: String
-    private let aeAnnotationPath: String
+    private var bkLibraryPath: String?
+    private var aeAnnotationPath: String?
     
-    init() throws {
+    init() {
+        // Defer path resolution and throwing to first use
+    }
+    
+    func open() throws {
+        if bkLibraryPath == nil || aeAnnotationPath == nil {
+            try resolveDatabasePaths()
+        }
+        
+        if sqlite3_open_v2(bkLibraryPath!, &bkLibraryDB, SQLITE_OPEN_READONLY, nil) != SQLITE_OK {
+            throw DatabaseError.openFailed("BKLibrary: \(String(cString: sqlite3_errmsg(bkLibraryDB)))")
+        }
+        
+        if sqlite3_open_v2(aeAnnotationPath!, &aeAnnotationDB, SQLITE_OPEN_READONLY, nil) != SQLITE_OK {
+            throw DatabaseError.openFailed("AEAnnotation: \(String(cString: sqlite3_errmsg(aeAnnotationDB)))")
+        }
+    }
+    
+    private func resolveDatabasePaths() throws {
         let homeDir = FileManager.default.homeDirectoryForCurrentUser
         let dataPath = homeDir.appendingPathComponent("Library/Containers/com.apple.iBooksX/Data/Documents")
         
@@ -27,16 +45,6 @@ actor DatabaseService {
         
         self.bkLibraryPath = bkLibraryFile.path
         self.aeAnnotationPath = aeAnnotationFile.path
-    }
-    
-    func open() throws {
-        if sqlite3_open_v2(bkLibraryPath, &bkLibraryDB, SQLITE_OPEN_READONLY, nil) != SQLITE_OK {
-            throw DatabaseError.openFailed("BKLibrary: \(String(cString: sqlite3_errmsg(bkLibraryDB)))")
-        }
-        
-        if sqlite3_open_v2(aeAnnotationPath, &aeAnnotationDB, SQLITE_OPEN_READONLY, nil) != SQLITE_OK {
-            throw DatabaseError.openFailed("AEAnnotation: \(String(cString: sqlite3_errmsg(aeAnnotationDB)))")
-        }
     }
     
     func close() {
