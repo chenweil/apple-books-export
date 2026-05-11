@@ -73,14 +73,14 @@ class DetailPanel(ctk.CTkFrame):
             self.detail_frame, height=1, fg_color="#e8e8e8"
         ).grid(row=2, column=0, sticky="ew", padx=(20, 20), pady=(0, 16))
 
-        # 统计卡片
+        # 统计卡片（2个）
         stats_frame = ctk.CTkFrame(self.detail_frame, fg_color="transparent")
         stats_frame.grid(row=3, column=0, sticky="ew", padx=(20, 20), pady=(0, 16))
-        stats_frame.grid_columnconfigure((0, 1, 2), weight=1)
+        stats_frame.grid_columnconfigure((0, 1), weight=1)
 
         # 笔记数量统计
         highlight_card = ctk.CTkFrame(stats_frame, corner_radius=10, fg_color="#fff8e1")
-        highlight_card.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
+        highlight_card.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
         highlight_card.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(
             highlight_card, text="笔记数量",
@@ -96,7 +96,7 @@ class DetailPanel(ctk.CTkFrame):
 
         # 阅读进度
         progress_card = ctk.CTkFrame(stats_frame, corner_radius=10, fg_color="#e3f2fd")
-        progress_card.grid(row=0, column=1, sticky="nsew", padx=(6, 6))
+        progress_card.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
         progress_card.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(
             progress_card, text="阅读进度",
@@ -109,22 +109,6 @@ class DetailPanel(ctk.CTkFrame):
             anchor="center"
         )
         self.progress_label.grid(row=1, column=0, pady=(0, 10))
-
-        # 页数
-        page_card = ctk.CTkFrame(stats_frame, corner_radius=10, fg_color="#f3e5f5")
-        page_card.grid(row=0, column=2, sticky="nsew", padx=(6, 0))
-        page_card.grid_columnconfigure(0, weight=1)
-        ctk.CTkLabel(
-            page_card, text="总页数",
-            font=ctk.CTkFont(size=11), text_color="#8e24aa",
-            anchor="center"
-        ).grid(row=0, column=0, pady=(10, 0))
-        self.page_label = ctk.CTkLabel(
-            page_card, text="—",
-            font=ctk.CTkFont(size=22, weight="bold"), text_color="#6a1b9a",
-            anchor="center"
-        )
-        self.page_label.grid(row=1, column=0, pady=(0, 10))
 
         # 阅读时间信息
         self.time_info_frame = ctk.CTkFrame(self.detail_frame, fg_color="transparent")
@@ -213,19 +197,17 @@ class DetailPanel(ctk.CTkFrame):
             else:
                 self.author_label.configure(text="")
 
-            # 更新阅读进度和页数
-            progress = book.get('reading_progress')
-            if progress is not None:
-                progress_pct = int(progress * 100)
-                self.progress_label.configure(text=f"{progress_pct}%")
+            # 更新阅读进度
+            is_finished = book.get('is_finished')
+            if is_finished == 1:
+                self.progress_label.configure(text="已读完")
             else:
-                self.progress_label.configure(text="—")
-
-            page_count = book.get('page_count')
-            if page_count:
-                self.page_label.configure(text=str(page_count))
-            else:
-                self.page_label.configure(text="—")
+                progress = book.get('reading_progress')
+                if progress is not None:
+                    progress_pct = int(progress * 100)
+                    self.progress_label.configure(text=f"{progress_pct}%")
+                else:
+                    self.progress_label.configure(text="—")
 
             # 更新时间信息
             from books_exporter import apple_timestamp_to_datetime
