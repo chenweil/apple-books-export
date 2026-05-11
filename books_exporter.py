@@ -144,11 +144,15 @@ def get_books_with_notes():
     conn = sqlite3.connect(str(AE_ANNOTATION_DB))
     cursor = conn.cursor()
 
-    # 获取每本书的笔记数量
+    # 获取每本书的有效笔记数量（只统计有内容的）
     cursor.execute("""
         SELECT ZANNOTATIONASSETID, COUNT(*) as note_count
         FROM ZAEANNOTATION
-        WHERE ZANNOTATIONDELETED IS NULL OR ZANNOTATIONDELETED = 0
+        WHERE (ZANNOTATIONDELETED IS NULL OR ZANNOTATIONDELETED = 0)
+        AND (
+            (ZANNOTATIONSELECTEDTEXT IS NOT NULL AND ZANNOTATIONSELECTEDTEXT != '')
+            OR (ZANNOTATIONNOTE IS NOT NULL AND ZANNOTATIONNOTE != '')
+        )
         GROUP BY ZANNOTATIONASSETID
     """)
     annotation_counts = dict(cursor.fetchall())
