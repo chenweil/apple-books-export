@@ -1,0 +1,5 @@
+# Homebrew Python 3.14 (需要 python-tk@3.14)
+# 安装方式:
+#   brew install python@3.14 python-tk@3.14
+#   /opt/homebrew/bin/python3.14 -m pip install PySimpleGUI --break-system-packages
+PySimpleGUI>=6.0

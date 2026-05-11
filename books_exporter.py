@@ -1,0 +1,318 @@
+#!/usr/bin/env python3
+"""
+Apple Books 笔记导出工具
+用于导出 Apple Books 中的笔记/标注为 Markdown 文件
+"""
+
+import sys
+import os
+import sqlite3
+import argparse
+from datetime import datetime, timezone, timedelta
+from pathlib import Path
+
+# Apple CoreData 时间戳起点（2001-01-01 00:00:00 UTC）
+APPLE_EPOCH = datetime(2001, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+
+# Apple Books 数据路径
+IBOOKS_PATH = Path.home() / "Library/Containers/com.apple.iBooksX/Data/Documents"
+BK_LIBRARY_DB = IBOOKS_PATH / "BKLibrary/BKLibrary-1-091020131601.sqlite"
+AE_ANNOTATION_DB = IBOOKS_PATH / "AEAnnotation/AEAnnotation_v10312011_1727_local.sqlite"
+
+ANNOTATION_TYPE_MAP = {
+    0: "书签",
+    1: "笔记",
+    2: "高亮",
+    3: "标注"
+}
+
+
+def apple_timestamp_to_datetime(ts):
+    """将 Apple CoreData 时间戳（2001-01-01 起秒数）转换为 datetime"""
+    if ts is None:
+        return None
+    return APPLE_EPOCH + timedelta(seconds=float(ts))
+
+
+def get_books_with_notes():
+    """获取所有书籍及其笔记数量"""
+    if not BK_LIBRARY_DB.exists() or not AE_ANNOTATION_DB.exists():
+        return []
+
+    conn = sqlite3.connect(str(AE_ANNOTATION_DB))
+    cursor = conn.cursor()
+
+    # 获取每本书的笔记数量
+    cursor.execute("""
+        SELECT ZANNOTATIONASSETID, COUNT(*) as note_count
+        FROM ZAEANNOTATION
+        WHERE ZANNOTATIONDELETED IS NULL OR ZANNOTATIONDELETED = 0
+        GROUP BY ZANNOTATIONASSETID
+    """)
+    annotation_counts = dict(cursor.fetchall())
+    conn.close()
+
+    if not annotation_counts:
+        return []
+
+    # 获取书籍信息
+    conn = sqlite3.connect(str(BK_LIBRARY_DB))
+    cursor = conn.cursor()
+
+    books = []
+    for asset_id, count in annotation_counts.items():
+        cursor.execute("""
+            SELECT ZASSETID, ZTITLE, ZAUTHOR, ZPATH
+            FROM ZBKLIBRARYASSET
+            WHERE ZASSETID = ?
+        """, (asset_id,))
+        row = cursor.fetchone()
+        if row:
+            books.append({
+                'asset_id': row[0],
+                'title': row[1] or '未知书名',
+                'author': row[2] or '未知作者',
+                'path': row[3] or '',
+                'note_count': count
+            })
+    conn.close()
+
+    # 按笔记数量降序排列
+    books.sort(key=lambda x: x['note_count'], reverse=True)
+    return books
+
+
+def get_annotations_for_book(asset_id):
+    """获取指定书籍的所有笔记"""
+    conn = sqlite3.connect(str(AE_ANNOTATION_DB))
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT
+            ZANNOTATIONTYPE,
+            ZANNOTATIONSELECTEDTEXT,
+            ZANNOTATIONNOTE,
+            ZANNOTATIONCREATIONDATE,
+            ZANNOTATIONLOCATION
+        FROM ZAEANNOTATION
+        WHERE ZANNOTATIONASSETID = ?
+        AND (ZANNOTATIONDELETED IS NULL OR ZANNOTATIONDELETED = 0)
+        ORDER BY ZANNOTATIONCREATIONDATE
+    """, (asset_id,))
+
+    annotations = []
+    for row in cursor.fetchall():
+        annotations.append({
+            'type': row[0],
+            'selected_text': row[1] or '',
+            'note': row[2] or '',
+            'created_date': row[3],
+            'location': row[4] or ''
+        })
+    conn.close()
+    return annotations
+
+
+def export_book_to_markdown(book, annotations, output_dir):
+    """将书籍笔记导出为 Markdown 文件"""
+    # 创建安全的文件名
+    safe_title = "".join(c if c.isalnum() or c in (' ', '-', '_') else '_' for c in book['title'])
+    safe_title = safe_title[:50]  # 限制长度
+    filename = f"{safe_title}_{book['asset_id'][:8]}.md"
+    filepath = output_dir / filename
+
+    with open(filepath, 'w', encoding='utf-8') as f:
+        # 写入文件头
+        f.write(f"# {book['title']}\n\n")
+        f.write(f"**作者**: {book['author']}\n\n")
+        f.write(f"**笔记数量**: {len(annotations)}\n\n")
+        f.write("---\n\n")
+
+        # 按类型分组
+        highlights = []
+        notes = []
+        bookmarks = []
+
+        for ann in annotations:
+            ann_type = ann['type']
+            if ann_type == 0:
+                bookmarks.append(ann)
+            elif ann_type == 1:
+                notes.append(ann)
+            elif ann_type == 2:
+                highlights.append(ann)
+            elif ann_type == 3:
+                highlights.append(ann)
+
+        # 写入高亮/标注
+        if highlights:
+            f.write("## 高亮与标注\n\n")
+            for i, ann in enumerate(highlights, 1):
+                f.write(f"### {i}. ")
+                if ann['location']:
+                    f.write(f"位置: {ann['location']}")
+                f.write("\n\n")
+                if ann['selected_text']:
+                    f.write(f"> {ann['selected_text']}\n\n")
+                if ann['note']:
+                    f.write(f"**笔记**: {ann['note']}\n\n")
+                if ann['created_date']:
+                    date = apple_timestamp_to_datetime(ann['created_date'])
+                    if date:
+                        f.write(f"*{date.strftime('%Y-%m-%d %H:%M')}*\n\n")
+                f.write("---\n\n")
+
+        # 写入独立笔记
+        if notes:
+            f.write("## 独立笔记\n\n")
+            for i, ann in enumerate(notes, 1):
+                f.write(f"### {i}.")
+                if ann['location']:
+                    f.write(f" 位置: {ann['location']}")
+                f.write("\n\n")
+                if ann['note']:
+                    f.write(f"{ann['note']}\n\n")
+                if ann['created_date']:
+                    date = apple_timestamp_to_datetime(ann['created_date'])
+                    if date:
+                        f.write(f"*{date.strftime('%Y-%m-%d %H:%M')}*\n\n")
+                f.write("---\n\n")
+
+        # 写入书签
+        if bookmarks:
+            f.write("## 书签\n\n")
+            for i, ann in enumerate(bookmarks, 1):
+                f.write(f"- {i}. ")
+                if ann['location']:
+                    f.write(f"位置: {ann['location']}")
+                if ann['note']:
+                    f.write(f" - {ann['note']}")
+                f.write("\n")
+
+    return filepath
+
+
+def list_books():
+    """列出所有书籍"""
+    books = get_books_with_notes()
+    if not books:
+        print("未找到任何书籍笔记数据")
+        print("请确保 Apple Books 中有书籍并已经做了笔记/标注")
+        return
+
+    # 计算列宽
+    title_width = 44
+    author_width = 18
+    num_width = 5
+
+    print(f"\n Apple Books 书籍列表 (共 {len(books)} 本)\n")
+    print(f"{'序号':^{num_width}}  {'书名':^{title_width}}  {'作者':^{author_width}}  {'笔记数':^{num_width}}")
+    print()
+
+    for i, book in enumerate(books, 1):
+        title = book['title'][:title_width] + '…' if len(book['title']) > title_width else book['title']
+        author = book['author'][:author_width] + '…' if len(book['author']) > author_width else book['author']
+        print(f"{i:^{num_width}}  {title:<{title_width}}  {author:<{author_width}}  {book['note_count']:^{num_width}}")
+
+    print()
+    print(f"总计: {len(books)} 本书, {sum(b['note_count'] for b in books)} 条笔记")
+
+
+def export_book(book_index, output_dir):
+    """导出指定书籍的笔记"""
+    books = get_books_with_notes()
+    if not books:
+        print("未找到任何书籍笔记数据")
+        return None
+
+    if book_index < 1 or book_index > len(books):
+        print(f"无效的书籍序号，请选择 1-{len(books)} 之间的数字")
+        return None
+
+    book = books[book_index - 1]
+    print(f"\n正在导出: {book['title']}")
+    print(f"作者: {book['author']}")
+    print(f"笔记数量: {book['note_count']}")
+
+    annotations = get_annotations_for_book(book['asset_id'])
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    filepath = export_book_to_markdown(book, annotations, output_path)
+    print(f"\n导出成功: {filepath}")
+    return filepath
+
+
+def interactive_select_and_export(output_dir):
+    """交互式选择书籍并导出"""
+    books = get_books_with_notes()
+    if not books:
+        print("未找到任何书籍笔记数据")
+        return
+
+    # 计算列宽
+    title_width = 44
+    author_width = 18
+    num_width = 5
+
+    print(f"\n Apple Books 书籍列表 (共 {len(books)} 本)\n")
+    print(f"{'序号':^{num_width}}  {'书名':^{title_width}}  {'作者':^{author_width}}  {'笔记数':^{num_width}}")
+    print()
+
+    for i, book in enumerate(books, 1):
+        title = book['title'][:title_width] + '…' if len(book['title']) > title_width else book['title']
+        author = book['author'][:author_width] + '…' if len(book['author']) > author_width else book['author']
+        print(f"{i:^{num_width}}  {title:<{title_width}}  {author:<{author_width}}  {book['note_count']:^{num_width}}")
+
+    print()
+    print(f"总计: {len(books)} 本书, {sum(b['note_count'] for b in books)} 条笔记")
+
+    while True:
+        print("\n请输入要导出的书籍序号 (输入 q 退出): ", end="")
+        choice = input().strip()
+        if choice.lower() == 'q':
+            print("已取消")
+            return
+        try:
+            idx = int(choice)
+            if 1 <= idx <= len(books):
+                export_book(idx, output_dir)
+                return
+            print(f"请输入 1-{len(books)} 之间的数字")
+        except ValueError:
+            print("请输入有效的数字")
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Apple Books 笔记导出工具",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+用法示例:
+  %(prog)s list                    # 列出所有书籍
+  %(prog)s export                   # 交互式选择书籍并导出
+  %(prog)s export 3                # 导出第3本书的笔记
+  %(prog)s export 3 -o ~/Desktop   # 导出到指定目录
+        """
+    )
+
+    parser.add_argument('command', choices=['list', 'export'],
+                        help='list: 列出书籍 | export: 导出笔记')
+    parser.add_argument('book_index', nargs='?', type=int,
+                        help='书籍序号 (从 list 命令获取)')
+    parser.add_argument('-o', '--output', default='.',
+                        help='导出目录 (默认: 当前目录)')
+
+    args = parser.parse_args()
+
+    if args.command == 'list':
+        list_books()
+    elif args.command == 'export':
+        if args.book_index:
+            export_book(args.book_index, args.output)
+        else:
+            interactive_select_and_export(args.output)
+
+
+if __name__ == '__main__':
+    main()

@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+venv/
+.venv/
+
+# macOS
+.DS_Store
+*.swp
+*.swo
+
+# IDE
+.vscode/
+.idea/
+
+# 导出结果（用户自行创建）
+exports/
+*.md
