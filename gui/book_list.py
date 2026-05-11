@@ -77,7 +77,8 @@ class BookListPanel(ctk.CTkFrame):
         self.page_frame.grid_columnconfigure(1, weight=0)
         self.page_frame.grid_columnconfigure(2, weight=0)
         self.page_frame.grid_columnconfigure(3, weight=0)
-        self.page_frame.grid_columnconfigure(4, weight=1)
+        self.page_frame.grid_columnconfigure(4, weight=0)
+        self.page_frame.grid_columnconfigure(5, weight=1)
 
         self.prev_btn = ctk.CTkButton(
             self.page_frame, text="上一页", width=70, height=30,
@@ -117,7 +118,7 @@ class BookListPanel(ctk.CTkFrame):
             hover_color="#d0d0d0",
             command=self._next_page
         )
-        self.next_btn.grid(row=0, column=4)
+        self.next_btn.grid(row=0, column=4, padx=(4, 0))
 
         # 空状态提示
         self.empty_label = ctk.CTkLabel(
