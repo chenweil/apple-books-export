@@ -88,7 +88,7 @@ class BookListPanel(ctk.CTkFrame):
             hover_color="#d0d0d0",
             command=self._prev_page
         )
-        self.prev_btn.grid(row=0, column=1, padx=(0, 8))
+        self.prev_btn.grid(row=0, column=1, padx=(0, 12))
 
         # 页码输入框
         self.page_entry = ctk.CTkEntry(
@@ -106,7 +106,7 @@ class BookListPanel(ctk.CTkFrame):
             font=ctk.CTkFont(size=12),
             text_color="#888888"
         )
-        self.page_label.grid(row=0, column=3, sticky="w")
+        self.page_label.grid(row=0, column=3, padx=(0, 12))
 
         self.next_btn = ctk.CTkButton(
             self.page_frame, text="下一页", width=70, height=30,
@@ -117,7 +117,7 @@ class BookListPanel(ctk.CTkFrame):
             hover_color="#d0d0d0",
             command=self._next_page
         )
-        self.next_btn.grid(row=0, column=4, padx=(8, 0))
+        self.next_btn.grid(row=0, column=4)
 
         # 空状态提示
         self.empty_label = ctk.CTkLabel(
