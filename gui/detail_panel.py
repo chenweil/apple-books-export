@@ -94,14 +94,9 @@ class DetailPanel(ctk.CTkFrame):
         )
         self.highlight_count.grid(row=1, column=0, pady=(0, 10))
 
-        # 占位（保持布局对称）
-        spacer = ctk.CTkFrame(stats_frame, fg_color="transparent")
-        spacer.grid(row=0, column=1, padx=(6, 6), sticky="nsew")
-        stats_frame.grid_columnconfigure(1, weight=1)
-
         # 总计
         total_card = ctk.CTkFrame(stats_frame, corner_radius=10, fg_color="#f3e5f5")
-        total_card.grid(row=0, column=2, padx=(6, 0), sticky="nsew")
+        total_card.grid(row=0, column=1, padx=(6, 0), sticky="nsew")
         total_card.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(
             total_card, text="总计",
