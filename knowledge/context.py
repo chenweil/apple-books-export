@@ -4,12 +4,17 @@ from __future__ import annotations
 
 import re
 import zipfile
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 
 def normalize_text(text: str) -> str:
-    """Normalize whitespace: strip and collapse runs to single space."""
-    return re.sub(r'\s+', ' ', text).strip()
+    """Normalize whitespace: strip, collapse runs, and remove spaces around punctuation."""
+    text = re.sub(r'\s+', ' ', text).strip()
+    # Remove spaces around CJK/full-width punctuation for fuzzy matching
+    _CJK_PUNCT = '，。！？；：、（）《》【】“”‘’…—'
+    text = re.sub(rf'\s*([{_CJK_PUNCT}])\s*', r'\1', text)
+    return text
 
 
 def extract_text_from_xhtml(html_content: str) -> str:
@@ -29,8 +34,28 @@ def get_manifest_map(epub_path: Path) -> dict[str, str]:
     except (KeyError, FileNotFoundError):
         return {}
 
-    items = re.findall(r'<item\s+id="([^"]+)"[^>]*href="([^"]+)"', content_opf)
-    return {item_id: href for item_id, href in items}
+    try:
+        root = ET.fromstring(content_opf)
+    except ET.ParseError:
+        return {}
+
+    # Try namespaced search first, then non-namespaced fallback
+    items = {}
+    for item in root.findall('.//{http://www.idpf.org/2007/opf}manifest/{http://www.idpf.org/2007/opf}item'):
+        item_id = item.get('id')
+        href = item.get('href')
+        if item_id and href:
+            items[item_id] = href
+
+    if not items:
+        ns = {'opf': 'http://www.idpf.org/2007/opf'}
+        for item in root.findall('.//opf:manifest/opf:item', ns):
+            item_id = item.get('id')
+            href = item.get('href')
+            if item_id and href:
+                items[item_id] = href
+
+    return items
 
 
 def get_chapter_text(epub_path: Path, chapter_href: str) -> str:

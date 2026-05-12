@@ -61,6 +61,14 @@ class TestExtractTextFromXhtml:
     def test_empty(self):
         assert extract_text_from_xhtml('') == ''
 
+    def test_real_world_xhtml(self):
+        html = '<html><body><p class="intro">Hello<br/>World</p><img src="test.png"/></body></html>'
+        result = extract_text_from_xhtml(html)
+        assert 'Hello' in result
+        assert 'World' in result
+        assert '<br' not in result
+        assert '<img' not in result
+
 
 class TestGetManifestMap:
     def test_parses_manifest(self, sample_epub):
@@ -110,6 +118,16 @@ class TestExtractContext:
         assert result is not None
         before, highlight, after = result
         assert after == ''
+
+    def test_fallback_normalized_match(self):
+        """When exact match fails due to whitespace, normalized match succeeds."""
+        text = '前面的文字。婴儿是没法面对失控的，失控会引起他们巨大的无助感。后面的文字。'
+        # Highlight with different whitespace
+        highlight = '婴儿是没法面对失控的， 失控会引起他们巨大的无助感'
+        result = extract_context(text, highlight, context_chars=20)
+        assert result is not None
+        before, matched, after = result
+        assert '婴儿' in matched
 
 
 class TestNormalizeText:
