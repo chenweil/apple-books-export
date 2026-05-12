@@ -7,8 +7,12 @@ from pathlib import Path
 
 try:
     from PIL import Image, ImageDraw, ImageFont
+    HAS_PILLOW = True
 except ImportError:
-    raise ImportError("Pillow is required for card generation. Install with: pip install Pillow")
+    HAS_PILLOW = False
+    Image = None
+    ImageDraw = None
+    ImageFont = None
 
 from .cache import LLMCache
 
@@ -89,6 +93,7 @@ def calculate_card_height(
     show_book_info: bool,
     show_tags: bool,
     show_question: bool = False,
+    show_explanation: bool = False,
 ) -> int:
     """Estimate card height for given text and layout options."""
     content_width = width - padding * 2
@@ -100,7 +105,9 @@ def calculate_card_height(
         height += font_size * 2 + 20  # book title + chapter
         height += 10  # separator
     height += len(lines) * line_height  # highlight text
-    height += 30  # spacing
+    height += 20  # spacing
+    if show_explanation:
+        height += int(font_size * 1.6) + 10
     if show_tags:
         height += font_size + 20
     if show_question:
@@ -119,6 +126,9 @@ def generate_card(
     style: dict = None,
 ):
     """Generate a single highlight card image."""
+    if not HAS_PILLOW:
+        raise ImportError("Pillow is required for card generation. Install with: pip install Pillow")
+
     style = style or load_style()
     tags = tags or []
 
@@ -135,6 +145,7 @@ def generate_card(
         style.get('show_book_info', True),
         style.get('show_tags', True),
         style.get('show_question', False),
+        show_explanation=bool(explanation),
     )
 
     img = Image.new('RGB', (width, height), bg_color)
