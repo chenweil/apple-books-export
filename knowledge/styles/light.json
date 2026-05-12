@@ -1,0 +1,15 @@
+{
+  "name": "light",
+  "width": 800,
+  "padding": 60,
+  "background": "#ffffff",
+  "text_color": "#333333",
+  "highlight_color": "#e74c3c",
+  "accent_color": "#f5f5f5",
+  "font_family": "Noto Sans SC",
+  "font_size": 18,
+  "border_radius": 16,
+  "show_book_info": true,
+  "show_tags": true,
+  "show_question": true
+}
