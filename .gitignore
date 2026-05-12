@@ -44,3 +44,6 @@ exports/
 dist/
 build/
 *.spec
+
+# 书文件
+books/
