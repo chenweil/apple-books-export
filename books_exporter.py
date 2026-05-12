@@ -8,9 +8,13 @@ import sys
 import os
 import sqlite3
 import argparse
-import re
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
+
+from services.cfi_utils import (
+    extract_chapter_title as parse_cfi_chapter,
+    format_chapter_display,
+)
 
 # Apple CoreData 时间戳起点（2001-01-01 00:00:00 UTC）
 APPLE_EPOCH = datetime(2001, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
@@ -33,107 +37,6 @@ def apple_timestamp_to_datetime(ts):
     if ts is None:
         return None
     return APPLE_EPOCH + timedelta(seconds=float(ts))
-
-
-def parse_cfi_chapter(cfi):
-    """
-    从 EPUB CFI 中提取章节信息
-    
-    Args:
-        cfi: EPUB CFI 字符串，如 "epubcfi(/6/6[Section0001.xhtml]!/4/2,/2[sigil_toc_id_1]/1:0,/1716/2)"
-    
-    Returns:
-        章节标识符字符串，如 "Section0001" 或 "15-面向并发的内存模型"
-    """
-    if not cfi or not cfi.startswith('epubcfi('):
-        return None
-    
-    # 提取所有方括号内的标识符
-    matches = re.findall(r'\[([^\]]+)\]', cfi)
-    if not matches:
-        return None
-    
-    # 判断是否是 UUID 或类似的无意义 ID
-    def is_meaningless_id(s):
-        # UUID 格式（包含长串十六进制，长度 > 20）
-        if len(s) > 20 and re.search(r'[0-9a-f]{8,}', s, re.IGNORECASE):
-            return True
-        # 纯数字 ID 格式如 id123（但不包括 id45 这种短 ID）
-        if re.match(r'^id\d{3,}$', s, re.IGNORECASE):
-            return True
-        return False
-    
-    # 判断是否是有效的章节标题
-    def is_valid_chapter(s):
-        # 排除以连字符或下划线结尾的不完整标识符
-        if s.endswith('-') or s.endswith('_'):
-            return False
-        # 包含中文
-        if re.search(r'[\u4e00-\u9fff]', s):
-            return True
-        # 是章节格式（chapter, ch, section 等）
-        if re.match(r'(chapter|ch|section)\d+', s, re.IGNORECASE):
-            return True
-        # 是有意义的英文单词（长度 > 3）
-        if len(s) > 3 and re.match(r'^[a-zA-Z][a-zA-Z0-9_-]*$', s):
-            return True
-        return False
-    
-    # 优先选择看起来像章节标题的标识符（从后往前查找，因为后面的通常更具体）
-    chapter_candidates = []
-    for match in reversed(matches):
-        # 如果标识符包含中文，很可能是章节标题
-        if re.search(r'[\u4e00-\u9fff]', match):
-            # 如果是 "15-面向并发的内存模型" 这样的格式，提取标题部分
-            if '-' in match or '_' in match:
-                parts = re.split(r'[-_]', match, 1)
-                if len(parts) > 1 and len(parts[1].strip()) > 2:
-                    return parts[1].strip()
-            return match
-        
-        # 处理文件名
-        if match.endswith('.xhtml') or match.endswith('.html'):
-            chapter_name = re.sub(r'\.(xhtml|html)$', '', match, flags=re.IGNORECASE)
-            # 如果是 Section0001 这样的格式，尝试提取数字
-            section_match = re.match(r'Section(\d+)', chapter_name, re.IGNORECASE)
-            if section_match:
-                return f"第{int(section_match.group(1))}章"
-            # 如果是 ch1, chapter1 等格式
-            ch_match = re.match(r'(ch|chapter)(\d+)', chapter_name, re.IGNORECASE)
-            if ch_match:
-                return f"第{int(ch_match.group(2))}章"
-            # 其他文件名
-            if len(chapter_name) > 3 and not is_meaningless_id(chapter_name):
-                chapter_candidates.append(chapter_name)
-            continue
-        
-        # 其他标识符，长度 > 3 且不是无意义的 ID
-        if len(match) > 3 and not is_meaningless_id(match) and is_valid_chapter(match):
-            chapter_candidates.append(match)
-    
-    # 返回第一个候选（从后往前找到的第一个）
-    return chapter_candidates[0] if chapter_candidates else None
-
-
-def format_chapter_display(chapter, index):
-    """
-    格式化章节显示，当无法提取有意义的章节标题时，使用序号
-    
-    Args:
-        chapter: 从 CFI 提取的章节标识符
-        index: 笔记序号
-    
-    Returns:
-        格式化的章节显示字符串
-    """
-    if chapter:
-        # 如果是 id45 这种格式，转换为更友好的显示
-        id_match = re.match(r'^id(\d+)$', chapter, re.IGNORECASE)
-        if id_match:
-            return f"位置 {id_match.group(1)}"
-        return chapter
-    else:
-        return f"位置 {index}"
 
 
 def get_books_with_notes():
