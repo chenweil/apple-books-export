@@ -33,8 +33,8 @@ def build_main_note(
 
     # Frontmatter
     lines.append('---')
-    lines.append(f"book: {book['title']}")
-    lines.append(f"author: {book['author']}")
+    lines.append(f'book: "{book["title"]}"')
+    lines.append(f'author: "{book["author"]}"')
     if book.get('isbn'):
         lines.append(f"isbn: {book['isbn']}")
     if book.get('publisher'):
@@ -142,14 +142,14 @@ def export_book(
     main_path.write_text(main_note, encoding='utf-8')
 
     # Write individual LLM notes
-    for ann, llm in zip(annotations, llm_results):
+    for i, (ann, llm) in enumerate(zip(annotations, llm_results)):
         selected = ann.get('selected_text', '')
         if not selected or not llm:
             continue
 
         cfi = ann.get('location', '')
         chapter = extract_chapter_title(cfi) if cfi else ''
-        chapter_display = format_chapter_display(chapter, 0) if chapter else ''
+        chapter_display = format_chapter_display(chapter, i + 1) if chapter else ''
 
         note = build_llm_note(
             book_name=book['title'],
@@ -164,9 +164,11 @@ def export_book(
         filename = sanitize_filename(selected)
         note_path = book_dir / f"{filename}.md"
 
-        # Handle name collisions
-        if note_path.exists():
-            note_path = book_dir / f"{chapter_display}-{filename}.md"
+        # Handle name collisions with counter suffix
+        counter = 2
+        while note_path.exists():
+            note_path = book_dir / f"{filename}_{counter}.md"
+            counter += 1
 
         note_path.write_text(note, encoding='utf-8')
 
