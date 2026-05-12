@@ -96,8 +96,11 @@ def load_config(path: Path | None = None) -> KnowledgeConfig:
     path = path or DEFAULT_CONFIG_PATH
     if not path.exists():
         return KnowledgeConfig()
-    with open(path, 'r', encoding='utf-8') as f:
-        data = json.load(f)
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return KnowledgeConfig()
     return KnowledgeConfig.from_dict(data)
 
 

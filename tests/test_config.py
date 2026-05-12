@@ -59,3 +59,23 @@ class TestLoadSaveConfig:
         save_config(config, config_path)
         loaded = load_config(config_path)
         assert loaded.llm.api_key == 'env:MY_API_KEY'
+
+    def test_get_api_key_resolves_env(self, sample_config, monkeypatch):
+        """get_api_key() resolves env: prefix to actual env var value."""
+        monkeypatch.setenv('TEST_API_KEY', 'sk-resolved-value')
+        sample_config['llm']['api_key'] = 'env:TEST_API_KEY'
+        config = KnowledgeConfig.from_dict(sample_config)
+        assert config.llm.get_api_key() == 'sk-resolved-value'
+
+    def test_get_api_key_direct(self, sample_config):
+        """get_api_key() returns direct key as-is."""
+        sample_config['llm']['api_key'] = 'sk-direct-key'
+        config = KnowledgeConfig.from_dict(sample_config)
+        assert config.llm.get_api_key() == 'sk-direct-key'
+
+    def test_load_malformed_json(self, tmp_dir):
+        """load_config returns defaults for malformed JSON."""
+        config_path = tmp_dir / 'bad.json'
+        config_path.write_text('not valid json {{{')
+        config = load_config(config_path)
+        assert config.llm.batch_size == 10
