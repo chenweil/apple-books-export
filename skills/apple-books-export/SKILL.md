@@ -172,10 +172,34 @@ Binary: `~/.agents/skills/apple-books-export/scripts/books-exporter` (8.8MB, sta
 
 **For this project only**: The `books-exporter` project is in the current workspace. Commands should be run from the project root.
 
-**EPUB CFI Parsing**: The tool automatically parses EPUB CFI (Canonical Fragment Identifier) to extract chapter information from `ZANNOTATIONLOCATION` fields.
+**EPUB CFI Parsing**: The `ZANNOTATIONLOCATION` field stores EPUB CFI (Canonical Fragment Identifier), not actual text content. Example: `epubcfi(/6/10[item4]!/4/82/1,:0,:44)`
+
+**CFI Context Extraction (Working Approach)**:
+1. Parse CFI to get manifest item ID: extract `[item4]` from `epubcfi(...[item4]...)`
+2. Map item ID to chapter file via `content.opf` manifest (item4 → Text/part0003.xhtml)
+3. Extract chapter text from EPUB (zipfile + strip HTML tags)
+4. Search for `ZANNOTATIONSELECTEDTEXT` in chapter text (NOT CFI coordinate parsing)
+5. Extract surrounding context (±N chars, trim to sentence boundaries)
+
+**Why text search over CFI coordinate parsing**:
+- CFI coordinates (e.g., `/4/82/1,:0,:44`) are fragile and format varies across EPUB generators
+- `selected_text` search is reliable - the text exists verbatim in the chapter
+- Works with any EPUB (encrypted or not, as long as user provides the file)
+
+**Context Card Format**:
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  [前文...]▶ 高亮文字[...后文]
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
 
 **Annotation Types**:
 - 0: Bookmark
 - 1: Note
-- 2: Highlight  
-- 3: Annotation
+- 2: Highlight
+- 3: Annotation (highlight + note)
+
+**Test Data**:
+- EPUB: `/Users/chenweilong/books-exporter/books/巨婴国 (武志红) (Z-Library).epub`
+- Asset ID: `44D43B7A372DA51FB1B5AD664DBE4D53`
+- 303 highlights in this book, context extraction verified working
