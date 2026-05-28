@@ -3,6 +3,8 @@
   import Sidebar from "./lib/Sidebar.svelte";
   import PermissionDialog from "./lib/components/PermissionDialog.svelte";
   import Books from "./lib/pages/Books.svelte";
+  import Export from "./lib/pages/Export.svelte";
+  import Config from "./lib/pages/Config.svelte";
 
   let currentPage = $state("books");
   let dbOk = $state(false);
@@ -27,6 +29,10 @@
     {:else}
       {#if currentPage === "books"}
         <Books />
+      {:else if currentPage === "export"}
+        <Export />
+      {:else if currentPage === "config"}
+        <Config />
       {:else}
         <div class="placeholder">
           <h2>{currentPage}</h2>
