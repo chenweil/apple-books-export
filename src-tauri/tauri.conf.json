@@ -17,12 +17,11 @@
         "height": 640,
         "minWidth": 800,
         "minHeight": 600,
-        "decorations": true,
-        "transparent": true
+        "decorations": true
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'"
     }
   },
   "bundle": {
