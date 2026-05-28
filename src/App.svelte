@@ -1,6 +1,7 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
   import Sidebar from "./lib/Sidebar.svelte";
+  import StatusBar from "./lib/StatusBar.svelte";
   import PermissionDialog from "./lib/components/PermissionDialog.svelte";
   import Books from "./lib/pages/Books.svelte";
   import Export from "./lib/pages/Export.svelte";
@@ -24,37 +25,35 @@
 
 <main class="app">
   <Sidebar bind:currentPage />
-  <div class="content">
-    {#if checking}
-      <div class="center">检测数据库...</div>
-    {:else if !dbOk}
-      <PermissionDialog onRetry={checkAccess} />
-    {:else}
-      {#if currentPage === "books"}
-        <Books />
-      {:else if currentPage === "export"}
-        <Export />
-      {:else if currentPage === "config"}
-        <Config />
-      {:else if currentPage === "enrich"}
-        <Enrich />
-      {:else if currentPage === "card"}
-        <Card />
-      {:else if currentPage === "cache"}
-        <Cache />
+  <div class="main-area">
+    <div class="content">
+      {#if checking}
+        <div class="center">检测数据库...</div>
+      {:else if !dbOk}
+        <PermissionDialog onRetry={checkAccess} />
       {:else}
-        <div class="placeholder">
-          <h2>{currentPage}</h2>
-          <p>待实现</p>
-        </div>
+        {#if currentPage === "books"}
+          <Books />
+        {:else if currentPage === "export"}
+          <Export />
+        {:else if currentPage === "enrich"}
+          <Enrich />
+        {:else if currentPage === "card"}
+          <Card />
+        {:else if currentPage === "cache"}
+          <Cache />
+        {:else if currentPage === "config"}
+          <Config />
+        {/if}
       {/if}
-    {/if}
+    </div>
+    <StatusBar />
   </div>
 </main>
 
 <style>
   .app { display: flex; height: 100vh; }
+  .main-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
   .content { flex: 1; overflow-y: auto; background: var(--bg-primary); }
   .center { display: flex; align-items: center; justify-content: center; height: 100%; color: var(--text-secondary); }
-  .placeholder { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; color: var(--text-secondary); }
 </style>
