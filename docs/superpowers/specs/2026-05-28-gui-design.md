@@ -10,6 +10,39 @@
 - **前端**: Svelte + Vite
 - **样式**: macOS vibrancy 毛玻璃，原生标题栏，系统暗色/亮色自动适配
 
+## 启动流程与权限引导
+
+Apple Books 数据库位于 `~/Library/Containers/com.apple.iBooksX/Data/Documents/`，需要"完全磁盘访问权限"。
+
+```
+启动 App
+    │
+    ▼
+检测数据库是否可访问
+    │
+    ├── 可访问 → 正常加载书籍列表
+    │
+    └── 不可访问 → 显示引导弹窗
+                    │
+                    ├── 说明: "需要授予完全磁盘访问权限"
+                    ├── 显示路径: ~/Library/Containers/com.apple.iBooksX/...
+                    ├── 操作步骤:
+                    │   1. 打开 系统设置 → 隐私与安全性 → 完全磁盘访问权限
+                    │   2. 添加 Apple Books Exporter
+                    │   3. 重启 App
+                    ├── [打开系统设置] 按钮 (调用 macOS URL Scheme)
+                    └── [重新检测] 按钮
+```
+
+## 配置持久化
+
+| 配置项 | 存储位置 | 说明 |
+|--------|----------|------|
+| API Key | macOS Keychain | 敏感信息，不落盘到文件 |
+| Base URL / Model / Provider | `~/Library/Application Support/books-exporter/config.json` | Tauri app data 目录 |
+| 默认输出目录 / 格式 | 同上 | 用户偏好 |
+| 书籍缓存 | `~/Library/Application Support/books-exporter/cache.json` | LLM 缓存 |
+
 ## 架构
 
 ```
@@ -53,7 +86,7 @@
 │  ⚙️    │                                                     │
 │        │                                                     │
 ├────────┴─────────────────────────────────────────────────────┤
-│  状态栏                                          v0.2.0      │
+│  📚 12 本书  │  💾 缓存 45 条  │  🕐 最后同步 10:30  │ v0.2.0 │
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -122,7 +155,7 @@
 │  │ ⏳ #4 ...                              │  │
 │  └────────────────────────────────────────┘  │
 │                                              │
-│  [开始处理]  [强制刷新]            已缓存: 2 │
+│  [开始处理]  [强制刷新]        已缓存: 2/5 (40%) │
 └──────────────────────────────────────────────┘
 ```
 
@@ -131,7 +164,7 @@
 ```
 ┌──────────────────────────────────────────────┐
 │  书籍: [深入理解计算机系统          ▼]       │
-│  样式: ● Dark  ○ Light  ○ Minimal            │
+│  样式: ● Dark  ○ Light  ○ Minimal  (自定义模板: 后续迭代) │
 │                                              │
 │  ┌────────────────────────────────────────┐  │
 │  │  ┌──────────────────────────────────┐  │  │
@@ -175,6 +208,7 @@
 ┌──────────────────────────────────────────────┐
 │  LLM 配置:                                   │
 │  Provider: [OpenAI Compatible      ▼]        │
+│            (OpenAI / OpenAI Compatible / 自定义) │
 │  Base URL: [https://api.example.com/v1    ]  │
 │  API Key:  [••••••••••••••••            ]     │
 │  Model:    [mimo-v2.5-pro               ]    │
@@ -191,6 +225,8 @@
 
 | Command | 功能 | 返回 |
 |---------|------|------|
+| `check_db_access` | 检测数据库是否可访问 | `bool` |
+| `open_system_settings` | 打开系统设置(权限页) | `void` |
 | `get_books` | 获取书籍列表 | `Vec<Book>` |
 | `get_annotations` | 获取某书笔记 | `Vec<Annotation>` |
 | `export_book` | 导出 Markdown | 进度事件 + 文件路径 |
@@ -202,22 +238,36 @@
 | `save_config` | 保存配置 | `bool` |
 | `test_connection` | 测试 LLM 连接 | `bool` |
 
-## 进度事件
+## 事件类型
 
-Rust 通过 Tauri event 机制向前端实时推送进度：
+Rust 通过 Tauri event 机制向前端推送三种事件：
 
+**进度事件：**
 ```
 event: "progress"
 data: { "current": 3, "total": 5, "status": "processing", "message": "处理第3条笔记..." }
 ```
 
-前端监听事件更新进度条和状态。
+**错误事件：**
+```
+event: "error"
+data: { "message": "处理失败：网络超时" }
+```
+
+**完成事件：**
+```
+event: "complete"
+data: { "success": 5, "failed": 0 }
+```
+
+前端监听事件更新进度条和状态，错误事件触发 toast 通知。
 
 ## 错误处理
 
 - **Rust 侧**: 所有 command 返回 `Result<T, String>`，错误信息中文
 - **前端**: 统一 toast 通知，不阻断操作
-- **数据库不存在**: 启动时检测，引导用户授权
+- **数据库不存在**: 启动时检测，显示引导弹窗（见"启动流程与权限引导"）
+- **LLM 连接失败**: 配置页"测试连接"按钮即时反馈，enrich 页失败时 toast 提示
 
 ## 项目结构
 
@@ -246,7 +296,9 @@ books-exporter/
 │   │   └── components/
 │   │       ├── BookCard.svelte
 │   │       ├── ProgressBar.svelte
-│   │       └── Toast.svelte
+│   │       ├── Toast.svelte
+│   │       ├── ConfirmDialog.svelte
+│   │       └── LoadingSpinner.svelte
 │   └── app.css                # macOS vibrancy 样式
 ├── package.json
 └── vite.config.ts
