@@ -94,10 +94,8 @@ impl LLMProvider {
                 Err(e) => {
                     last_error = Some(e);
                     if attempt < self.max_retries - 1 {
-                        let delay = delays
-                            .get(attempt.min(delays.len() - 1))
-                            .copied()
-                            .unwrap_or(1);
+                        let delay_idx = (attempt as usize).min(delays.len().saturating_sub(1));
+                        let delay = delays.get(delay_idx).copied().unwrap_or(1);
                         tokio::time::sleep(Duration::from_secs(delay)).await;
                     }
                 }

@@ -4,7 +4,7 @@ use crate::models::{Annotation, Book, LLMResult};
 use anyhow::{Context, Result};
 use regex::Regex;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// 导出格式
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,17 +37,14 @@ pub fn export_book(
         .with_context(|| format!("无法创建输出目录：{:?}", book_dir))?;
 
     // 生成主笔记文件
-    let main_file = match format {
-        ExportFormat::Obsidian => book_dir.join(format!("{}.md", sanitize_filename(&book.title))),
-        ExportFormat::Markdown => book_dir.join(format!("{}.md", sanitize_filename(&book.title))),
-    };
+    let main_file = book_dir.join(format!("{}.md", sanitize_filename(&book.title)));
 
     let main_content = generate_main_note(book, annotations, llm_results, format)?;
     fs::write(&main_file, main_content)
         .with_context(|| format!("无法写入主笔记文件：{:?}", main_file))?;
 
     // 生成单独的 LLM 笔记文件
-    for (i, (ann, llm_result)) in annotations.iter().zip(llm_results.iter()).enumerate() {
+    for (_i, (ann, llm_result)) in annotations.iter().zip(llm_results.iter()).enumerate() {
         if let Some(result) = llm_result {
             if let Some(selected_text) = &ann.selected_text {
                 let file_name = format!("{}.md", sanitize_filename(selected_text));
@@ -74,14 +71,18 @@ fn generate_main_note(
 
     // Frontmatter
     if format == ExportFormat::Obsidian {
-        content.push_str(&format!("---\nbook: \"{}\"\nauthor: \"{}\"\n---\n\n", book.title, book.author));
+        content.push_str(&format!(
+            "---\nbook: \"{}\"\nauthor: \"{}\"\n---\n\n",
+            book.title, book.author
+        ));
     }
 
     // 书名
     content.push_str(&format!("# {}\n\n", book.title));
 
     // 笔记列表
-    for (i, (ann, llm_result)) in annotations.iter().zip(llm_results.iter()).enumerate() {
+    for (_i, (ann, llm_result)) in annotations.iter().zip(llm_results.iter()).enumerate() {
+        // 处理有选中文字的高亮/笔记
         if let Some(selected_text) = &ann.selected_text {
             // 章节信息
             if let Some(location) = &ann.location {
@@ -105,6 +106,14 @@ fn generate_main_note(
 
             content.push_str("---\n\n");
         }
+        // 处理只有位置的高亮（无选中文字）
+        else if let Some(location) = &ann.location {
+            if let Some(chapter) = crate::cfi::extract_chapter_title(location) {
+                content.push_str(&format!("## {}\n\n", chapter));
+            }
+            content.push_str(&format!("*高亮位置：{}*\n\n", location));
+            content.push_str("---\n\n");
+        }
     }
 
     Ok(content)
@@ -115,7 +124,7 @@ fn generate_llm_note(
     book: &Book,
     ann: &Annotation,
     result: &LLMResult,
-    format: ExportFormat,
+    _format: ExportFormat,
 ) -> Result<String> {
     let mut content = String::new();
 
@@ -123,12 +132,18 @@ fn generate_llm_note(
     content.push_str("---\n");
     content.push_str("type: llm-note\n");
     content.push_str(&format!("book: {}\n", book.title));
-    content.push_str(&format!("chapter: {}\n", ann.location.as_deref().unwrap_or("unknown")));
+    content.push_str(&format!(
+        "chapter: {}\n",
+        ann.location.as_deref().unwrap_or("unknown")
+    ));
     if let Some(highlight) = &ann.selected_text {
         content.push_str(&format!("highlight: \"{}\"\n", highlight));
     }
     content.push_str(&format!("tags: [{}]\n", result.tags.join(", ")));
-    content.push_str(&format!("created: {}\n", chrono::Utc::now().format("%Y-%m-%d")));
+    content.push_str(&format!(
+        "created: {}\n",
+        chrono::Utc::now().format("%Y-%m-%d")
+    ));
     content.push_str("---\n\n");
 
     // 解释
@@ -151,13 +166,12 @@ fn generate_llm_note(
 /// 清理文件名（移除非法字符）
 pub fn sanitize_filename(name: &str) -> String {
     // 移除或替换非法字符
-    let re = Regex::new(r"[/\\:*?\"<>|]").unwrap();
+    let re = Regex::new(r#"/\\:*?"<>|"#).unwrap();
     let cleaned = re.replace_all(name, "_");
 
     // 限制长度
-    let max_len = 100; // 使用较大的限制，避免截断中文
+    let max_len = 100;
     if cleaned.len() > max_len {
-        // 找到合适的截断点（不截断多字节字符）
         cleaned.chars().take(max_len).collect()
     } else {
         cleaned.to_string()

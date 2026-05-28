@@ -92,6 +92,68 @@ cd books-exporter
 - 流畅的触控板滚动支持
 - 卡片式统计显示
 
+## AI 增强功能 (Knowledge Module)
+
+为高亮笔记补充 LLM 解释、标签、复习问题，输出到 Obsidian。
+
+### 配置
+
+```bash
+# 首次配置 LLM（使用小米 MiMo API）
+cd books-exporter
+PYTHONPATH=. python3 knowledge/cli.py config \
+  --provider openai_compatible \
+  --base-url https://token-plan-cn.xiaomimimo.com/v1 \
+  --api-key tp-cvd4fahd9z8buczsoc8t78cn46juia2bdseh1n0io77mqybh \
+  --model mimo-v2.5-pro
+```
+
+### 使用命令
+
+```bash
+# 增量处理（默认，只处理新增笔记）
+PYTHONPATH=. python3 knowledge/cli.py enrich --book 1
+
+# 全量处理整本书
+PYTHONPATH=. python3 knowledge/cli.py enrich --book 1 --all
+
+# 处理单条笔记
+PYTHONPATH=. python3 knowledge/cli.py enrich --book 1 --index 42
+
+# 强制刷新某条（重新生成）
+PYTHONPATH=. python3 knowledge/cli.py enrich --book 1 --index 42 --force
+
+# 指定输出目录和格式
+PYTHONPATH=. python3 knowledge/cli.py enrich --book 1 --output ~/obsidian/books/ --format obsidian
+
+# 导出图片卡片
+PYTHONPATH=. python3 knowledge/cli.py card --book 1 --all --style dark --output ~/cards/
+
+# 查看缓存状态
+PYTHONPATH=. python3 knowledge/cli.py cache --book 1
+```
+
+### 输出示例
+
+```markdown
+---
+type: llm-note
+book: 南怀瑾著作全收录
+chapter: item465
+tags: [汉文帝, 老子思想, 文景之治, 节俭, 德治]
+---
+
+## 解释
+汉文帝奉行老子三宝，节俭治国，促成文景之治。
+
+## 复习问题
+汉文帝如何通过节俭生活和改革政策体现老子的慈、俭、不敢为天下先？
+```
+
+更多详情：`docs/KNOWLEDGE_MODULE_DESIGN.md`
+
+---
+
 ## AI Agent 支持
 
 本项目提供 `apple-books-export` skill，支持 AI 助手（Claude Code、Gemini CLI 等）直接调用：
