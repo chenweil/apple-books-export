@@ -1,11 +1,15 @@
 # Rust
 /target/
+src-tauri/target/
 **/*.rs.bk
 Cargo.lock
 
 # Build
 dist/
 build/
+
+# Node
+node_modules/
 
 # Test output
 test_output/
