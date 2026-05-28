@@ -5,6 +5,9 @@
   import Books from "./lib/pages/Books.svelte";
   import Export from "./lib/pages/Export.svelte";
   import Config from "./lib/pages/Config.svelte";
+  import Enrich from "./lib/pages/Enrich.svelte";
+  import Card from "./lib/pages/Card.svelte";
+  import Cache from "./lib/pages/Cache.svelte";
 
   let currentPage = $state("books");
   let dbOk = $state(false);
@@ -33,6 +36,12 @@
         <Export />
       {:else if currentPage === "config"}
         <Config />
+      {:else if currentPage === "enrich"}
+        <Enrich />
+      {:else if currentPage === "card"}
+        <Card />
+      {:else if currentPage === "cache"}
+        <Cache />
       {:else}
         <div class="placeholder">
           <h2>{currentPage}</h2>
