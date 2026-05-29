@@ -4,6 +4,7 @@
   import ProgressBar from "../components/ProgressBar.svelte";
 
   interface Book { asset_id: string; title: string; author: string; note_count: number; }
+  interface Annotation { asset_id: string; selected_text: string | null; note: string | null; annotation_type: number; }
 
   let books = $state<Book[]>([]);
   let selectedIndex = $state(1);
@@ -14,9 +15,42 @@
   let total = $state(0);
   let message = $state("");
   let resultPath = $state("");
+  let preview = $state("");
 
   $effect(() => {
     invoke<Book[]>("get_books").then(b => { books = b; });
+  });
+
+  // Update preview when book changes
+  $effect(() => {
+    if (books.length > 0 && selectedIndex > 0 && selectedIndex <= books.length) {
+      const book = books[selectedIndex - 1];
+      invoke<Annotation[]>("get_annotations", { assetId: book.asset_id }).then(annotations => {
+        const lines: string[] = [];
+        if (format === "obsidian") {
+          lines.push("---");
+          lines.push("type: llm-note");
+          lines.push(`book: ${book.title}`);
+          lines.push("---");
+        }
+        lines.push("");
+        lines.push(`# ${book.title}`);
+        lines.push(`作者: ${book.author}`);
+        lines.push("");
+        lines.push("## 高亮与标注");
+        lines.push("");
+        const highlights = annotations.filter(a => a.selected_text);
+        for (const ann of highlights.slice(0, 5)) {
+          lines.push(`> ${ann.selected_text!.slice(0, 100)}${ann.selected_text!.length > 100 ? "..." : ""}`);
+          if (ann.note) lines.push(`笔记: ${ann.note}`);
+          lines.push("");
+        }
+        if (highlights.length > 5) {
+          lines.push(`... 还有 ${highlights.length - 5} 条`);
+        }
+        preview = lines.join("\n");
+      });
+    }
   });
 
   $effect(() => {
@@ -76,6 +110,13 @@
     </button>
   </div>
 
+  {#if preview}
+    <div class="preview-section">
+      <h3>预览</h3>
+      <pre class="preview">{preview}</pre>
+    </div>
+  {/if}
+
   {#if exporting || progress > 0}
     <div class="progress-section">
       <ProgressBar value={progress} max={total} />
@@ -93,6 +134,7 @@
 <style>
   .page { padding: 24px; }
   h2 { font-size: 20px; margin-bottom: 20px; color: var(--text-primary); }
+  h3 { font-size: 16px; margin-bottom: 8px; color: var(--text-primary); }
   .form { display: flex; flex-direction: column; gap: 16px; max-width: 480px; }
   label { display: flex; flex-direction: column; gap: 6px; font-size: 14px; color: var(--text-secondary); }
   select, input[type="text"] {
@@ -106,6 +148,21 @@
     border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: 500;
   }
   .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+  .preview-section { margin-top: 24px; }
+  .preview {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    font-family: "SF Mono", "Menlo", monospace;
+    font-size: 12px;
+    line-height: 1.6;
+    max-height: 300px;
+    overflow-y: auto;
+    color: var(--text-primary);
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
   .progress-section { margin-top: 24px; }
   .message { font-size: 13px; color: var(--text-secondary); margin-top: 8px; }
   .result { margin-top: 16px; padding: 12px; background: rgba(52,199,89,0.1); border-radius: 8px; font-size: 14px; color: #34c759; }
