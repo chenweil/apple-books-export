@@ -14,6 +14,7 @@
   let loading = $state(true);
   let search = $state("");
   let page = $state(1);
+  let prevSearch = $state("");
   const PAGE_SIZE = 20;
 
   let filtered = $derived(
@@ -24,6 +25,14 @@
   );
   let totalPages = $derived(Math.max(1, Math.ceil(filtered.length / PAGE_SIZE)));
   let paged = $derived(filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE));
+
+  // 搜索时自动回到第一页
+  $effect(() => {
+    if (search !== prevSearch) {
+      prevSearch = search;
+      page = 1;
+    }
+  });
 
   async function loadBooks() {
     loading = true;

@@ -25,7 +25,9 @@
 
   async function save() {
     saving = true;
+    testResult = "";
     try {
+      console.log("Saving config...", { apiKey: apiKey ? "***" : "(empty)" });
       await invoke("save_app_config", {
         config: {
           llm: { provider, base_url: baseUrl, api_key: apiKey, model, batch_size: 5, max_retries: 3, retry_delays: [1000, 3000, 5000] },
@@ -38,9 +40,11 @@
         }
       });
       saved = true;
-      setTimeout(() => saved = false, 2000);
+      testResult = "保存成功";
+      setTimeout(() => { saved = false; testResult = ""; }, 2000);
     } catch (e: any) {
       testResult = `保存失败: ${e}`;
+      console.error("Save failed:", e);
     }
     saving = false;
   }

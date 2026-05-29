@@ -48,12 +48,15 @@ pub fn load_app_config() -> Result<Config, String> {
     let config_path = get_config_path();
     let mut config = load_config(Some(&config_path)).map_err(|e| e.to_string())?;
 
-    if let Ok(entry) = Entry::new("apple-books-exporter", "api-key") {
-        if let Ok(key) = entry.get_password() {
-            if !key.is_empty() {
+    match Entry::new("apple-books-exporter", "api-key") {
+        Ok(entry) => match entry.get_password() {
+            Ok(key) if !key.is_empty() => {
                 config.llm.api_key = key;
             }
-        }
+            Ok(_) => {} // empty key
+            Err(e) => eprintln!("读取 API key 失败: {}", e),
+        },
+        Err(e) => eprintln!("创建 keyring 条目失败: {}", e),
     }
 
     Ok(config)
@@ -62,12 +65,18 @@ pub fn load_app_config() -> Result<Config, String> {
 #[tauri::command]
 pub fn save_app_config(mut config: Config) -> Result<(), String> {
     let config_path = get_config_path();
-    
+
     let api_key = config.llm.api_key.clone();
+    eprintln!("save_app_config called, api_key length: {}", api_key.len());
+
     if !api_key.is_empty() {
-        if let Ok(entry) = Entry::new("apple-books-exporter", "api-key") {
-            entry.set_password(&api_key).map_err(|e| e.to_string())?;
-        }
+        let entry = Entry::new("apple-books-exporter", "api-key")
+            .map_err(|e| format!("创建 keyring 条目失败: {}", e))?;
+        eprintln!("Keyring entry created, saving...");
+        entry
+            .set_password(&api_key)
+            .map_err(|e| format!("保存 API key 到 keychain 失败: {}", e))?;
+        eprintln!("API key saved to keychain");
     }
 
     config.llm.api_key = String::new();
@@ -165,6 +174,8 @@ pub async fn export_book_cmd(
 pub async fn enrich_book_cmd(
     book_index: usize,
     force: bool,
+    mode: Option<String>,
+    single_index: Option<usize>,
     state: tauri::State<'_, AppState>,
     window: tauri::WebviewWindow,
 ) -> Result<serde_json::Value, String> {
@@ -178,6 +189,7 @@ pub async fn enrich_book_cmd(
         }
     }
     let provider = LLMProvider::new(&config.llm);
+    eprintln!("LLM provider created, base_url: {}, model: {}", config.llm.base_url, config.llm.model);
 
     // Collect DB data into owned values so the MutexGuard is dropped before any .await
     let (book, annotations) = {
@@ -196,6 +208,7 @@ pub async fn enrich_book_cmd(
         (book, annotations)
     };
 
+    let mode_str = mode.as_deref().unwrap_or("incremental");
     let to_process: Vec<(usize, &Annotation)> = annotations
         .iter()
         .enumerate()
@@ -203,6 +216,13 @@ pub async fn enrich_book_cmd(
             a.selected_text
                 .as_ref()
                 .map_or(false, |t| !t.trim().is_empty())
+        })
+        .filter(|(i, _)| {
+            match mode_str {
+                "single" => single_index.map_or(false, |si| *i == si - 1),
+                "all" => true,
+                _ => true, // incremental: process all, cache check happens later
+            }
         })
         .collect();
 
@@ -220,8 +240,19 @@ pub async fn enrich_book_cmd(
         )
         .ok();
 
-    for (idx, ann) in to_process.iter() {
+    for (progress_idx, (idx, ann)) in to_process.iter().enumerate() {
         let text = ann.selected_text.as_ref().unwrap();
+
+        window
+            .emit(
+                "progress",
+                serde_json::json!({
+                    "current": progress_idx + 1, "total": total,
+                    "status": "processing",
+                    "message": format!("处理第{}/{}条...", progress_idx + 1, total)
+                }),
+            )
+            .ok();
 
         if !force {
             let cache = state.cache.lock().unwrap();
@@ -232,26 +263,44 @@ pub async fn enrich_book_cmd(
         }
 
         let prompt = apple_books_exporter::build_enrich_prompt(text, None);
+        eprintln!("Calling LLM for annotation {}...", idx + 1);
+        window
+            .emit(
+                "progress",
+                serde_json::json!({
+                    "current": progress_idx + 1, "total": total,
+                    "status": "calling_llm",
+                    "message": format!("正在调用 LLM ({}/{})...", progress_idx + 1, total)
+                }),
+            )
+            .ok();
         match provider.complete(&prompt, None).await {
-            Ok(content) => match apple_books_exporter::parse_llm_result(&content) {
-                Ok(result) => {
-                    let mut cache = state.cache.lock().unwrap();
-                    cache
-                        .put(
-                            &book.asset_id,
-                            text,
-                            "",
-                            &book.title,
-                            &result.explanation,
-                            &result.tags,
-                            &result.question,
-                        )
-                        .ok();
-                    success += 1;
+            Ok(content) => {
+                eprintln!("LLM response received for annotation {}", idx + 1);
+                match apple_books_exporter::parse_llm_result(&content) {
+                    Ok(result) => {
+                        let mut cache = state.cache.lock().unwrap();
+                        cache
+                            .put(
+                                &book.asset_id,
+                                text,
+                                "",
+                                &book.title,
+                                &result.explanation,
+                                &result.tags,
+                                &result.question,
+                            )
+                            .ok();
+                        success += 1;
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to parse LLM response for annotation {}: {}", idx + 1, e);
+                        failed += 1;
+                    }
                 }
-                Err(_) => failed += 1,
-            },
+            }
             Err(e) => {
+                eprintln!("LLM API call failed for annotation {}: {}", idx + 1, e);
                 window
                     .emit(
                         "error",
@@ -263,17 +312,6 @@ pub async fn enrich_book_cmd(
                 failed += 1;
             }
         }
-
-        window
-            .emit(
-                "progress",
-                serde_json::json!({
-                    "current": idx + 1, "total": total,
-                    "status": "processing",
-                    "message": format!("处理第{}/{}条...", idx + 1, total)
-                }),
-            )
-            .ok();
     }
 
     window

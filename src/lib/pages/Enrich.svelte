@@ -49,6 +49,8 @@
       await invoke("enrich_book_cmd", {
         bookIndex: selectedIndex,
         force,
+        mode,
+        singleIndex: mode === "single" ? singleIndex : null,
       });
     } catch (e: any) {
       toastMsg = `处理失败: ${e}`;
@@ -92,6 +94,9 @@
     <div class="progress-section">
       <ProgressBar value={progress} max={total} />
       <p class="msg">{message}</p>
+      {#if message.includes("正在调用 LLM")}
+        <p class="hint">LLM API 响应通常需要 10-15 秒，请耐心等待...</p>
+      {/if}
     </div>
   {/if}
 
@@ -119,5 +124,6 @@
   .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
   .progress-section { margin-top: 24px; }
   .msg { font-size: 13px; color: var(--text-secondary); margin-top: 8px; }
+  .hint { font-size: 12px; color: var(--text-tertiary, #888); margin-top: 4px; font-style: italic; }
   .result { margin-top: 16px; padding: 12px; background: rgba(52,199,89,0.1); border-radius: 8px; font-size: 14px; color: #34c759; }
 </style>

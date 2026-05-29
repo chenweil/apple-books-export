@@ -1,6 +1,6 @@
 [package]
 name = "apple-books-exporter-gui"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "Apple Books Exporter - GUI"
 
@@ -24,4 +24,4 @@ glob = "0.3"
 image = "0.25"
 rusttype = "0.9"
 apple-books-exporter = { path = ".." }
-keyring = "3"
+keyring = "2"

@@ -2,11 +2,30 @@ mod commands;
 mod state;
 
 use state::AppState;
+use tauri::Manager;
+
+// 编译时嵌入图标
+const ICON_DATA: &[u8] = include_bytes!("../icons/icon.png");
 
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .manage(AppState::new())
+        .setup(|app| {
+            // 设置窗口图标
+            let window = app.get_webview_window("main").unwrap();
+            let img = image::load_from_memory(ICON_DATA)
+                .expect("failed to load icon")
+                .to_rgba8();
+            let (width, height) = img.dimensions();
+            let icon = tauri::image::Image::new_owned(
+                img.into_raw(),
+                width,
+                height,
+            );
+            window.set_icon(icon).expect("failed to set window icon");
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             commands::check_db_access,
             commands::get_books,
