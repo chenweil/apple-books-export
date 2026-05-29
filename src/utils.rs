@@ -37,8 +37,10 @@ pub fn sanitize_filename(s: &str) -> String {
             _ => result.push('_'),
         }
     }
-    if result.len() > 50 {
-        result.truncate(50);
+    // 按字符数截断，而不是字节数，避免多字节字符截断 panic
+    let max_chars = 50;
+    if result.chars().count() > max_chars {
+        result = result.chars().take(max_chars).collect();
     }
     result
 }
