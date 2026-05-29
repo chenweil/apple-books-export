@@ -1,11 +1,10 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
 
-  // LLM 配置
-  let provider = $state("openai_compatible");
-  let baseUrl = $state("");
-  let apiKey = $state("");
-  let model = $state("");
+  interface ApiConfig { name: string; base_url: string; api_key: string; model: string; }
+
+  // API 配置列表
+  let apiConfigs = $state<ApiConfig[]>([{ name: "默认", base_url: "", api_key: "", model: "" }]);
 
   // 输出配置
   let outputFormat = $state("obsidian");
@@ -13,8 +12,8 @@
 
   // 卡片生成配置
   let enrichPrompt = $state("");
-  let enrichModel = $state("");
-  let imageModel = $state("");
+  let enrichApi = $state("");
+  let imageApi = $state("");
   let maxHighlightLen = $state(500);
   let maxExplanationLen = $state(1000);
 
@@ -41,31 +40,51 @@
 
   $effect(() => {
     invoke<any>("load_app_config").then(c => {
-      provider = c.llm?.provider || "openai_compatible";
-      baseUrl = c.llm?.base_url || "";
-      apiKey = c.llm?.api_key || "";
-      model = c.llm?.model || "";
+      // 加载 API 配置
+      if (c.api_configs && c.api_configs.length > 0) {
+        apiConfigs = c.api_configs;
+      } else {
+        // 兼容旧配置：从 llm 迁移
+        apiConfigs = [{
+          name: "默认",
+          base_url: c.llm?.base_url || "",
+          api_key: c.llm?.api_key || "",
+          model: c.llm?.model || "",
+        }];
+      }
       outputFormat = c.output_format || "obsidian";
       outputDir = c.card_output || "";
       enrichPrompt = c.card_gen?.enrich_prompt || defaultPrompt;
-      enrichModel = c.card_gen?.enrich_model || "";
-      imageModel = c.card_gen?.image_model || "";
+      enrichApi = c.card_gen?.enrich_api || "";
+      imageApi = c.card_gen?.image_api || "";
       maxHighlightLen = c.card_gen?.max_highlight_len || 500;
       maxExplanationLen = c.card_gen?.max_explanation_len || 1000;
     });
   });
 
+  function addApi() {
+    apiConfigs = [...apiConfigs, { name: `API ${apiConfigs.length + 1}`, base_url: "", api_key: "", model: "" }];
+  }
+
+  function removeApi(idx: number) {
+    if (apiConfigs.length <= 1) return;
+    apiConfigs = apiConfigs.filter((_, i) => i !== idx);
+  }
+
   async function save() {
     saving = true;
     testResult = "";
     try {
+      // 兼容：把第一个 API 配置也写入 llm 字段
+      const firstApi = apiConfigs[0] || { base_url: "", api_key: "", model: "" };
       await invoke("save_app_config", {
         config: {
-          llm: { provider, base_url: baseUrl, api_key: apiKey, model, batch_size: 5, max_retries: 3, retry_delays: [1000, 3000, 5000] },
+          llm: { provider: "openai_compatible", base_url: firstApi.base_url, api_key: firstApi.api_key, model: firstApi.model, batch_size: 5, max_retries: 3, retry_delays: [1000, 3000, 5000] },
+          api_configs: apiConfigs,
           card_gen: {
             enrich_prompt: enrichPrompt,
-            enrich_model: enrichModel,
-            image_model: imageModel,
+            enrich_api: enrichApi,
+            image_api: imageApi,
             max_highlight_len: maxHighlightLen,
             max_explanation_len: maxExplanationLen,
           },
@@ -108,29 +127,32 @@
   <h2>设置</h2>
 
   <section>
-    <h3>LLM 配置</h3>
-    <div class="form">
-      <label>
-        Provider
-        <select bind:value={provider}>
-          <option value="openai">OpenAI</option>
-          <option value="openai_compatible">OpenAI Compatible</option>
-          <option value="custom">自定义</option>
-        </select>
-      </label>
-      <label>
-        Base URL
-        <input type="text" bind:value={baseUrl} placeholder="https://api.example.com/v1" />
-      </label>
-      <label>
-        API Key
-        <input type="password" bind:value={apiKey} placeholder="sk-..." />
-      </label>
-      <label>
-        Model
-        <input type="text" bind:value={model} placeholder="mimo-v2.5-pro" />
-      </label>
-    </div>
+    <h3>API 配置</h3>
+    {#each apiConfigs as api, idx}
+      <div class="api-card">
+        <div class="api-header">
+          <input type="text" bind:value={api.name} placeholder="配置名称" class="api-name" />
+          {#if apiConfigs.length > 1}
+            <button class="btn-remove" onclick={() => removeApi(idx)}>删除</button>
+          {/if}
+        </div>
+        <div class="form">
+          <label>
+            Base URL
+            <input type="text" bind:value={api.base_url} placeholder="https://api.example.com/v1" />
+          </label>
+          <label>
+            API Key
+            <input type="password" bind:value={api.api_key} placeholder="sk-..." />
+          </label>
+          <label>
+            Model
+            <input type="text" bind:value={api.model} placeholder="mimo-v2.5-pro" />
+          </label>
+        </div>
+      </div>
+    {/each}
+    <button class="btn-add" onclick={addApi}>+ 添加 API 配置</button>
   </section>
 
   <section>
@@ -154,14 +176,22 @@
     <h3>卡片生成配置</h3>
     <div class="form">
       <label>
-        AI 增强模型
-        <input type="text" bind:value={enrichModel} placeholder="留空则使用上方 LLM 模型" />
-        <span class="hint">可为卡片生成单独指定模型</span>
+        AI 增强 API
+        <select bind:value={enrichApi}>
+          <option value="">使用第一个 API</option>
+          {#each apiConfigs as api}
+            <option value={api.name}>{api.name} ({api.model || '未设置'})</option>
+          {/each}
+        </select>
       </label>
       <label>
-        生成图片模型
-        <input type="text" bind:value={imageModel} placeholder="预留，暂未使用" />
-        <span class="hint">用于图片生成的模型（预留）</span>
+        图片生成 API
+        <select bind:value={imageApi}>
+          <option value="">使用第一个 API</option>
+          {#each apiConfigs as api}
+            <option value={api.name}>{api.name} ({api.model || '未设置'})</option>
+          {/each}
+        </select>
       </label>
       <label>
         高亮最大长度
@@ -227,4 +257,11 @@
   .label-header { display: flex; justify-content: space-between; align-items: center; }
   .btn-link { background: none; border: none; color: var(--accent); cursor: pointer; font-size: 12px; padding: 0; }
   .btn-link:hover { text-decoration: underline; }
+  .api-card { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 8px; padding: 16px; margin-bottom: 12px; }
+  .api-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+  .api-name { max-width: 200px; font-weight: 600; }
+  .btn-remove { padding: 4px 12px; background: #ff3b30; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 12px; }
+  .btn-remove:hover { background: #d32f2f; }
+  .btn-add { padding: 8px 16px; background: var(--bg-secondary); border: 1px dashed var(--border); border-radius: 8px; cursor: pointer; font-size: 14px; color: var(--text-secondary); width: 100%; }
+  .btn-add:hover { border-color: var(--accent); color: var(--accent); }
 </style>

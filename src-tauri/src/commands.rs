@@ -171,14 +171,30 @@ pub async fn enrich_book_cmd(
     window: tauri::WebviewWindow,
 ) -> Result<serde_json::Value, String> {
     let config_path = get_config_path();
-    let mut config = load_config(Some(&config_path)).map_err(|e| e.to_string())?;
+    let config = load_config(Some(&config_path)).map_err(|e| e.to_string())?;
 
-    // 如果卡片配置中指定了模型，使用它
-    if !config.card_gen.enrich_model.is_empty() {
-        config.llm.model = config.card_gen.enrich_model.clone();
+    // 根据 card_gen.enrich_api 选择 API 配置
+    let api_config = if config.card_gen.enrich_api.is_empty() {
+        config.api_configs.first().cloned().unwrap_or_default()
+    } else {
+        config.api_configs.iter()
+            .find(|a| a.name == config.card_gen.enrich_api)
+            .cloned()
+            .unwrap_or_else(|| config.api_configs.first().cloned().unwrap_or_default())
+    };
+
+    let mut llm_config = config.llm.clone();
+    if !api_config.base_url.is_empty() {
+        llm_config.base_url = api_config.base_url;
+    }
+    if !api_config.api_key.is_empty() {
+        llm_config.api_key = api_config.api_key;
+    }
+    if !api_config.model.is_empty() {
+        llm_config.model = api_config.model;
     }
 
-    let provider = LLMProvider::new(&config.llm);
+    let provider = LLMProvider::new(&llm_config);
     let enrich_prompt_template = if config.card_gen.enrich_prompt.is_empty() {
         None
     } else {
@@ -327,7 +343,21 @@ pub async fn enrich_book_cmd(
 pub async fn test_llm_connection() -> Result<bool, String> {
     let config_path = get_config_path();
     let config = load_config(Some(&config_path)).map_err(|e| e.to_string())?;
-    let provider = LLMProvider::new(&config.llm);
+
+    // 使用第一个 API 配置
+    let api_config = config.api_configs.first().cloned().unwrap_or_default();
+    let mut llm_config = config.llm.clone();
+    if !api_config.base_url.is_empty() {
+        llm_config.base_url = api_config.base_url;
+    }
+    if !api_config.api_key.is_empty() {
+        llm_config.api_key = api_config.api_key;
+    }
+    if !api_config.model.is_empty() {
+        llm_config.model = api_config.model;
+    }
+
+    let provider = LLMProvider::new(&llm_config);
     match provider.complete("hello", None).await {
         Ok(_) => Ok(true),
         Err(e) => Err(format!("连接失败: {}", e)),
