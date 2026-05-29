@@ -126,8 +126,22 @@ pub async fn export_book_cmd(
         )
         .ok();
 
-    let llm_results: Vec<Option<apple_books_exporter::LLMResult>> =
-        annotations.iter().map(|_| None).collect();
+    // 从缓存读取 AI 增强内容
+    let llm_results: Vec<Option<apple_books_exporter::LLMResult>> = annotations
+        .iter()
+        .map(|ann| {
+            ann.selected_text.as_ref().and_then(|text| {
+                let cache = state.cache.lock().unwrap();
+                cache.get(&book.asset_id, text).map(|entry| {
+                    apple_books_exporter::LLMResult {
+                        explanation: entry.explanation.clone(),
+                        tags: entry.tags.clone(),
+                        question: entry.question.clone(),
+                    }
+                })
+            })
+        })
+        .collect();
 
     export_book(book, &annotations, &llm_results, &output_path, export_format)
         .map_err(|e| e.to_string())?;
