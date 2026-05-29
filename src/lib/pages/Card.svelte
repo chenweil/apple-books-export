@@ -15,6 +15,8 @@
   let progress = $state(0);
   let total = $state(0);
   let message = $state("");
+  let mode = $state<"all" | "single">("all");
+  let singleIndex = $state(1);
 
   $effect(() => { invoke<Book[]>("get_books").then(b => books = b); });
 
@@ -35,7 +37,7 @@
     };
   });
 
-  async function generateAll() {
+  async function generate() {
     generating = true;
     resultMsg = "";
     progress = 0;
@@ -44,6 +46,8 @@
         bookIndex: selectedIndex,
         style,
         outputDir: outputDir.replace("~", "/Users/chenweilong"),
+        mode,
+        singleIndex: mode === "single" ? singleIndex : null,
       });
     } catch (e: any) {
       resultMsg = `生成失败: ${e}`;
@@ -75,13 +79,21 @@
       <span class="hint">自定义模板将在后续版本支持</span>
     </label>
 
+    <div class="mode">
+      <label><input type="radio" bind:group={mode} value="all" /> 全部</label>
+      <label><input type="radio" bind:group={mode} value="single" /> 单条</label>
+      {#if mode === "single"}
+        <input type="number" bind:value={singleIndex} min="1" style="width: 60px;" />
+      {/if}
+    </div>
+
     <label>
       输出目录
       <input type="text" bind:value={outputDir} />
     </label>
 
-    <button class="btn-primary" onclick={generateAll} disabled={generating}>
-      {generating ? "生成中..." : "生成全部"}
+    <button class="btn-primary" onclick={generate} disabled={generating}>
+      {generating ? "生成中..." : mode === "single" ? "生成单张" : "生成全部"}
     </button>
   </div>
 
@@ -106,6 +118,8 @@
   .radio-group { display: flex; gap: 16px; }
   .radio-group label { flex-direction: row; align-items: center; gap: 4px; }
   .hint { font-size: 12px; color: var(--text-secondary); }
+  .mode { display: flex; gap: 16px; align-items: center; font-size: 14px; color: var(--text-secondary); }
+  .mode label { flex-direction: row; align-items: center; gap: 4px; }
   .btn-primary { padding: 10px 24px; background: var(--accent); color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 14px; }
   .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
   .progress-section { margin-top: 24px; }

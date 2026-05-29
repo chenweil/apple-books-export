@@ -353,6 +353,8 @@ pub async fn generate_cards_cmd(
     book_index: usize,
     style: String,
     output_dir: String,
+    mode: Option<String>,
+    single_index: Option<usize>,
     state: tauri::State<'_, AppState>,
     window: tauri::WebviewWindow,
 ) -> Result<serde_json::Value, String> {
@@ -372,10 +374,23 @@ pub async fn generate_cards_cmd(
 
     // Get cached LLM results
     let cache = state.cache.lock().unwrap_or_else(|e| e.into_inner());
+    let mode_str = mode.as_deref().unwrap_or("all");
     let mut items: Vec<(String, String, String)> = Vec::new();
-    for ann in annotations.iter() {
+
+    for (idx, ann) in annotations.iter().enumerate() {
         if let Some(text) = &ann.selected_text {
             if !text.trim().is_empty() {
+                // 单条模式：只处理指定序号
+                if mode_str == "single" {
+                    if let Some(si) = single_index {
+                        if idx != si - 1 {
+                            continue;
+                        }
+                    } else {
+                        continue;
+                    }
+                }
+
                 if let Some(entry) = cache.get(&book.asset_id, text) {
                     if !entry.explanation.is_empty() {
                         items.push((
