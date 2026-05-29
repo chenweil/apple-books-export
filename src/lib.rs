@@ -11,7 +11,8 @@ pub mod prompt;
 pub mod provider;
 pub mod utils;
 
-pub use card::{generate_card, card_filename, CardStyle, sanitize_filename};
+pub use card::{generate_card, card_filename, CardStyle};
+pub use utils::sanitize_filename;
 pub use cache::LLMCache;
 pub use config::{load_config, save_config};
 pub use db::DB;

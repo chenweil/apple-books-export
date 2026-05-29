@@ -334,7 +334,7 @@ async fn cmd_enrich(
                         let result_clone = result.clone();
                         llm_results[*idx] = Some(result);
                         // 存入缓存
-                        let file_name = apple_books_exporter::exporter::sanitize_filename(highlight);
+                        let file_name = sanitize_filename(highlight);
                         cache.put(
                             &book_info.asset_id,
                             highlight,
@@ -557,20 +557,35 @@ fn cmd_config(
     // 更新配置
     if let Some(url) = base_url {
         config.llm.base_url = url;
-        println!("Base URL: {}", config.llm.base_url);
     }
     if let Some(m) = model {
         config.llm.model = m;
-        println!("Model: {}", config.llm.model);
     }
     if let Some(key) = api_key {
         config.llm.api_key = key;
-        println!("API Key: {}", "***".repeat(8));
     }
 
     // 保存配置
     save_config(&config, Some(config_path.as_path()))?;
-    println!("配置已保存！");
+    println!("配置已保存！\n");
+
+    // 显示当前配置（api_key 隐藏显示）
+    println!("当前配置：");
+    println!("  Provider: {}", config.llm.provider);
+    println!("  Base URL: {}", config.llm.base_url);
+    println!("  Model: {}", config.llm.model);
+    let api_key_display = if config.llm.api_key.is_empty() {
+        "(未设置)".to_string()
+    } else if config.llm.api_key == "***" {
+        "(已设置，仅在命令行显示 *** 隐藏)".to_string()
+    } else {
+        format!("{}", "***".repeat(4))
+    };
+    println!("  API Key: {}", api_key_display);
+    println!("  Batch Size: {}", config.llm.batch_size);
+    println!("  Max Retries: {}", config.llm.max_retries);
+    println!("  Output Format: {}", config.output_format);
+    println!("  Card Style: {}", config.card_style);
 
     Ok(())
 }

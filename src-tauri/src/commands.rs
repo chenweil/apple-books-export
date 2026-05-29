@@ -168,7 +168,15 @@ pub async fn enrich_book_cmd(
     state: tauri::State<'_, AppState>,
     window: tauri::WebviewWindow,
 ) -> Result<serde_json::Value, String> {
-    let config = load_config(None).map_err(|e| e.to_string())?;
+    let config_path = get_config_path();
+    let mut config = load_config(Some(&config_path)).map_err(|e| e.to_string())?;
+    if let Ok(entry) = Entry::new("apple-books-exporter", "api-key") {
+        if let Ok(key) = entry.get_password() {
+            if !key.is_empty() {
+                config.llm.api_key = key;
+            }
+        }
+    }
     let provider = LLMProvider::new(&config.llm);
 
     // Collect DB data into owned values so the MutexGuard is dropped before any .await

@@ -1,8 +1,8 @@
 //! Apple Books Exporter - Markdown Exporter
 
 use crate::models::{Annotation, Book, LLMResult};
+use crate::utils::sanitize_filename;
 use anyhow::{Context, Result};
-use regex::Regex;
 use std::fs;
 use std::path::Path;
 
@@ -163,20 +163,6 @@ fn generate_llm_note(
     Ok(content)
 }
 
-/// 清理文件名（移除非法字符）
-pub fn sanitize_filename(name: &str) -> String {
-    // 移除或替换非法字符
-    let re = Regex::new(r#"/\\:*?"<>|"#).unwrap();
-    let cleaned = re.replace_all(name, "_");
-
-    // 限制长度
-    let max_len = 100;
-    if cleaned.len() > max_len {
-        cleaned.chars().take(max_len).collect()
-    } else {
-        cleaned.to_string()
-    }
-}
 
 #[cfg(test)]
 mod tests {

@@ -348,40 +348,13 @@ fn draw_footer(
 
     // 书名
     let text_color = style.text_color();
-    let footer_text = format!("📖 {}", book_title);
+    let footer_text = format!("[ {} ]", book_title);
     font_manager.draw_text(img, &footer_text, 60.0, y, text_color);
 }
 
 /// 生成卡片文件名
 pub fn card_filename(highlight: &str, index: usize) -> String {
-    let safe = sanitize_filename(highlight);
+    let safe = crate::utils::sanitize_filename(highlight);
     format!("card_{:02}_{}.png", index, safe)
 }
 
-/// 安全文件名
-pub fn sanitize_filename(s: &str) -> String {
-    let mut result = String::new();
-    for ch in s.chars() {
-        match ch {
-            'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_' | ' ' => result.push(ch),
-            _ => result.push('_'),
-        }
-    }
-    if result.len() > 50 {
-        result.truncate(50);
-    }
-    result
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_sanitize_filename() {
-        let name = sanitize_filename("测试：笔记内容！@#");
-        assert!(name.contains("测试"));
-        assert!(!name.contains(":"));
-        assert!(!name.contains("!"));
-    }
-}
