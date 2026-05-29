@@ -20,6 +20,7 @@ pub fn run() {
             commands::test_llm_connection,
             commands::open_system_settings,
             commands::get_cache_entries,
+            commands::generate_cards_cmd,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

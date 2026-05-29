@@ -1,10 +1,11 @@
 use std::path::PathBuf;
 
+use keyring::Entry;
 use tauri::Emitter;
 
 use apple_books_exporter::{
-    export_book, load_config, sanitize_filename, save_config, Annotation, Book, Config,
-    ExportFormat, LLMProvider,
+    card_filename, export_book, generate_card, load_config, sanitize_filename, save_config,
+    Annotation, Book, CardStyle, Config, ExportFormat, LLMProvider,
 };
 
 use crate::state::AppState;
@@ -33,11 +34,32 @@ pub fn get_annotations(
 
 #[tauri::command]
 pub fn load_app_config() -> Result<Config, String> {
-    load_config(None).map_err(|e| e.to_string())
+    let mut config = load_config(None).map_err(|e| e.to_string())?;
+
+    // Try to load API key from keychain
+    if let Ok(entry) = Entry::new("apple-books-exporter", "api-key") {
+        if let Ok(key) = entry.get_password() {
+            if !key.is_empty() {
+                config.llm.api_key = key;
+            }
+        }
+    }
+
+    Ok(config)
 }
 
 #[tauri::command]
-pub fn save_app_config(config: Config) -> Result<(), String> {
+pub fn save_app_config(mut config: Config) -> Result<(), String> {
+    // Store API key in keychain
+    let api_key = config.llm.api_key.clone();
+    if !api_key.is_empty() {
+        if let Ok(entry) = Entry::new("apple-books-exporter", "api-key") {
+            entry.set_password(&api_key).map_err(|e| e.to_string())?;
+        }
+    }
+
+    // Clear API key before writing config to disk
+    config.llm.api_key = String::new();
     save_config(&config, None).map_err(|e| e.to_string())
 }
 
@@ -282,4 +304,101 @@ pub fn get_cache_entries(
             })
         })
         .collect()
+}
+
+#[tauri::command]
+pub async fn generate_cards_cmd(
+    book_index: usize,
+    style: String,
+    output_dir: String,
+    state: tauri::State<'_, AppState>,
+    window: tauri::WebviewWindow,
+) -> Result<serde_json::Value, String> {
+    let db = state.get_db()?;
+    let books = db.as_ref().unwrap().list_books().map_err(|e| e.to_string())?;
+
+    if book_index == 0 || book_index > books.len() {
+        return Err("无效的书籍序号".to_string());
+    }
+
+    let book = &books[book_index - 1];
+    let annotations = db
+        .as_ref()
+        .unwrap()
+        .get_annotations(&book.asset_id)
+        .map_err(|e| e.to_string())?;
+
+    // Get cached LLM results
+    let cache = state.cache.lock().unwrap();
+    let mut items: Vec<(String, String, String)> = Vec::new();
+    for ann in annotations.iter() {
+        if let Some(text) = &ann.selected_text {
+            if !text.trim().is_empty() {
+                if let Some(entry) = cache.get(&book.asset_id, text) {
+                    if !entry.explanation.is_empty() {
+                        items.push((
+                            text.clone(),
+                            entry.explanation.clone(),
+                            book.title.clone(),
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    drop(cache);
+
+    if items.is_empty() {
+        return Err("没有已缓存的 LLM 结果，请先运行 AI 增强".to_string());
+    }
+
+    let card_style = CardStyle::from_str(&style);
+    let output_path = PathBuf::from(&output_dir);
+    std::fs::create_dir_all(&output_path).map_err(|e| e.to_string())?;
+
+    let total = items.len();
+    let mut success = 0u32;
+    let mut failed = 0u32;
+
+    window
+        .emit(
+            "progress",
+            serde_json::json!({
+                "current": 0, "total": total,
+                "status": "generating", "message": "开始生成卡片..."
+            }),
+        )
+        .ok();
+
+    for (i, (highlight, explanation, title)) in items.iter().enumerate() {
+        let filename = card_filename(highlight, i + 1);
+        let file_path = output_path.join(&filename);
+
+        match generate_card(highlight, Some(explanation), title, card_style, &file_path) {
+            Ok(_) => success += 1,
+            Err(_) => failed += 1,
+        }
+
+        window
+            .emit(
+                "progress",
+                serde_json::json!({
+                    "current": i + 1, "total": total,
+                    "status": "generating",
+                    "message": format!("生成第{}/{}张...", i + 1, total)
+                }),
+            )
+            .ok();
+    }
+
+    window
+        .emit(
+            "complete",
+            serde_json::json!({ "success": success, "failed": failed }),
+        )
+        .ok();
+
+    Ok(
+        serde_json::json!({ "success": success, "failed": failed, "output_dir": output_dir }),
+    )
 }
