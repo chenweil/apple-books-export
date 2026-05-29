@@ -132,16 +132,21 @@ pub async fn export_book_cmd(
         .map(|ann| {
             ann.selected_text.as_ref().and_then(|text| {
                 let cache = state.cache.lock().unwrap_or_else(|e| e.into_inner());
-                cache.get(&book.asset_id, text).map(|entry| {
+                let result = cache.get(&book.asset_id, text).map(|entry| {
                     apple_books_exporter::LLMResult {
                         explanation: entry.explanation.clone(),
                         tags: entry.tags.clone(),
                         question: entry.question.clone(),
                     }
-                })
+                });
+                eprintln!("Cache lookup for '{}': {}", text, if result.is_some() { "HIT" } else { "MISS" });
+                result
             })
         })
         .collect();
+    eprintln!("LLM results: {} out of {} annotations have AI content",
+        llm_results.iter().filter(|r| r.is_some()).count(),
+        llm_results.len());
 
     export_book(book, &annotations, &llm_results, &output_path, export_format)
         .map_err(|e| e.to_string())?;
