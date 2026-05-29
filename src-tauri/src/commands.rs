@@ -57,7 +57,7 @@ pub fn save_app_config(config: Config) -> Result<(), String> {
 
 #[tauri::command]
 pub fn get_cache_stats(book_id: String, state: tauri::State<AppState>) -> serde_json::Value {
-    let cache = state.cache.lock().unwrap();
+    let cache = state.cache.lock().unwrap_or_else(|e| e.into_inner());
     let entries = cache.get_all_for_book(&book_id);
     let total = entries.len();
     let cached = entries
@@ -73,7 +73,7 @@ pub fn get_cache_stats(book_id: String, state: tauri::State<AppState>) -> serde_
 
 #[tauri::command]
 pub fn clear_cache_for_book(book_id: String, state: tauri::State<AppState>) -> Result<(), String> {
-    let mut cache = state.cache.lock().map_err(|e| e.to_string())?;
+    let mut cache = state.cache.lock().unwrap_or_else(|e| e.into_inner())?;
     // Collect the (book_id, highlight) pairs we need to remove
     let entries: Vec<(String, String)> = cache
         .get_all_for_book(&book_id)
@@ -131,7 +131,7 @@ pub async fn export_book_cmd(
         .iter()
         .map(|ann| {
             ann.selected_text.as_ref().and_then(|text| {
-                let cache = state.cache.lock().unwrap();
+                let cache = state.cache.lock().unwrap_or_else(|e| e.into_inner());
                 cache.get(&book.asset_id, text).map(|entry| {
                     apple_books_exporter::LLMResult {
                         explanation: entry.explanation.clone(),
@@ -234,7 +234,7 @@ pub async fn enrich_book_cmd(
             .ok();
 
         if !force {
-            let cache = state.cache.lock().unwrap();
+            let cache = state.cache.lock().unwrap_or_else(|e| e.into_inner());
             if cache.is_cached(&book.asset_id, text) {
                 success += 1;
                 continue;
@@ -258,7 +258,7 @@ pub async fn enrich_book_cmd(
                 eprintln!("LLM response received for annotation {}", idx + 1);
                 match apple_books_exporter::parse_llm_result(&content) {
                     Ok(result) => {
-                        let mut cache = state.cache.lock().unwrap();
+                        let mut cache = state.cache.lock().unwrap_or_else(|e| e.into_inner());
                         cache
                             .put(
                                 &book.asset_id,
@@ -327,7 +327,7 @@ pub fn get_cache_entries(
     book_id: String,
     state: tauri::State<AppState>,
 ) -> Vec<serde_json::Value> {
-    let cache = state.cache.lock().unwrap();
+    let cache = state.cache.lock().unwrap_or_else(|e| e.into_inner());
     cache
         .get_all_for_book(&book_id)
         .iter()
@@ -366,7 +366,7 @@ pub async fn generate_cards_cmd(
         .map_err(|e| e.to_string())?;
 
     // Get cached LLM results
-    let cache = state.cache.lock().unwrap();
+    let cache = state.cache.lock().unwrap_or_else(|e| e.into_inner());
     let mut items: Vec<(String, String, String)> = Vec::new();
     for ann in annotations.iter() {
         if let Some(text) = &ann.selected_text {

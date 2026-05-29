@@ -22,7 +22,7 @@ impl AppState {
     }
 
     pub fn get_db(&self) -> Result<std::sync::MutexGuard<'_, Option<DB>>, String> {
-        let mut db = self.db.lock().map_err(|e| e.to_string())?;
+        let mut db = self.db.lock().unwrap_or_else(|e| e.into_inner());
         if db.is_none() {
             *db = Some(DB::open_apple_books().map_err(|e| format!("无法打开数据库: {}", e))?);
         }
