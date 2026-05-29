@@ -12,7 +12,12 @@ use crate::state::AppState;
 
 #[tauri::command]
 pub fn check_db_access() -> bool {
-    apple_books_exporter::DB::open_apple_books().is_ok()
+    match apple_books_exporter::DB::open_apple_books() {
+        Ok(db) => {
+            db.list_books().is_ok()
+        }
+        Err(_) => false,
+    }
 }
 
 #[tauri::command]
@@ -32,11 +37,17 @@ pub fn get_annotations(
     db.get_annotations(&asset_id).map_err(|e| e.to_string())
 }
 
+fn get_config_path() -> PathBuf {
+    home::home_dir()
+        .map(|h| h.join("Library/Application Support/books-exporter/config.json"))
+        .unwrap_or_else(|| PathBuf::from("config.json"))
+}
+
 #[tauri::command]
 pub fn load_app_config() -> Result<Config, String> {
-    let mut config = load_config(None).map_err(|e| e.to_string())?;
+    let config_path = get_config_path();
+    let mut config = load_config(Some(&config_path)).map_err(|e| e.to_string())?;
 
-    // Try to load API key from keychain
     if let Ok(entry) = Entry::new("apple-books-exporter", "api-key") {
         if let Ok(key) = entry.get_password() {
             if !key.is_empty() {
@@ -50,7 +61,8 @@ pub fn load_app_config() -> Result<Config, String> {
 
 #[tauri::command]
 pub fn save_app_config(mut config: Config) -> Result<(), String> {
-    // Store API key in keychain
+    let config_path = get_config_path();
+    
     let api_key = config.llm.api_key.clone();
     if !api_key.is_empty() {
         if let Ok(entry) = Entry::new("apple-books-exporter", "api-key") {
@@ -58,9 +70,8 @@ pub fn save_app_config(mut config: Config) -> Result<(), String> {
         }
     }
 
-    // Clear API key before writing config to disk
     config.llm.api_key = String::new();
-    save_config(&config, None).map_err(|e| e.to_string())
+    save_config(&config, Some(&config_path)).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -269,8 +280,19 @@ pub async fn enrich_book_cmd(
 
 #[tauri::command]
 pub async fn test_llm_connection() -> Result<bool, String> {
-    let config = load_config(None).map_err(|e| e.to_string())?;
-    let provider = LLMProvider::new(&config.llm);
+    let config_path = get_config_path();
+    let config = load_config(Some(&config_path)).map_err(|e| e.to_string())?;
+    
+    let mut llm_config = config.llm;
+    if let Ok(entry) = Entry::new("apple-books-exporter", "api-key") {
+        if let Ok(key) = entry.get_password() {
+            if !key.is_empty() {
+                llm_config.api_key = key;
+            }
+        }
+    }
+    
+    let provider = LLMProvider::new(&llm_config);
     match provider.complete("hello", None).await {
         Ok(_) => Ok(true),
         Err(e) => Err(format!("连接失败: {}", e)),
