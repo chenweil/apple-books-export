@@ -226,6 +226,17 @@ impl FontManager {
     }
 }
 
+/// 截断文本到指定行数
+fn truncate_to_lines(text: &str, font_manager: &FontManager, max_width: f32, max_lines: usize) -> String {
+    let lines = font_manager.wrap_text(text, max_width);
+    if lines.len() <= max_lines {
+        text.to_string()
+    } else {
+        let truncated: String = lines[..max_lines].join("\n");
+        format!("{}...", &truncated[..truncated.len().saturating_sub(3)])
+    }
+}
+
 /// 生成卡片图片
 pub fn generate_card(
     highlight: &str,
@@ -239,9 +250,22 @@ pub fn generate_card(
     // 加载字体
     let font_manager = FontManager::new(&config.font_config.font_path, config.font_size)?;
 
-    // 创建图片缓冲区
     let width = config.width;
-    let height = config.height;
+    let text_width = (width - config.padding * 2) as f32;
+
+    // 截断高亮文本（最多 8 行）
+    let highlight_truncated = truncate_to_lines(highlight, &font_manager, text_width, 8);
+    let highlight_height = font_manager.text_height(&highlight_truncated, text_width);
+
+    // 截断解释文本（最多 10 行）
+    let exp_truncated = explanation.map(|exp| truncate_to_lines(exp, &font_manager, text_width, 10));
+    let exp_height = exp_truncated.as_ref().map(|e| font_manager.text_height(e, text_width)).unwrap_or(0.0);
+
+    // 动态计算卡片高度
+    let min_height = 400;
+    let content_height = (config.padding as f32 * 2.0) + 40.0 + highlight_height + 30.0 + exp_height + 60.0;
+    let height = (content_height as u32).max(min_height);
+
     let mut img = ImageBuffer::new(width, height);
 
     // 填充背景色
@@ -256,23 +280,20 @@ pub fn generate_card(
     // 计算文本区域
     let text_x = config.padding as f32;
     let text_y = (config.padding + 40) as f32;
-    let text_width = (width - config.padding * 2) as f32;
 
     // 绘制高亮内容（主要文字）
-    let highlight_height = font_manager.text_height(highlight, text_width);
-    font_manager.draw_text(&mut img, highlight, text_x, text_y, style.text_color());
+    font_manager.draw_text(&mut img, &highlight_truncated, text_x, text_y, style.text_color());
 
     // 绘制解释（如果有）
-    if let Some(exp) = explanation {
+    if let Some(exp) = &exp_truncated {
         let exp_y = text_y + highlight_height + 30.0;
 
         // 绘制分隔线
-        let text_area_width = width - config.padding * 2;
         draw_horizontal_line(
             &mut img,
             config.padding,
             exp_y as u32 - 10,
-            text_area_width,
+            text_width as u32,
             style.border_color(),
         );
 
@@ -280,7 +301,7 @@ pub fn generate_card(
     }
 
     // 绘制底部信息
-    let footer_y = (height - config.padding - 30) as f32;
+    let footer_y = (height - config.padding as u32 - 30) as f32;
     draw_footer(&mut img, book_title, footer_y, style, &font_manager);
 
     // 保存图片
