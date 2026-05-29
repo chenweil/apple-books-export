@@ -18,5 +18,5 @@ pub use config::{load_config, save_config};
 pub use db::DB;
 pub use exporter::{export_book, ExportFormat};
 pub use models::*;
-pub use prompt::build_enrich_prompt;
+pub use prompt::{build_enrich_prompt, build_enrich_prompt_with_template};
 pub use provider::{parse_llm_result, LLMProvider};

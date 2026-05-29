@@ -171,8 +171,19 @@ pub async fn enrich_book_cmd(
     window: tauri::WebviewWindow,
 ) -> Result<serde_json::Value, String> {
     let config_path = get_config_path();
-    let config = load_config(Some(&config_path)).map_err(|e| e.to_string())?;
+    let mut config = load_config(Some(&config_path)).map_err(|e| e.to_string())?;
+
+    // 如果卡片配置中指定了模型，使用它
+    if !config.card_gen.enrich_model.is_empty() {
+        config.llm.model = config.card_gen.enrich_model.clone();
+    }
+
     let provider = LLMProvider::new(&config.llm);
+    let enrich_prompt_template = if config.card_gen.enrich_prompt.is_empty() {
+        None
+    } else {
+        Some(config.card_gen.enrich_prompt.as_str())
+    };
     eprintln!("LLM provider created, base_url: {}, model: {}", config.llm.base_url, config.llm.model);
 
     // Collect DB data into owned values so the MutexGuard is dropped before any .await
@@ -246,7 +257,11 @@ pub async fn enrich_book_cmd(
             }
         }
 
-        let prompt = apple_books_exporter::build_enrich_prompt(text, None);
+        let prompt = if let Some(template) = enrich_prompt_template {
+            apple_books_exporter::build_enrich_prompt_with_template(text, None, template)
+        } else {
+            apple_books_exporter::build_enrich_prompt(text, None)
+        };
         eprintln!("Calling LLM for annotation {}...", idx + 1);
         window
             .emit(
