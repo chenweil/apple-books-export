@@ -2,6 +2,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
   import ProgressBar from "../components/ProgressBar.svelte";
+  import SearchableSelect from "../components/SearchableSelect.svelte";
 
   interface Book { asset_id: string; title: string; author: string; note_count: number; }
 
@@ -57,11 +58,11 @@
   <div class="form">
     <label>
       书籍
-      <select bind:value={selectedIndex}>
-        {#each books as book, i}
-          <option value={i + 1}>{book.title}</option>
-        {/each}
-      </select>
+      <SearchableSelect
+        items={books.map((b, i) => ({ label: `${b.title} — ${b.author}`, value: i + 1 }))}
+        bind:value={selectedIndex}
+        placeholder="搜索书名或作者..."
+      />
     </label>
 
     <label>

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
   import ConfirmDialog from "../components/ConfirmDialog.svelte";
+  import SearchableSelect from "../components/SearchableSelect.svelte";
 
   interface Book { asset_id: string; title: string; author: string; note_count: number; }
   interface CacheEntry { key: string; highlight: string; explanation: string; tags: string[]; updated: string; }
@@ -23,7 +24,7 @@
   });
 
   $effect(() => {
-    if (books.length > 0) loadCache();
+    if (books.length > 0 && selectedIndex > 0) loadCache();
   });
 
   async function doClear() {
@@ -39,11 +40,11 @@
 
   <label class="select-book">
     书籍
-    <select bind:value={selectedIndex} onchange={loadCache}>
-      {#each books as book, i}
-        <option value={i + 1}>{book.title}</option>
-      {/each}
-    </select>
+    <SearchableSelect
+      items={books.map((b, i) => ({ label: `${b.title} — ${b.author}`, value: i + 1 }))}
+      bind:value={selectedIndex}
+      placeholder="搜索书名或作者..."
+    />
   </label>
 
   <div class="stats">
