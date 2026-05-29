@@ -1,6 +1,5 @@
 use std::path::PathBuf;
 
-use keyring::Entry;
 use tauri::Emitter;
 
 use apple_books_exporter::{
@@ -46,40 +45,13 @@ fn get_config_path() -> PathBuf {
 #[tauri::command]
 pub fn load_app_config() -> Result<Config, String> {
     let config_path = get_config_path();
-    let mut config = load_config(Some(&config_path)).map_err(|e| e.to_string())?;
-
-    match Entry::new("apple-books-exporter", "api-key") {
-        Ok(entry) => match entry.get_password() {
-            Ok(key) if !key.is_empty() => {
-                config.llm.api_key = key;
-            }
-            Ok(_) => {} // empty key
-            Err(e) => eprintln!("读取 API key 失败: {}", e),
-        },
-        Err(e) => eprintln!("创建 keyring 条目失败: {}", e),
-    }
-
+    let config = load_config(Some(&config_path)).map_err(|e| e.to_string())?;
     Ok(config)
 }
 
 #[tauri::command]
-pub fn save_app_config(mut config: Config) -> Result<(), String> {
+pub fn save_app_config(config: Config) -> Result<(), String> {
     let config_path = get_config_path();
-
-    let api_key = config.llm.api_key.clone();
-    eprintln!("save_app_config called, api_key length: {}", api_key.len());
-
-    if !api_key.is_empty() {
-        let entry = Entry::new("apple-books-exporter", "api-key")
-            .map_err(|e| format!("创建 keyring 条目失败: {}", e))?;
-        eprintln!("Keyring entry created, saving...");
-        entry
-            .set_password(&api_key)
-            .map_err(|e| format!("保存 API key 到 keychain 失败: {}", e))?;
-        eprintln!("API key saved to keychain");
-    }
-
-    config.llm.api_key = String::new();
     save_config(&config, Some(&config_path)).map_err(|e| e.to_string())
 }
 
@@ -180,14 +152,7 @@ pub async fn enrich_book_cmd(
     window: tauri::WebviewWindow,
 ) -> Result<serde_json::Value, String> {
     let config_path = get_config_path();
-    let mut config = load_config(Some(&config_path)).map_err(|e| e.to_string())?;
-    if let Ok(entry) = Entry::new("apple-books-exporter", "api-key") {
-        if let Ok(key) = entry.get_password() {
-            if !key.is_empty() {
-                config.llm.api_key = key;
-            }
-        }
-    }
+    let config = load_config(Some(&config_path)).map_err(|e| e.to_string())?;
     let provider = LLMProvider::new(&config.llm);
     eprintln!("LLM provider created, base_url: {}, model: {}", config.llm.base_url, config.llm.model);
 
@@ -328,17 +293,7 @@ pub async fn enrich_book_cmd(
 pub async fn test_llm_connection() -> Result<bool, String> {
     let config_path = get_config_path();
     let config = load_config(Some(&config_path)).map_err(|e| e.to_string())?;
-    
-    let mut llm_config = config.llm;
-    if let Ok(entry) = Entry::new("apple-books-exporter", "api-key") {
-        if let Ok(key) = entry.get_password() {
-            if !key.is_empty() {
-                llm_config.api_key = key;
-            }
-        }
-    }
-    
-    let provider = LLMProvider::new(&llm_config);
+    let provider = LLMProvider::new(&config.llm);
     match provider.complete("hello", None).await {
         Ok(_) => Ok(true),
         Err(e) => Err(format!("连接失败: {}", e)),
