@@ -1,5 +1,7 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
+  import { listen } from "@tauri-apps/api/event";
+  import ProgressBar from "../components/ProgressBar.svelte";
 
   interface Book { asset_id: string; title: string; author: string; note_count: number; }
 
@@ -9,15 +11,43 @@
   let outputDir = $state("~/cards/");
   let generating = $state(false);
   let resultMsg = $state("");
+  let progress = $state(0);
+  let total = $state(0);
+  let message = $state("");
 
   $effect(() => { invoke<Book[]>("get_books").then(b => books = b); });
+
+  $effect(() => {
+    const unlistenProgress = listen("progress", (e: any) => {
+      progress = e.payload.current;
+      total = e.payload.total;
+      message = e.payload.message;
+    });
+    const unlistenComplete = listen("complete", (e: any) => {
+      const r = e.payload;
+      resultMsg = `生成完成: 成功 ${r.success} 张, 失败 ${r.failed} 张`;
+      generating = false;
+    });
+    return () => {
+      unlistenProgress.then(fn => fn());
+      unlistenComplete.then(fn => fn());
+    };
+  });
 
   async function generateAll() {
     generating = true;
     resultMsg = "";
-    // Card generation will be wired up once the command is implemented
-    resultMsg = "卡片生成功能待实现";
-    generating = false;
+    progress = 0;
+    try {
+      await invoke("generate_cards_cmd", {
+        bookIndex: selectedIndex,
+        style,
+        outputDir: outputDir.replace("~", "/Users/chenweilong"),
+      });
+    } catch (e: any) {
+      resultMsg = `生成失败: ${e}`;
+      generating = false;
+    }
   }
 </script>
 
@@ -54,6 +84,13 @@
     </button>
   </div>
 
+  {#if generating || progress > 0}
+    <div class="progress-section">
+      <ProgressBar value={progress} max={total} />
+      <p class="msg">{message}</p>
+    </div>
+  {/if}
+
   {#if resultMsg}
     <p class="result">{resultMsg}</p>
   {/if}
@@ -70,5 +107,7 @@
   .hint { font-size: 12px; color: var(--text-secondary); }
   .btn-primary { padding: 10px 24px; background: var(--accent); color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 14px; }
   .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+  .progress-section { margin-top: 24px; }
+  .msg { font-size: 13px; color: var(--text-secondary); margin-top: 8px; }
   .result { margin-top: 16px; font-size: 14px; color: var(--text-primary); }
 </style>
