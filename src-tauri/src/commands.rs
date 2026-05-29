@@ -73,7 +73,7 @@ pub fn get_cache_stats(book_id: String, state: tauri::State<AppState>) -> serde_
 
 #[tauri::command]
 pub fn clear_cache_for_book(book_id: String, state: tauri::State<AppState>) -> Result<(), String> {
-    let mut cache = state.cache.lock().unwrap_or_else(|e| e.into_inner())?;
+    let mut cache = state.cache.lock().unwrap_or_else(|e| e.into_inner());
     // Collect the (book_id, highlight) pairs we need to remove
     let entries: Vec<(String, String)> = cache
         .get_all_for_book(&book_id)
