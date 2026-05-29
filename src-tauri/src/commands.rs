@@ -376,17 +376,20 @@ pub async fn generate_cards_cmd(
     let cache = state.cache.lock().unwrap_or_else(|e| e.into_inner());
     let mode_str = mode.as_deref().unwrap_or("all");
     let mut items: Vec<(String, String, String)> = Vec::new();
+    let mut note_idx = 0; // 过滤后的笔记索引
 
-    for (idx, ann) in annotations.iter().enumerate() {
+    for ann in annotations.iter() {
         if let Some(text) = &ann.selected_text {
             if !text.trim().is_empty() {
-                // 单条模式：只处理指定序号
+                // 单条模式：只处理指定序号（基于过滤后的索引）
                 if mode_str == "single" {
                     if let Some(si) = single_index {
-                        if idx != si - 1 {
+                        if note_idx != si - 1 {
+                            note_idx += 1;
                             continue;
                         }
                     } else {
+                        note_idx += 1;
                         continue;
                     }
                 }
@@ -400,6 +403,7 @@ pub async fn generate_cards_cmd(
                         ));
                     }
                 }
+                note_idx += 1;
             }
         }
     }
