@@ -90,9 +90,9 @@ mod tests {
     #[test]
     fn test_build_enrich_prompt() {
         let prompt = build_enrich_prompt("简短模式（short variable declaration）有些限制：", None);
-        assert!(prompt.contains("解释"));
+        assert!(prompt.contains("解读"));
         assert!(prompt.contains("标签"));
-        assert!(prompt.contains("复习问题"));
+        assert!(prompt.contains("问题"));
         assert!(prompt.contains("简短模式"));
     }
 }

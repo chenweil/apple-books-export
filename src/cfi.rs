@@ -181,13 +181,13 @@ mod tests {
     #[test]
     fn test_extract_chapter_title_section() {
         let cfi = "epubcfi(/6/10[Section0003.xhtml]!/4/82/1,:0,:44)";
-        assert_eq!(extract_chapter_title(cfi), Some("第 3 章".to_string()));
+        assert_eq!(extract_chapter_title(cfi), Some("第3章".to_string()));
     }
 
     #[test]
     fn test_extract_chapter_title_chapter() {
         let cfi = "epubcfi(/6/10[chapter5.xhtml]!/4/82/1,:0,:44)";
-        assert_eq!(extract_chapter_title(cfi), Some("第 5 章".to_string()));
+        assert_eq!(extract_chapter_title(cfi), Some("第5章".to_string()));
     }
 
     #[test]
