@@ -25,7 +25,13 @@
       "Bash(PYTHONPATH=. timeout 15 python3 knowledge/cli.py enrich --book 1)",
       "Bash(pkill -f \"knowledge/cli.py enrich\")",
       "Bash(cargo test *)",
-      "Bash(cargo check *)"
+      "Bash(cargo check *)",
+      "Bash(cargo build *)",
+      "Bash(./target/release/apple-books-exporter *)",
+      "Bash(cat)",
+      "Bash(chmod +x /tmp/cleanup.sh)",
+      "Read(//tmp/**)",
+      "Bash(/tmp/cleanup.sh *)"
     ]
   }
 }
