@@ -21,6 +21,9 @@ output/
 *.swp
 *.swo
 
+# Claude Code settings (local)
+.claude/settings.local.json
+
 # macOS
 .DS_Store
 
