@@ -66,7 +66,7 @@
       await invoke("generate_cards_cmd", {
         bookIndex: selectedIndex,
         style,
-        outputDir: outputDir.replace("~", "/Users/chenweilong"),
+        outputDir,
         mode: "single",
         singleIndex: idx + 1,
       });
@@ -86,7 +86,7 @@
       await invoke("generate_cards_cmd", {
         bookIndex: selectedIndex,
         style,
-        outputDir: outputDir.replace("~", "/Users/chenweilong"),
+        outputDir,
         mode: "all",
       });
     } catch (e: any) {
@@ -172,7 +172,7 @@
   h3 { font-size: 16px; margin-bottom: 16px; color: var(--text-primary); }
   .form { display: flex; flex-direction: column; gap: 16px; max-width: 480px; margin-bottom: 24px; }
   label { display: flex; flex-direction: column; gap: 6px; font-size: 14px; color: var(--text-secondary); }
-  select, input[type="text"], input[type="number"] { padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-secondary); color: var(--text-primary); font-size: 14px; }
+  input[type="text"] { padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-secondary); color: var(--text-primary); font-size: 14px; }
   .radio-group { display: flex; gap: 16px; }
   .radio-group label { flex-direction: row; align-items: center; gap: 4px; }
   .btn-primary { padding: 10px 24px; background: var(--accent); color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 14px; align-self: flex-start; }

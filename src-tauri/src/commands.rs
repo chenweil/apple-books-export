@@ -42,6 +42,20 @@ fn get_config_path() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("config.json"))
 }
 
+fn expand_user_path(path: &str) -> PathBuf {
+    if path == "~" {
+        return home::home_dir().unwrap_or_else(|| PathBuf::from(path));
+    }
+
+    if let Some(rest) = path.strip_prefix("~/") {
+        if let Some(home) = home::home_dir() {
+            return home.join(rest);
+        }
+    }
+
+    PathBuf::from(path)
+}
+
 #[tauri::command]
 pub fn load_app_config() -> Result<Config, String> {
     let config_path = get_config_path();
@@ -110,7 +124,7 @@ pub async fn export_book_cmd(
         .get_annotations(&book.asset_id)
         .map_err(|e| e.to_string())?;
 
-    let output_path = PathBuf::from(&output_dir);
+    let output_path = expand_user_path(&output_dir);
     let export_format = match format.as_str() {
         "obsidian" => ExportFormat::Obsidian,
         _ => ExportFormat::Markdown,
@@ -158,7 +172,10 @@ pub async fn export_book_cmd(
         )
         .ok();
 
-    Ok(format!("{}/{}", output_dir, sanitize_filename(&book.title)))
+    Ok(output_path
+        .join(sanitize_filename(&book.title))
+        .to_string_lossy()
+        .to_string())
 }
 
 #[tauri::command]
@@ -459,7 +476,7 @@ pub async fn generate_cards_cmd(
     }
 
     let card_style = CardStyle::from_str(&style);
-    let output_path = PathBuf::from(&output_dir);
+    let output_path = expand_user_path(&output_dir);
     std::fs::create_dir_all(&output_path).map_err(|e| e.to_string())?;
 
     let total = items.len();
@@ -505,6 +522,10 @@ pub async fn generate_cards_cmd(
         .ok();
 
     Ok(
-        serde_json::json!({ "success": success, "failed": failed, "output_dir": output_dir }),
+        serde_json::json!({
+            "success": success,
+            "failed": failed,
+            "output_dir": output_path.to_string_lossy().to_string()
+        }),
     )
 }

@@ -116,7 +116,7 @@
   h2 { font-size: 20px; margin-bottom: 20px; color: var(--text-primary); }
   .form { display: flex; flex-direction: column; gap: 16px; max-width: 480px; }
   label { display: flex; flex-direction: column; gap: 6px; font-size: 14px; color: var(--text-secondary); }
-  select, input { padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-secondary); color: var(--text-primary); font-size: 14px; }
+  input { padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-secondary); color: var(--text-primary); font-size: 14px; }
   .mode { display: flex; gap: 16px; align-items: center; font-size: 14px; color: var(--text-secondary); }
   .mode label { flex-direction: row; align-items: center; gap: 4px; }
   .checkbox { flex-direction: row; align-items: center; gap: 6px; }

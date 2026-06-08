@@ -4,6 +4,9 @@ mod state;
 use state::AppState;
 use tauri::Manager;
 
+#[cfg(target_os = "macos")]
+use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial, NSVisualEffectState};
+
 // 编译时嵌入图标
 const ICON_DATA: &[u8] = include_bytes!("../icons/icon.png");
 
@@ -14,6 +17,15 @@ pub fn run() {
         .setup(|app| {
             // 设置窗口图标
             let window = app.get_webview_window("main").unwrap();
+            #[cfg(target_os = "macos")]
+            apply_vibrancy(
+                &window,
+                NSVisualEffectMaterial::Sidebar,
+                Some(NSVisualEffectState::FollowsWindowActiveState),
+                Some(12.0),
+            )
+            .expect("failed to apply macOS vibrancy");
+
             let img = image::load_from_memory(ICON_DATA)
                 .expect("failed to load icon")
                 .to_rgba8();
