@@ -34,7 +34,10 @@
       "Bash(/tmp/cleanup.sh *)",
       "Bash(cargo clean *)",
       "Read(//private/tmp/test-export/**)",
-      "Read(//private/tmp/test-export/05-趣谈/**)"
+      "Read(//private/tmp/test-export/05-趣谈/**)",
+      "Bash(git stash *)",
+      "Bash(git checkout *)",
+      "Bash(git branch *)"
     ]
   }
 }
