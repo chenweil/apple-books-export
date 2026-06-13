@@ -1,200 +1,241 @@
 # Apple Books 笔记导出工具
 
-导出 macOS Apple Books 中的笔记、标注、书签为 Markdown 文件。
+Rust 版本 Apple Books 笔记导出工具，支持 CLI 和 GUI，可导出笔记、高亮、书签为 Markdown 文件，并支持 AI 增强和图片卡片生成。
 
 ## 功能
 
-- 列出 Apple Books 书库中所有做过笔记的书籍
-- 显示每本书的笔记数量
-- **按书名搜索导出**：支持模糊匹配书名
-- 交互式选择书籍并导出为 Markdown
-- 支持预览笔记内容后再决定是否导出
-- 进度条显示导出过程
-- **AI Agent 支持**：提供 skill 文件，支持 AI 助手直接调用
+- 📚 列出 Apple Books 书库中所有做过笔记的书籍
+- 📝 导出笔记、高亮、书签为 Markdown
+- 🔍 按书名搜索导出（模糊匹配）
+- 🤖 AI 增强：为笔记添加解释、标签、复习问题
+- 🎴 图片卡片：生成精美的知识卡片
+- 🖥️ GUI 支持：Tauri 跨平台桌面应用
+- 🤖 AI Agent Skill：支持 AI 助手直接调用
 
 ## 系统要求
 
 - macOS（Apple Books 数据仅存在于 macOS）
-- Python 3.14（需要 python-tk@3.14）或使用独立二进制
-- Apple Books 中有做过笔记/标注的书籍
+- Full Disk Access 权限
 
-## 安装
+## 快速开始
 
-### 方式一：使用独立二进制（推荐）
+### 方式一：使用 Skill（推荐）
 
-无需安装 Python，直接使用打包好的二进制：
+适合 AI Agent 用户，安装后可直接被 Claude Code、Gemini CLI 等调用。
 
 ```bash
-# 下载项目
-git clone https://github.com/yourname/books-exporter.git
-cd books-exporter
+# 1. 克隆项目
+git clone https://github.com/chenweil/apple-books-export.git
+cd apple-books-export
 
-# 直接运行
-./skills/apple-books-export/scripts/books-exporter list
+# 2. 编译二进制（首次需要）
+cargo build --release
+cp target/release/apple-books-exporter skills/apple-books-export-rust/scripts/
+
+# 3. 安装 skill
+cd skills/apple-books-export-rust/scripts
+./install.sh
+
+# 4. 验证安装
+~/.agents/skills/apple-books-export-rust/scripts/apple-books-exporter list
 ```
 
-### 方式二：Python 源码运行
+### 方式二：直接使用二进制
 
 ```bash
-# 1. 安装 Python 和 Tkinter
-brew install python@3.14 python-tk@3.14
+# 编译
+cargo build --release
 
-# 2. 安装依赖（二选一）
-
-# PySimpleGUI 版本
-/opt/homebrew/bin/python3.14 -m pip install PySimpleGUI --break-system-packages
-
-# PyQt6 版本（推荐，更美观）
-/opt/homebrew/bin/python3.14 -m pip install PyQt6 --break-system-packages
-
-# 3. 进入项目目录
-cd books-exporter
+# 运行
+./target/release/apple-books-exporter list
+./target/release/apple-books-exporter export 1 -o ~/Desktop
 ```
 
-## 使用
-
-### CLI 模式
+### 方式三：GUI 应用
 
 ```bash
-# 列出所有书籍
-./skills/apple-books-export/scripts/books-exporter list
+# 开发模式
+npm install
+npm run tauri dev
 
-# 交互式选择导出
-./skills/apple-books-export/scripts/books-exporter export
-
-# 导出第 N 本书
-./skills/apple-books-export/scripts/books-exporter export 1
-
-# 按书名搜索导出（模糊匹配）
-./skills/apple-books-export/scripts/books-exporter export -t "纳瓦尔"
-
-# 指定导出目录
-./skills/apple-books-export/scripts/books-exporter export -t "宝典" -o ~/Desktop
+# 构建 macOS 应用
+npm run tauri build
 ```
 
-### GUI 模式
+## CLI 命令
 
-提供两个版本：
+### 列出书籍
 
 ```bash
-# PySimpleGUI 版本（轻量）
-./run-gui.sh
-
-# PyQt6 版本（推荐，macOS 原生风格）
-./run-gui-qt.sh
+apple-books-exporter list
 ```
 
-界面左侧显示书籍列表（按笔记数排序），右侧显示选中书的详情和统计。点击"预览"查看笔记内容，点击"导出"选择保存位置。
-
-**PyQt6 版本特点**：
-- 现代化 macOS 风格设计
-- 自定义细长滚动条
-- 流畅的触控板滚动支持
-- 卡片式统计显示
-
-## AI 增强功能 (Knowledge Module)
-
-为高亮笔记补充 LLM 解释、标签、复习问题，输出到 Obsidian。
-
-### 配置
+### 导出笔记
 
 ```bash
-# 首次配置 LLM（使用小米 MiMo API）
-cd books-exporter
-PYTHONPATH=. python3 knowledge/cli.py config \
-  --provider openai_compatible \
-  --base-url https://token-plan-cn.xiaomimimo.com/v1 \
-  --api-key tp-cvd4fahd9z8buczsoc8t78cn46juia2bdseh1n0io77mqybh \
-  --model mimo-v2.5-pro
+# 按序号导出
+apple-books-exporter export 1
+
+# 按书名搜索导出
+apple-books-exporter export -t "纳瓦尔"
+
+# 指定输出目录
+apple-books-exporter export 1 -o ~/Desktop
+
+# 指定格式
+apple-books-exporter export 1 --format obsidian
 ```
 
-### 使用命令
+### AI 增强笔记
+
+需要先配置 LLM API：
 
 ```bash
-# 增量处理（默认，只处理新增笔记）
-PYTHONPATH=. python3 knowledge/cli.py enrich --book 1
-
-# 全量处理整本书
-PYTHONPATH=. python3 knowledge/cli.py enrich --book 1 --all
+# 配置
+apple-books-exporter config --api-key "sk-xxx" --model "gpt-4o-mini"
 
 # 处理单条笔记
-PYTHONPATH=. python3 knowledge/cli.py enrich --book 1 --index 42
+apple-books-exporter enrich 1 --index 42
 
-# 强制刷新某条（重新生成）
-PYTHONPATH=. python3 knowledge/cli.py enrich --book 1 --index 42 --force
+# 处理整本书
+apple-books-exporter enrich 1 --all
 
-# 指定输出目录和格式
-PYTHONPATH=. python3 knowledge/cli.py enrich --book 1 --output ~/obsidian/books/ --format obsidian
-
-# 导出图片卡片
-PYTHONPATH=. python3 knowledge/cli.py card --book 1 --all --style dark --output ~/cards/
-
-# 查看缓存状态
-PYTHONPATH=. python3 knowledge/cli.py cache --book 1
+# 强制重新生成
+apple-books-exporter enrich 1 --all --force
 ```
 
-### 输出示例
+### 生成图片卡片
 
-```markdown
----
-type: llm-note
-book: 南怀瑾著作全收录
-chapter: item465
-tags: [汉文帝, 老子思想, 文景之治, 节俭, 德治]
----
-
-## 解释
-汉文帝奉行老子三宝，节俭治国，促成文景之治。
-
-## 复习问题
-汉文帝如何通过节俭生活和改革政策体现老子的慈、俭、不敢为天下先？
-```
-
-更多详情：`docs/KNOWLEDGE_MODULE_DESIGN.md`
-
----
-
-## AI Agent 支持
-
-本项目提供 `apple-books-export` skill，支持 AI 助手（Claude Code、Gemini CLI 等）直接调用：
-
-**安装 skill**：
 ```bash
-# 复制到 agent skills 目录
-cp -r skills/apple-books-export ~/.agents/skills/
+# 批量生成
+apple-books-exporter card 1 --all
+
+# 指定样式
+apple-books-exporter card 1 --all --style dark  # dark/light/minimal
 ```
 
-**使用示例**：
+## AI Agent Skill
+
+本项目提供 skill，支持 AI 助手直接调用。
+
+### Skill 文件
+
+```
+skills/apple-books-export-rust/
+├── SKILL.md                              # Skill 文档
+└── scripts/
+    ├── apple-books-exporter              # 默认二进制
+    ├── apple-books-exporter-aarch64-apple-darwin  # macOS ARM
+    ├── build.sh                          # 编译脚本
+    └── install.sh                        # 安装脚本
+```
+
+### 编译二进制（必需）
+
+Skill 需要二进制文件才能读取 Apple Books 数据。首次使用前必须编译：
+
+```bash
+# 方式一：使用编译脚本
+cd skills/apple-books-export-rust/scripts
+./build.sh
+
+# 方式二：手动编译
+cargo build --release
+cp target/release/apple-books-exporter skills/apple-books-export-rust/scripts/
+```
+
+### 安装 Skill
+
+```bash
+cd skills/apple-books-export-rust/scripts
+./install.sh
+```
+
+安装脚本会：
+1. 检测当前系统平台
+2. 复制二进制文件到 `~/.agents/skills/apple-books-export-rust/scripts/`
+3. 复制 SKILL.md 文档
+
+### 跨平台编译
+
+```bash
+# macOS ARM (M1/M2/M3)
+cargo build --release --target aarch64-apple-darwin
+
+# macOS Intel
+cargo build --release --target x86_64-apple-darwin
+
+# Linux x86_64
+cargo build --release --target x86_64-unknown-linux-gnu
+```
+
+编译后复制到 scripts 目录并重命名：
+```bash
+cp target/<target>/release/apple-books-exporter \
+   skills/apple-books-export-rust/scripts/apple-books-exporter-<target>
+```
+
+### 使用示例
+
+安装 skill 后，AI 助手可以直接调用：
+
 ```
 用户: 导出纳瓦尔宝典的笔记
-AI: 正在搜索包含"纳瓦尔"的书籍...
-    找到 1 本匹配：
-    1. 纳瓦尔宝典 - 217 条笔记
-    确认导出到桌面？
+AI: 正在搜索...
+    找到：纳瓦尔宝典 - 218 条笔记
+    已导出到 ~/Desktop/纳瓦尔宝典_xxxxx.md
 ```
 
-Skill 文件位置：`skills/apple-books-export/SKILL.md`
+## LLM 配置
+
+AI 增强功能需要配置 LLM API。配置文件：`knowledge_config.json`
+
+```json
+{
+  "llm": {
+    "provider": "openai_compatible",
+    "base_url": "https://api.openai.com/v1",
+    "api_key": "sk-xxx",
+    "model": "gpt-4o-mini",
+    "batch_size": 10,
+    "max_retries": 3,
+    "retry_delays": [1, 2, 4]
+  },
+  "output_format": "obsidian"
+}
+```
+
+支持的 API：
+- OpenAI (gpt-4o-mini, gpt-4o)
+- DeepSeek (deepseek-chat)
+- 通义千问 (qwen-turbo)
+- MiMo (mimo-v2.5-pro)
+- Ollama (本地)
 
 ## 项目结构
 
 ```
-books-exporter/
-├── books_exporter.py           # CLI 核心 + 数据层
-├── gui/                        # GUI 模块
-│   ├── main.py                 # PySimpleGUI 入口
-│   ├── main_window.py          # PySimpleGUI 主窗口
-│   ├── main_qt.py              # PyQt6 入口
-│   └── main_window_qt.py       # PyQt6 主窗口
-├── services/                   # 业务逻辑封装
-├── skills/                     # AI Agent skill
-│   └── apple-books-export/
-│       ├── SKILL.md            # Skill 文档
-│       └── scripts/
-│           └── books-exporter  # 独立二进制
-├── build.sh                    # 打包脚本
-├── run-gui.sh                  # PySimpleGUI 启动脚本
-├── run-gui-qt.sh               # PyQt6 启动脚本
-└── README.md
+apple-books-export/
+├── src/                           # Rust 核心库
+│   ├── main.rs                    # CLI 入口
+│   ├── db.rs                      # SQLite 数据访问
+│   ├── models.rs                  # 数据结构
+│   ├── exporter.rs                # Markdown 导出
+│   ├── provider.rs                # LLM API 调用
+│   ├── cache.rs                   # LLM 结果缓存
+│   ├── card.rs                    # 图片卡片生成
+│   └── ...
+├── src-tauri/                     # Tauri GUI
+│   ├── src/main.rs                # Tauri 入口
+│   └── tauri.conf.json            # Tauri 配置
+├── src/lib/                       # Svelte 前端
+│   ├── pages/                     # 页面组件
+│   └── components/                # UI 组件
+├── skills/                        # AI Agent Skill
+│   └── apple-books-export-rust/
+│       ├── SKILL.md               # Skill 文档
+│       └── scripts/               # 二进制和脚本
+└── knowledge_config.json          # LLM 配置
 ```
 
 ## 数据来源
@@ -206,34 +247,25 @@ Apple Books 的笔记数据存储在：
 └── AEAnnotation/AEAnnotation_*.sqlite # 笔记/标注数据
 ```
 
-## 导出格式
-
-导出的 Markdown 文件：
-
-```markdown
-# 书名
-
-**作者**: 作者名
-
-**笔记数量**: N
-
----
-
-## 高亮与笔记
-
-### 1. 章节/位置
-*2025-01-15 10:30*
-
-> 高亮文字
-
-**笔记**: 我的笔记内容
-
----
-```
-
 ## macOS 权限
 
-如果遇到"无法读取数据"提示，确保在 **系统设置 → 隐私与安全性 → 完全磁盘访问权限** 中给予终端或 Python 完全磁盘访问权限。
+如果遇到"无法读取数据"提示，确保在 **系统设置 → 隐私与安全性 → 完全磁盘访问权限** 中给予终端或二进制文件完全磁盘访问权限。
+
+## 技术栈
+
+- **后端**: Rust + Tauri 2.0
+- **前端**: Svelte 5 + TypeScript
+- **数据库**: rusqlite (bundled)
+- **HTTP**: reqwest + tokio
+- **图片**: image + rusttype
+
+## Python 版本
+
+Python 版本已归档到 `python-legacy` 分支，如需使用：
+
+```bash
+git checkout python-legacy
+```
 
 ## License
 
