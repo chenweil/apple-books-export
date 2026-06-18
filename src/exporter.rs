@@ -3,6 +3,7 @@
 use crate::models::{Annotation, Book, LLMResult};
 use crate::utils::sanitize_filename;
 use anyhow::{Context, Result};
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 
@@ -33,8 +34,7 @@ pub fn export_book(
 ) -> Result<()> {
     // 创建输出目录
     let book_dir = output_dir.join(&book.title);
-    fs::create_dir_all(&book_dir)
-        .with_context(|| format!("无法创建输出目录：{:?}", book_dir))?;
+    fs::create_dir_all(&book_dir).with_context(|| format!("无法创建输出目录：{:?}", book_dir))?;
 
     // 生成主笔记文件
     let main_file = book_dir.join(format!("{}.md", sanitize_filename(&book.title)));
@@ -80,19 +80,28 @@ fn generate_main_note(
     // 书名
     content.push_str(&format!("# {}\n\n", book.title));
 
+    let chapters = crate::chapter::collect_chapters(annotations);
+    let mut printed_chapters: BTreeSet<String> = BTreeSet::new();
+
     // 笔记列表
-    for (_i, (ann, llm_result)) in annotations.iter().zip(llm_results.iter()).enumerate() {
+    for (i, (ann, llm_result)) in annotations.iter().zip(llm_results.iter()).enumerate() {
+        let chapter_key = crate::chapter::chapter_key(ann, i + 1);
+        if printed_chapters.insert(chapter_key.clone()) {
+            if let Some(chapter) = chapters.iter().find(|chapter| chapter.key == chapter_key) {
+                content.push_str(&format!("## {}\n\n", chapter.display_title));
+            }
+        }
+
         // 处理有选中文字的高亮/笔记
         if let Some(selected_text) = &ann.selected_text {
-            // 章节信息
-            if let Some(location) = &ann.location {
-                if let Some(chapter) = crate::cfi::extract_chapter_title(location) {
-                    content.push_str(&format!("## {}\n\n", chapter));
-                }
-            }
-
             // 高亮
             content.push_str(&format!("> {}\n\n", selected_text));
+
+            if let Some(note) = &ann.note {
+                if !note.trim().is_empty() {
+                    content.push_str(&format!("**笔记**: {}\n\n", note.trim()));
+                }
+            }
 
             // LLM 笔记链接
             if llm_result.is_some() {
@@ -108,9 +117,6 @@ fn generate_main_note(
         }
         // 处理只有位置的高亮（无选中文字）
         else if let Some(location) = &ann.location {
-            if let Some(chapter) = crate::cfi::extract_chapter_title(location) {
-                content.push_str(&format!("## {}\n\n", chapter));
-            }
             content.push_str(&format!("*高亮位置：{}*\n\n", location));
             content.push_str("---\n\n");
         }
@@ -132,10 +138,8 @@ fn generate_llm_note(
     content.push_str("---\n");
     content.push_str("type: llm-note\n");
     content.push_str(&format!("book: {}\n", book.title));
-    content.push_str(&format!(
-        "chapter: {}\n",
-        ann.location.as_deref().unwrap_or("unknown")
-    ));
+    let chapter = crate::chapter::chapter_title(ann, 1);
+    content.push_str(&format!("chapter: {}\n", chapter));
     if let Some(highlight) = &ann.selected_text {
         content.push_str(&format!("highlight: \"{}\"\n", highlight));
     }
@@ -162,7 +166,6 @@ fn generate_llm_note(
 
     Ok(content)
 }
-
 
 #[cfg(test)]
 mod tests {

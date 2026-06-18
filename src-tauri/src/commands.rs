@@ -3,8 +3,9 @@ use std::path::PathBuf;
 use tauri::Emitter;
 
 use apple_books_exporter::{
-    card_filename, export_book, generate_card, load_config, sanitize_filename, save_config,
-    Annotation, Book, CardStyle, Config, ExportFormat, LLMProvider,
+    annotations_for_chapter, build_chapter_context, build_coach_prompt, card_filename,
+    collect_chapters, export_book, generate_card, load_config, sanitize_filename, save_config,
+    Annotation, Book, CardStyle, CoachStep, Config, ExportFormat, LLMProvider,
 };
 
 use crate::state::AppState;
@@ -12,9 +13,7 @@ use crate::state::AppState;
 #[tauri::command]
 pub fn check_db_access() -> bool {
     match apple_books_exporter::DB::open_apple_books() {
-        Ok(db) => {
-            db.list_books().is_ok()
-        }
+        Ok(db) => db.list_books().is_ok(),
         Err(_) => false,
     }
 }
@@ -34,6 +33,27 @@ pub fn get_annotations(
     let db = state.get_db()?;
     let db = db.as_ref().unwrap();
     db.get_annotations(&asset_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn get_book_chapters(
+    book_index: usize,
+    state: tauri::State<AppState>,
+) -> Result<Vec<apple_books_exporter::chapter::ChapterInfo>, String> {
+    let db = state.get_db()?;
+    let db = db.as_ref().unwrap();
+    let books = db.list_books().map_err(|e| e.to_string())?;
+
+    if book_index == 0 || book_index > books.len() {
+        return Err("无效的书籍序号".to_string());
+    }
+
+    let book = &books[book_index - 1];
+    let annotations = db
+        .get_annotations(&book.asset_id)
+        .map_err(|e| e.to_string())?;
+
+    Ok(collect_chapters(&annotations))
 }
 
 fn get_config_path() -> PathBuf {
@@ -69,6 +89,32 @@ pub fn save_app_config(config: Config) -> Result<(), String> {
     save_config(&config, Some(&config_path)).map_err(|e| e.to_string())
 }
 
+fn provider_from_config(config: &Config) -> LLMProvider {
+    let api_config = if config.card_gen.enrich_api.is_empty() {
+        config.api_configs.first().cloned().unwrap_or_default()
+    } else {
+        config
+            .api_configs
+            .iter()
+            .find(|a| a.name == config.card_gen.enrich_api)
+            .cloned()
+            .unwrap_or_else(|| config.api_configs.first().cloned().unwrap_or_default())
+    };
+
+    let mut llm_config = config.llm.clone();
+    if !api_config.base_url.is_empty() {
+        llm_config.base_url = api_config.base_url;
+    }
+    if !api_config.api_key.is_empty() {
+        llm_config.api_key = api_config.api_key;
+    }
+    if !api_config.model.is_empty() {
+        llm_config.model = api_config.model;
+    }
+
+    LLMProvider::new(&llm_config)
+}
+
 #[tauri::command]
 pub fn get_cache_stats(book_id: String, state: tauri::State<AppState>) -> serde_json::Value {
     let cache = state.cache.lock().unwrap_or_else(|e| e.into_inner());
@@ -95,9 +141,7 @@ pub fn clear_cache_for_book(book_id: String, state: tauri::State<AppState>) -> R
         .map(|(_, e)| (e.book_id.clone(), e.highlight.clone()))
         .collect();
     for (bid, highlight) in entries {
-        cache
-            .remove(&bid, &highlight)
-            .map_err(|e| e.to_string())?;
+        cache.remove(&bid, &highlight).map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -111,7 +155,11 @@ pub async fn export_book_cmd(
     window: tauri::WebviewWindow,
 ) -> Result<String, String> {
     let db = state.get_db()?;
-    let books = db.as_ref().unwrap().list_books().map_err(|e| e.to_string())?;
+    let books = db
+        .as_ref()
+        .unwrap()
+        .list_books()
+        .map_err(|e| e.to_string())?;
 
     if book_index == 0 || book_index > books.len() {
         return Err("无效的书籍序号".to_string());
@@ -146,30 +194,40 @@ pub async fn export_book_cmd(
         .map(|ann| {
             ann.selected_text.as_ref().and_then(|text| {
                 let cache = state.cache.lock().unwrap_or_else(|e| e.into_inner());
-                let result = cache.get(&book.asset_id, text).map(|entry| {
-                    apple_books_exporter::LLMResult {
-                        explanation: entry.explanation.clone(),
-                        tags: entry.tags.clone(),
-                        question: entry.question.clone(),
-                    }
-                });
-                eprintln!("Cache lookup for '{}': {}", text, if result.is_some() { "HIT" } else { "MISS" });
+                let result =
+                    cache
+                        .get(&book.asset_id, text)
+                        .map(|entry| apple_books_exporter::LLMResult {
+                            explanation: entry.explanation.clone(),
+                            tags: entry.tags.clone(),
+                            question: entry.question.clone(),
+                        });
+                eprintln!(
+                    "Cache lookup for '{}': {}",
+                    text,
+                    if result.is_some() { "HIT" } else { "MISS" }
+                );
                 result
             })
         })
         .collect();
-    eprintln!("LLM results: {} out of {} annotations have AI content",
+    eprintln!(
+        "LLM results: {} out of {} annotations have AI content",
         llm_results.iter().filter(|r| r.is_some()).count(),
-        llm_results.len());
+        llm_results.len()
+    );
 
-    export_book(book, &annotations, &llm_results, &output_path, export_format)
-        .map_err(|e| e.to_string())?;
+    export_book(
+        book,
+        &annotations,
+        &llm_results,
+        &output_path,
+        export_format,
+    )
+    .map_err(|e| e.to_string())?;
 
     window
-        .emit(
-            "complete",
-            serde_json::json!({ "success": 1, "failed": 0 }),
-        )
+        .emit("complete", serde_json::json!({ "success": 1, "failed": 0 }))
         .ok();
 
     Ok(output_path
@@ -190,34 +248,16 @@ pub async fn enrich_book_cmd(
     let config_path = get_config_path();
     let config = load_config(Some(&config_path)).map_err(|e| e.to_string())?;
 
-    // 根据 card_gen.enrich_api 选择 API 配置
-    let api_config = if config.card_gen.enrich_api.is_empty() {
-        config.api_configs.first().cloned().unwrap_or_default()
-    } else {
-        config.api_configs.iter()
-            .find(|a| a.name == config.card_gen.enrich_api)
-            .cloned()
-            .unwrap_or_else(|| config.api_configs.first().cloned().unwrap_or_default())
-    };
-
-    let mut llm_config = config.llm.clone();
-    if !api_config.base_url.is_empty() {
-        llm_config.base_url = api_config.base_url;
-    }
-    if !api_config.api_key.is_empty() {
-        llm_config.api_key = api_config.api_key;
-    }
-    if !api_config.model.is_empty() {
-        llm_config.model = api_config.model;
-    }
-
-    let provider = LLMProvider::new(&llm_config);
+    let provider = provider_from_config(&config);
     let enrich_prompt_template = if config.card_gen.enrich_prompt.is_empty() {
         None
     } else {
         Some(config.card_gen.enrich_prompt.as_str())
     };
-    eprintln!("LLM provider created, base_url: {}, model: {}", config.llm.base_url, config.llm.model);
+    eprintln!(
+        "LLM provider created, base_url: {}, model: {}",
+        config.llm.base_url, config.llm.model
+    );
 
     // Collect DB data into owned values so the MutexGuard is dropped before any .await
     let (book, annotations) = {
@@ -326,7 +366,11 @@ pub async fn enrich_book_cmd(
                         success += 1;
                     }
                     Err(e) => {
-                        eprintln!("Failed to parse LLM response for annotation {}: {}", idx + 1, e);
+                        eprintln!(
+                            "Failed to parse LLM response for annotation {}: {}",
+                            idx + 1,
+                            e
+                        );
                         failed += 1;
                     }
                 }
@@ -354,6 +398,58 @@ pub async fn enrich_book_cmd(
         .ok();
 
     Ok(serde_json::json!({ "success": success, "failed": failed }))
+}
+
+#[tauri::command]
+pub async fn chapter_coach_cmd(
+    book_index: usize,
+    chapter_key: String,
+    step: String,
+    reading_goal: Option<String>,
+    user_recall: Option<String>,
+    user_context: Option<String>,
+    state: tauri::State<'_, AppState>,
+) -> Result<String, String> {
+    let coach_step = CoachStep::from_str(&step).ok_or_else(|| "无效的陪练步骤".to_string())?;
+    let config_path = get_config_path();
+    let config = load_config(Some(&config_path)).map_err(|e| e.to_string())?;
+    let provider = provider_from_config(&config);
+
+    let (book, annotations) = {
+        let db = state.get_db()?;
+        let db_ref = db.as_ref().unwrap();
+        let books = db_ref.list_books().map_err(|e| e.to_string())?;
+
+        if book_index == 0 || book_index > books.len() {
+            return Err("无效的书籍序号".to_string());
+        }
+
+        let book = books[book_index - 1].clone();
+        let annotations = db_ref
+            .get_annotations(&book.asset_id)
+            .map_err(|e| e.to_string())?;
+        (book, annotations)
+    };
+
+    let chapters = collect_chapters(&annotations);
+    let chapter = chapters
+        .iter()
+        .find(|chapter| chapter.key == chapter_key)
+        .ok_or_else(|| "未找到该章节".to_string())?;
+    let chapter_annotations = annotations_for_chapter(&annotations, &chapter.key);
+    let context = build_chapter_context(&book, chapter, &chapter_annotations);
+    let prompt = build_coach_prompt(
+        coach_step,
+        &context,
+        reading_goal.as_deref(),
+        user_recall.as_deref(),
+        user_context.as_deref(),
+    );
+
+    provider
+        .complete(&prompt, None)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -390,10 +486,7 @@ pub fn open_system_settings() {
 }
 
 #[tauri::command]
-pub fn get_cache_entries(
-    book_id: String,
-    state: tauri::State<AppState>,
-) -> Vec<serde_json::Value> {
+pub fn get_cache_entries(book_id: String, state: tauri::State<AppState>) -> Vec<serde_json::Value> {
     let cache = state.cache.lock().unwrap_or_else(|e| e.into_inner());
     cache
         .get_all_for_book(&book_id)
@@ -421,7 +514,11 @@ pub async fn generate_cards_cmd(
     window: tauri::WebviewWindow,
 ) -> Result<serde_json::Value, String> {
     let db = state.get_db()?;
-    let books = db.as_ref().unwrap().list_books().map_err(|e| e.to_string())?;
+    let books = db
+        .as_ref()
+        .unwrap()
+        .list_books()
+        .map_err(|e| e.to_string())?;
 
     if book_index == 0 || book_index > books.len() {
         return Err("无效的书籍序号".to_string());
@@ -458,11 +555,7 @@ pub async fn generate_cards_cmd(
 
                 if let Some(entry) = cache.get(&book.asset_id, text) {
                     if !entry.explanation.is_empty() {
-                        items.push((
-                            text.clone(),
-                            entry.explanation.clone(),
-                            book.title.clone(),
-                        ));
+                        items.push((text.clone(), entry.explanation.clone(), book.title.clone()));
                     }
                 }
                 note_idx += 1;
@@ -521,11 +614,9 @@ pub async fn generate_cards_cmd(
         )
         .ok();
 
-    Ok(
-        serde_json::json!({
-            "success": success,
-            "failed": failed,
-            "output_dir": output_path.to_string_lossy().to_string()
-        }),
-    )
+    Ok(serde_json::json!({
+        "success": success,
+        "failed": failed,
+        "output_dir": output_path.to_string_lossy().to_string()
+    }))
 }
