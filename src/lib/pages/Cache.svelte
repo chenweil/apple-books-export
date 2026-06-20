@@ -95,7 +95,6 @@
   .page { padding: 24px; }
   h2 { font-size: 20px; margin-bottom: 20px; color: var(--text-primary); }
   .select-book { display: flex; flex-direction: column; gap: 6px; font-size: 14px; color: var(--text-secondary); max-width: 300px; margin-bottom: 20px; }
-  select { padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-secondary); color: var(--text-primary); font-size: 14px; }
   .stats { display: flex; gap: 24px; margin-bottom: 24px; }
   .stat { display: flex; flex-direction: column; align-items: center; }
   .num { font-size: 28px; font-weight: 600; color: var(--accent); }

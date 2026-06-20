@@ -7,6 +7,7 @@
   import Export from "./lib/pages/Export.svelte";
   import Config from "./lib/pages/Config.svelte";
   import Enrich from "./lib/pages/Enrich.svelte";
+  import Coach from "./lib/pages/Coach.svelte";
   import Card from "./lib/pages/Card.svelte";
   import Cache from "./lib/pages/Cache.svelte";
 
@@ -38,6 +39,8 @@
           <Export />
         {:else if currentPage === "enrich"}
           <Enrich />
+        {:else if currentPage === "coach"}
+          <Coach />
         {:else if currentPage === "card"}
           <Card />
         {:else if currentPage === "cache"}

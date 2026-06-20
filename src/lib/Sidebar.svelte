@@ -5,6 +5,7 @@
     { id: "books", icon: "📚", label: "书籍" },
     { id: "export", icon: "📤", label: "导出" },
     { id: "enrich", icon: "✨", label: "增强" },
+    { id: "coach", icon: "🧭", label: "陪练" },
     { id: "card", icon: "🎨", label: "卡片" },
     { id: "cache", icon: "💾", label: "缓存" },
     { id: "config", icon: "⚙️", label: "设置" },

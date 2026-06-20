@@ -3,7 +3,7 @@
 
 use image::{ImageBuffer, Rgba};
 use rusttype::{Font, Point, Scale};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 /// 卡片样式
@@ -116,14 +116,18 @@ impl FontManager {
     /// 创建字体管理器
     pub fn new(font_path: &str, size: f32) -> anyhow::Result<Self> {
         let font_data = std::fs::read(font_path).or_else(|_| {
-            let paths = [
-                "/System/Library/Fonts/PingFang.ttc",
-                "/System/Library/Fonts/STHeiti Medium.ttc",
-                "/Users/chenweilong/Library/Fonts/NotoSansSC-R.ttf",
-                "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
-                "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+            let mut paths = vec![
+                PathBuf::from("/System/Library/Fonts/PingFang.ttc"),
+                PathBuf::from("/System/Library/Fonts/STHeiti Medium.ttc"),
+                PathBuf::from("/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc"),
+                PathBuf::from("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
             ];
-            for p in &paths {
+
+            if let Some(home) = home::home_dir() {
+                paths.push(home.join("Library/Fonts/NotoSansSC-R.ttf"));
+            }
+
+            for p in paths {
                 if let Ok(data) = std::fs::read(p) {
                     return Ok(data);
                 }
@@ -227,7 +231,12 @@ impl FontManager {
 }
 
 /// 截断文本到指定行数
-fn truncate_to_lines(text: &str, font_manager: &FontManager, max_width: f32, max_lines: usize) -> String {
+fn truncate_to_lines(
+    text: &str,
+    font_manager: &FontManager,
+    max_width: f32,
+    max_lines: usize,
+) -> String {
     let lines = font_manager.wrap_text(text, max_width);
     if lines.len() <= max_lines {
         text.to_string()
@@ -258,12 +267,17 @@ pub fn generate_card(
     let highlight_height = font_manager.text_height(&highlight_truncated, text_width);
 
     // 截断解释文本（最多 10 行）
-    let exp_truncated = explanation.map(|exp| truncate_to_lines(exp, &font_manager, text_width, 10));
-    let exp_height = exp_truncated.as_ref().map(|e| font_manager.text_height(e, text_width)).unwrap_or(0.0);
+    let exp_truncated =
+        explanation.map(|exp| truncate_to_lines(exp, &font_manager, text_width, 10));
+    let exp_height = exp_truncated
+        .as_ref()
+        .map(|e| font_manager.text_height(e, text_width))
+        .unwrap_or(0.0);
 
     // 动态计算卡片高度
     let min_height = 400;
-    let content_height = (config.padding as f32 * 2.0) + 40.0 + highlight_height + 30.0 + exp_height + 60.0;
+    let content_height =
+        (config.padding as f32 * 2.0) + 40.0 + highlight_height + 30.0 + exp_height + 60.0;
     let height = (content_height as u32).max(min_height);
 
     let mut img = ImageBuffer::new(width, height);
@@ -282,7 +296,13 @@ pub fn generate_card(
     let text_y = (config.padding + 40) as f32;
 
     // 绘制高亮内容（主要文字）
-    font_manager.draw_text(&mut img, &highlight_truncated, text_x, text_y, style.text_color());
+    font_manager.draw_text(
+        &mut img,
+        &highlight_truncated,
+        text_x,
+        text_y,
+        style.text_color(),
+    );
 
     // 绘制解释（如果有）
     if let Some(exp) = &exp_truncated {
@@ -365,7 +385,13 @@ fn draw_footer(
     let width = img.width();
 
     // 分隔线
-    draw_horizontal_line(img, 60, (y - 25.0) as u32, width - 120, style.border_color());
+    draw_horizontal_line(
+        img,
+        60,
+        (y - 25.0) as u32,
+        width - 120,
+        style.border_color(),
+    );
 
     // 书名
     let text_color = style.text_color();
@@ -378,4 +404,3 @@ pub fn card_filename(highlight: &str, index: usize) -> String {
     let safe = crate::utils::sanitize_filename(highlight);
     format!("card_{:02}_{}.png", index, safe)
 }
-

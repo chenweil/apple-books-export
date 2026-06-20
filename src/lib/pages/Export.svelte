@@ -70,7 +70,7 @@
     try {
       resultPath = await invoke("export_book_cmd", {
         bookIndex: selectedIndex,
-        outputDir: outputDir.replace("~", "/Users/chenweilong"),
+        outputDir,
         format,
       });
     } catch (e: any) {
@@ -138,7 +138,7 @@
   h3 { font-size: 16px; margin-bottom: 8px; color: var(--text-primary); }
   .form { display: flex; flex-direction: column; gap: 16px; max-width: 480px; }
   label { display: flex; flex-direction: column; gap: 6px; font-size: 14px; color: var(--text-secondary); }
-  select, input[type="text"] {
+  input[type="text"] {
     padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px;
     background: var(--bg-secondary); color: var(--text-primary); font-size: 14px;
   }
