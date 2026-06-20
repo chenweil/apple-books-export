@@ -85,6 +85,21 @@ fn generate_main_note(
 
     // 笔记列表
     for (i, (ann, llm_result)) in annotations.iter().zip(llm_results.iter()).enumerate() {
+        let selected_text = ann
+            .selected_text
+            .as_deref()
+            .map(str::trim)
+            .filter(|text| !text.is_empty());
+        let note = ann
+            .note
+            .as_deref()
+            .map(str::trim)
+            .filter(|note| !note.is_empty());
+
+        if selected_text.is_none() && note.is_none() {
+            continue;
+        }
+
         let chapter_key = crate::chapter::chapter_key(ann, i + 1);
         if printed_chapters.insert(chapter_key.clone()) {
             if let Some(chapter) = chapters.iter().find(|chapter| chapter.key == chapter_key) {
@@ -93,14 +108,12 @@ fn generate_main_note(
         }
 
         // 处理有选中文字的高亮/笔记
-        if let Some(selected_text) = &ann.selected_text {
+        if let Some(selected_text) = selected_text {
             // 高亮
             content.push_str(&format!("> {}\n\n", selected_text));
 
-            if let Some(note) = &ann.note {
-                if !note.trim().is_empty() {
-                    content.push_str(&format!("**笔记**: {}\n\n", note.trim()));
-                }
+            if let Some(note) = note {
+                content.push_str(&format!("**笔记**: {}\n\n", note));
             }
 
             // LLM 笔记链接
@@ -115,9 +128,9 @@ fn generate_main_note(
 
             content.push_str("---\n\n");
         }
-        // 处理只有位置的高亮（无选中文字）
-        else if let Some(location) = &ann.location {
-            content.push_str(&format!("*高亮位置：{}*\n\n", location));
+        // 处理只有笔记、没有选中文字的记录；纯位置记录不导出。
+        else if let Some(note) = note {
+            content.push_str(&format!("**笔记**: {}\n\n", note));
             content.push_str("---\n\n");
         }
     }
@@ -183,5 +196,40 @@ mod tests {
         assert_eq!(ExportFormat::from("obsidian"), ExportFormat::Obsidian);
         assert_eq!(ExportFormat::from("markdown"), ExportFormat::Markdown);
         assert_eq!(ExportFormat::from("unknown"), ExportFormat::Obsidian);
+    }
+
+    #[test]
+    fn test_main_note_skips_location_only_annotations() {
+        let book = Book {
+            asset_id: "book".to_string(),
+            title: "测试书".to_string(),
+            author: "作者".to_string(),
+            note_count: 2,
+        };
+        let annotations = vec![
+            Annotation {
+                asset_id: "book".to_string(),
+                selected_text: None,
+                note: None,
+                location: Some("epubcfi(/6/24[id16]!/4/222/1:129)".to_string()),
+                annotation_type: 0,
+                creation_date: None,
+            },
+            Annotation {
+                asset_id: "book".to_string(),
+                selected_text: Some("真正的高亮".to_string()),
+                note: None,
+                location: Some("epubcfi(/6/24[id16]!/4/224/1:0)".to_string()),
+                annotation_type: 2,
+                creation_date: None,
+            },
+        ];
+        let llm_results = vec![None, None];
+
+        let content =
+            generate_main_note(&book, &annotations, &llm_results, ExportFormat::Markdown).unwrap();
+
+        assert!(!content.contains("高亮位置"));
+        assert!(content.contains("> 真正的高亮"));
     }
 }

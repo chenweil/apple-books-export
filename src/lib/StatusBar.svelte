@@ -27,7 +27,7 @@
   <span>📚 {bookCount} 本书</span>
   <span>💾 缓存 {cacheCount} 条</span>
   <span>🕐 最后同步 {lastSync}</span>
-  <span class="version">v0.2.0</span>
+  <span class="version">v0.3.2</span>
 </footer>
 
 <style>
