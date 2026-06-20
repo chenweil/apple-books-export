@@ -16,7 +16,8 @@ permissions:
 
 jobs:
   # ─────────────────────────────────────────────────
-  # 1. 构建矩阵: 三个平台并行构建
+  # 1. 构建矩阵: 两个 macOS 平台各跑 CLI + GUI
+  #    (Linux 已移除 — Apple Books 仅存在于 macOS)
   # ─────────────────────────────────────────────────
   build:
     name: Build (${{ matrix.label }})
@@ -35,13 +36,13 @@ jobs:
             os: macos-13
             label: macos-x86_64
             binary_name: apple-books-exporter-x86_64-apple-darwin
-          # Linux x86_64 已移除 - Apple Books 仅存在于 macOS,无需 Linux 二进制
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install Rust toolchain
+      # ── CLI 构建准备 ──────────────────────────────
+      - name: Install Rust toolchain (CLI)
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -58,27 +59,101 @@ jobs:
             ${{ runner.os }}-cargo-${{ matrix.target }}-
             ${{ runner.os }}-cargo-
 
-      - name: Build release binary
+      # ── CLI 构建 ──────────────────────────────────
+      - name: Build CLI release binary
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Locate binary
-        id: locate
+      - name: Locate CLI binary
+        id: locate-cli
         run: |
-          BINARY="target/${{ matrix.target }}/release/apple-books-exporter"
-          if [ ! -f "$BINARY" ]; then
-            echo "❌ Binary not found: $BINARY"
-            ls -la target/${{ matrix.target }}/release/ 2>/dev/null || true
+          CLI="target/${{ matrix.target }}/release/apple-books-exporter"
+          if [ ! -f "$CLI" ]; then
+            echo "❌ CLI binary not found: $CLI"
             exit 1
           fi
-          echo "binary_path=$BINARY" >> "$GITHUB_OUTPUT"
-          echo "✅ Built: $BINARY ($(du -h "$BINARY" | cut -f1))"
+          echo "binary_path=$CLI" >> "$GITHUB_OUTPUT"
+          echo "✅ Built: $CLI ($(du -h "$CLI" | cut -f1))"
 
-      - name: Upload build artifact
+      - name: Upload CLI artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.binary_name }}
-          path: ${{ steps.locate.outputs.binary_path }}
+          name: cli-${{ matrix.binary_name }}
+          path: ${{ steps.locate-cli.outputs.binary_path }}
           if-no-files-found: error
+          retention-days: 7
+
+      # ── GUI 构建准备 ──────────────────────────────
+      - name: Setup Node.js (GUI frontend)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      # ── GUI 构建 ──────────────────────────────────
+      # Tauri 2.x: 前端用 vite 构建,然后 cargo tauri build
+      - name: Build GUI app
+        working-directory: src-tauri
+        run: |
+          # 确保 frontend dist 已构建 (tauri.conf.json 的 beforeBuildCommand 会自动跑 npm run build)
+          cargo tauri build --target ${{ matrix.target }}
+
+      - name: Locate GUI artifacts
+        id: locate-gui
+        run: |
+          BUNDLE_DIR="src-tauri/target/${{ matrix.target }}/release/bundle"
+          APP="$BUNDLE_DIR/macos/Apple Books Exporter.app"
+          DMG_SRC=$(ls "$BUNDLE_DIR/dmg/"*.dmg 2>/dev/null | head -1)
+
+          if [ ! -d "$APP" ]; then
+            echo "❌ .app not found: $APP"
+            ls -la "$BUNDLE_DIR/" 2>&1 || true
+            exit 1
+          fi
+
+          # .app 是目录,打包成 zip 才能上传到 GitHub Release
+          # ditto 保留 macOS 资源分支和扩展属性 (这是 macOS 应用的推荐打包方式)
+          cd "$BUNDLE_DIR/macos"
+          ZIP="Apple-Books-Exporter-${{ matrix.target }}.app.zip"
+          ditto -c -k --sequesterRsrc --keepParent "Apple Books Exporter.app" "$ZIP"
+          cd - > /dev/null
+
+          # 把 dmg 重命名成稳定格式(去掉版本号和空格)
+          if [ -n "$DMG_SRC" ] && [ -f "$DMG_SRC" ]; then
+            DMG="Apple-Books-Exporter-${{ matrix.target }}.dmg"
+            cp "$DMG_SRC" "$DMG"
+            echo "dmg_path=$DMG" >> "$GITHUB_OUTPUT"
+          else
+            echo "dmg_path=" >> "$GITHUB_OUTPUT"
+          fi
+
+          echo "app_zip_path=$ZIP" >> "$GITHUB_OUTPUT"
+
+          echo "✅ Built .app: $APP ($(du -sh "$APP" | cut -f1))"
+          echo "✅ Built .app.zip: $ZIP ($(du -h "$ZIP" | cut -f1))"
+          if [ -n "$DMG_SRC" ] && [ -f "$DMG_SRC" ]; then
+            echo "✅ Built .dmg: $DMG ($(du -h "$DMG_SRC" | cut -f1))"
+          else
+            echo "⚠️ .dmg not built (will skip upload)"
+          fi
+
+      - name: Upload GUI .app.zip artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gui-app-${{ matrix.target }}
+          path: ${{ steps.locate-gui.outputs.app_zip_path }}
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload GUI .dmg artifact
+        if: steps.locate-gui.outputs.dmg_path != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: gui-dmg-${{ matrix.target }}
+          path: ${{ steps.locate-gui.outputs.dmg_path }}
+          if-no-files-found: warn
           retention-days: 7
 
   # ─────────────────────────────────────────────────
@@ -99,13 +174,19 @@ jobs:
           merge-multiple: true
 
       - name: List downloaded artifacts
-        run: ls -lh dist/
+        run: |
+          echo "=== 全部产物 ==="
+          find dist -maxdepth 4 -type f -o -type d | head -50
 
-      - name: Generate SHA256 checksums
+      - name: Generate SHA256 checksums (files only)
         working-directory: dist
         run: |
-          sha256sum apple-books-exporter-* > SHA256SUMS
-          cat SHA256SUMS
+          # 对所有可下载文件生成 checksum
+          find . -maxdepth 2 -type f \( -name "apple-books-exporter-*" -o -name "Apple-Books-Exporter-*" \) \
+            -exec sha256sum {} \; | tee SHA256SUMS
+          echo ""
+          echo "=== 文件清单 ==="
+          find . -maxdepth 2 -type f | sort
 
       - name: Extract version from tag
         id: version
@@ -114,18 +195,19 @@ jobs:
       - name: Create / Update Release
         uses: softprops/action-gh-release@v2
         with:
-          # 用 tag 名作为 release 名,一致
           name: v${{ steps.version.outputs.VERSION }}
-          # 优先使用本地 draft_notes,缺失时由 GitHub 自动生成
           generate_release_notes: true
           draft: false
           prerelease: ${{ contains(steps.version.outputs.VERSION, '-') }}  # 含 - 视为预发布
           files: |
             dist/apple-books-exporter-aarch64-apple-darwin
             dist/apple-books-exporter-x86_64-apple-darwin
+            dist/Apple-Books-Exporter-aarch64-apple-darwin.app.zip
+            dist/Apple-Books-Exporter-x86_64-apple-darwin.app.zip
+            dist/Apple-Books-Exporter-aarch64-apple-darwin.dmg
+            dist/Apple-Books-Exporter-x86_64-apple-darwin.dmg
             dist/SHA256SUMS
-          fail_on_unmatched_files: true
-          # 如果 release 已存在(例如手动创建过),覆盖其资产
+          fail_on_unmatched_files: false  # macOS 产物在不同 platform 下可选产出,容错
           overwrite_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
