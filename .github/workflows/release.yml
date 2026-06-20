@@ -35,11 +35,7 @@ jobs:
             os: macos-13
             label: macos-x86_64
             binary_name: apple-books-exporter-x86_64-apple-darwin
-          # Linux x86_64
-          - target: x86_64-unknown-linux-gnu
-            os: ubuntu-22.04
-            label: linux-x86_64
-            binary_name: apple-books-exporter-x86_64-unknown-linux-gnu
+          # Linux x86_64 已移除 - Apple Books 仅存在于 macOS,无需 Linux 二进制
 
     steps:
       - name: Checkout code
@@ -127,7 +123,6 @@ jobs:
           files: |
             dist/apple-books-exporter-aarch64-apple-darwin
             dist/apple-books-exporter-x86_64-apple-darwin
-            dist/apple-books-exporter-x86_64-unknown-linux-gnu
             dist/SHA256SUMS
           fail_on_unmatched_files: true
           # 如果 release 已存在(例如手动创建过),覆盖其资产
