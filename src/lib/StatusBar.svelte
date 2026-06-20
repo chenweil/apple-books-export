@@ -1,9 +1,11 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
+  import { getName, getVersion } from '@tauri-apps/api/app';
 
   let bookCount = $state(0);
   let cacheCount = $state(0);
   let lastSync = $state("--:--");
+  let version = $state("");
 
   async function refresh() {
     try {
@@ -20,14 +22,24 @@
     } catch {}
   }
 
-  $effect(() => { refresh(); });
+  async function loadVersion() {
+    try {
+      version = await getVersion();
+    } catch {
+      version = "";
+    }
+  }
+
+  $effect(() => { refresh(); loadVersion(); });
 </script>
 
 <footer class="status-bar">
   <span>📚 {bookCount} 本书</span>
   <span>💾 缓存 {cacheCount} 条</span>
   <span>🕐 最后同步 {lastSync}</span>
-  <span class="version">v0.3.2</span>
+  {#if version}
+    <span class="version">v{version}</span>
+  {/if}
 </footer>
 
 <style>
