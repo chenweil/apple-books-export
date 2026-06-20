@@ -1,104 +1,133 @@
-# Apple Books 笔记导出工具 - OpenCode 指南
+# Apple Books Exporter
 
-## 架构概览
+从 macOS Apple Books 导出笔记/标注为 Markdown 的工具,支持 CLI 和 GUI。
 
-**单仓库 Python 项目**，用于从 macOS Apple Books 导出笔记/标注为 Markdown。
+## 技术栈
 
-- **入口点**：
-  - CLI: `books_exporter.py` (数据层 + CLI 逻辑)
-  - GUI: `gui/main.py` (通过 `run-gui.sh` 启动)
-- **核心模块**：
-  - `books_exporter.py`: SQLite 数据访问、EPUB CFI 解析、Markdown 导出
-  - `services/book_service.py`: 业务逻辑封装（缓存、同步/异步加载）
-  - `gui/`: PySimpleGUI 界面（主窗口、列表、详情、预览、导出）
+- **语言**: Rust (edition 2021)
+- **CLI**: 单文件二进制,依赖 `clap` + `rusqlite (bundled)` + `reqwest/rustls` + `chrono`
+- **GUI**: Tauri 2 + Svelte (src-tauri/, src/)
+- **AI 增强**: 支持多 LLM provider (OpenAI 兼容),通过 `provider.rs` 调用
+- **图片卡片**: `card.rs` 生成 Markdown/图片卡片
+- **数据源**: Apple Books SQLite 数据库 (`~/Library/Containers/com.apple.iBooksX/`)
 
-## 开发环境
+## 项目结构
 
-**系统要求**：macOS only（Apple Books 数据仅存在于 macOS）
+```
+src/                    # CLI 核心
+├── main.rs             # CLI 入口
+├── db.rs               # SQLite 数据访问
+├── cfi.rs              # EPUB CFI 解析
+├── exporter.rs         # Markdown 导出
+├── card.rs             # 卡片生成
+├── chapter.rs          # 章节解析
+├── config.rs           # 配置管理
+├── cache.rs            # LLM 缓存
+├── provider.rs         # LLM API 调用
+├── models.rs           # 数据结构
+└── utils.rs            # 工具函数
 
-**Python 版本**：3.14（必须使用 Homebrew 安装，需要 Tkinter 支持）
+src-tauri/              # Tauri GUI (macOS desktop)
+├── src/lib.rs          # Tauri 命令注册
+├── src/commands.rs     # 前端 ↔ Rust 命令
+└── tauri.conf.json
+
+src/                    # Svelte 前端 (Tauri)
+├── App.svelte
+└── lib/pages/
+    ├── Export.svelte
+    ├── Enrich.svelte
+    ├── Card.svelte
+    ├── Coach.svelte    # 章节陪练
+    └── Cache.svelte
+
+skills/
+└── apple-books-export-rust/   # 可安装的 Skill (Claude/Gemini CLI)
+    ├── SKILL.md
+    └── scripts/
+        ├── apple-books-exporter        # 平台无关默认二进制
+        ├── apple-books-exporter-aarch64-apple-darwin
+        └── install.sh / build.sh
+```
+
+## 开发命令
 
 ```bash
-# 安装 Python 和 Tkinter
-brew install python@3.14 python-tk@3.14
+# CLI 构建
+cargo build --release
+./target/release/apple-books-exporter list
 
-# 安装依赖（必须使用 --break-system-packages，不使用虚拟环境）
-/opt/homebrew/bin/python3.14 -m pip install PySimpleGUI --break-system-packages
+# 跨平台编译(本地)
+./skills/apple-books-export-rust/scripts/build.sh
+
+# GUI 开发
+cd src-tauri && cargo tauri dev
+
+# 安装 Skill 到本地(供 AI agent 调用)
+./skills/apple-books-export-rust/scripts/install.sh
 ```
 
-## 运行命令
+## 系统要求
+
+- macOS only(Apple Books 数据仅存在于 macOS)
+- Full Disk Access 权限(系统设置 → 隐私与安全性)
+- Rust stable toolchain
+- Node.js(仅 GUI 开发需要)
+
+## 笔记分类 (`ANNOTATION_TYPE_MAP`)
+
+| Code | 含义 |
+|------|------|
+| 0 | 书签 |
+| 1 | 笔记 |
+| 2 | 高亮 |
+| 3 | 标注 |
+
+## 时间戳
+
+Apple CoreData 时间戳从 **2001-01-01 UTC** 开始(`APPLE_EPOCH`),转换时需要偏移。
+
+## 发布
+
+推送 `v*` tag 时,GitHub Actions (`.github/workflows/release.yml`) 自动:
+- 并行构建 macOS arm64 / Intel / Linux 三个平台
+- 生成 SHA256SUMS
+- 创建/更新 GitHub Release
 
 ```bash
-# GUI 模式
-./run-gui.sh
-# 或
-/opt/homebrew/bin/python3.14 -m gui.main
-
-# CLI 模式
-python3 books_exporter.py list              # 列出所有书籍
-python3 books_exporter.py export            # 交互式选择导出
-python3 books_exporter.py export 1          # 导出第1本书
-python3 books_exporter.py export 1 -o ~/Desktop  # 指定导出目录
+git tag v0.3.3 && git push --tags
 ```
 
-## 数据源
+## 分支约定
 
-Apple Books 数据存储在：
-```
-~/Library/Containers/com.apple.iBooksX/Data/Documents/
-├── BKLibrary/BKLibrary-*.sqlite      # 书籍元数据
-└── AEAnnotation/AEAnnotation_*.sqlite # 笔记/标注数据
-```
+- `main` — 当前 Rust 版本,稳定
+- `rust-version` — 下一个 Rust 版本开发
+- `swiftui` — 历史 SwiftUI 实验(归档)
+- `python-legacy` — 已废弃的 Python 实现(归档)
 
-**权限要求**：需要完全磁盘访问权限（系统设置 → 隐私与安全性 → 完全磁盘访问权限 → 添加终端或 Python）
+## 约束
 
-## 核心功能
-
-### EPUB CFI 解析
-
-`ZANNOTATIONLOCATION` 字段存储 EPUB CFI（Canonical Fragment Identifier），不是章节标题。
-
-**解析函数**：
-- `parse_cfi_chapter(cfi)`: 从 CFI 提取章节信息
-- `format_chapter_display(chapter, index)`: 格式化显示
-
-**示例**：
-- `epubcfi(...[Section0001.xhtml]...)` → "第1章"
-- `epubcfi(...[id20]...)` → "位置 20"
-- `epubcfi(...[15-面向并发的内存模型]...)` → "面向并发的内存模型"
-
-**注意**：
-- CLI 导出和 GUI 预览都使用这些函数
-- 不是所有 EPUB 都有完整章节元数据，部分只显示 ID 标识
-
-### 笔记分类
-
-`ANNOTATION_TYPE_MAP`:
-- 0: 书签
-- 1: 笔记
-- 2: 高亮
-- 3: 标注
-
-### Apple 时间戳转换
-
-Apple CoreData 时间戳从 2001-01-01 UTC 开始：
-```python
-APPLE_EPOCH = datetime(2001, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
-```
-
-## 项目约束
-
-- **不使用虚拟环境**：依赖通过 `--break-system-packages` 安装到系统 Python
-- **GUI 线程安全**：所有 DB 操作在 worker 线程，通过 `window.write_event_value()` 回调主线程
-- **main 分支仅 Python**：Swift/Xcode 代码在 `swiftui` 分支，不要合并到 main
-- **导出文件忽略**：`*.md` 在 `.gitignore` 中（除了 README.md 和 .gitignore 本身）
+- **不使用虚拟环境**(Python 时代已废止)
+- **CLI 二进制静态链接 SQLite**(`rusqlite` bundled feature)
+- **发布二进制不要 commit 单独的平台副本到仓库根** — 走 GitHub Release
+- **`*.md` 在 .gitignore**(除 README.md / CLAUDE.md / AGENTS.md / .gitignore / docs/**)
 
 ## 常见问题
 
-**权限错误**：确保终端/Python 有完全磁盘访问权限
+- **Full Disk Access 缺失** → 数据库读不到,提示权限错误
+- **GUI 启动失败** → 检查 Full Disk Access(Tauri 进程也需要)
+- **章节显示为原始 CFI** → 确认用 `cfi.rs` 里的解析函数,不要直接读 `ZANNOTATIONLOCATION`
 
-**Python 版本错误**：必须使用 Python 3.14，因为依赖 `python-tk@3.14`
+## Agent skills
 
-**GUI 无法启动**：检查 Tkinter 是否安装（`brew install python-tk@3.14`）
+### Issue tracker
 
-**章节显示为原始 CFI**：确保使用 `parse_cfi_chapter()` 和 `format_chapter_display()` 函数
+GitHub Issues via `gh` CLI (PRs are not a triage surface). See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Five canonical English strings (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: repo-root `CONTEXT.md` + `docs/adr/`. See `docs/agents/domain.md`.
