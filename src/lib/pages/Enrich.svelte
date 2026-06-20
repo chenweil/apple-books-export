@@ -4,6 +4,7 @@
   import ProgressBar from "../components/ProgressBar.svelte";
   import Toast from "../components/Toast.svelte";
   import SearchableSelect from "../components/SearchableSelect.svelte";
+  import { selectedBookIndex } from "../stores.svelte";
 
   interface Book { asset_id: string; title: string; author: string; note_count: number; }
 
@@ -20,6 +21,14 @@
   let result = $state<{ success: number; failed: number } | null>(null);
 
   $effect(() => { invoke<Book[]>("get_books").then(b => books = b); });
+
+  // 从全局状态同步选中书籍
+  $effect(() => {
+    const idx = selectedBookIndex.value;
+    if (idx !== null && idx > 0 && idx <= books.length) {
+      selectedIndex = idx;
+    }
+  });
 
   $effect(() => {
     const unlistenProgress = listen("progress", (e: any) => {

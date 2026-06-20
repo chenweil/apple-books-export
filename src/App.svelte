@@ -10,6 +10,7 @@
   import Coach from "./lib/pages/Coach.svelte";
   import Card from "./lib/pages/Card.svelte";
   import Cache from "./lib/pages/Cache.svelte";
+  import { navigateTo, clearNavigation } from "./lib/stores.svelte";
 
   let currentPage = $state("books");
   let dbOk = $state(false);
@@ -22,6 +23,14 @@
   }
 
   $effect(() => { checkAccess(); });
+
+  // 监听导航状态变化
+  $effect(() => {
+    if (navigateTo.value) {
+      currentPage = navigateTo.value;
+      clearNavigation();
+    }
+  });
 </script>
 
 <main class="app">

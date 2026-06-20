@@ -2,6 +2,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import BookCard from "../components/BookCard.svelte";
   import LoadingSpinner from "../components/LoadingSpinner.svelte";
+  import { navigateToPageWithBook } from "../stores.svelte";
 
   interface Book {
     asset_id: string;
@@ -10,11 +11,16 @@
     note_count: number;
   }
 
+  type SortField = 'default' | 'title' | 'note_count';
+  type SortOrder = 'asc' | 'desc';
+
   let books = $state<Book[]>([]);
   let loading = $state(true);
   let search = $state("");
   let page = $state(1);
   let prevSearch = $state("");
+  let sortField = $state<SortField>('default');
+  let sortOrder = $state<SortOrder>('desc');
   const PAGE_SIZE = 20;
 
   let filtered = $derived(
@@ -23,15 +29,38 @@
       b.author.toLowerCase().includes(search.toLowerCase())
     )
   );
-  let totalPages = $derived(Math.max(1, Math.ceil(filtered.length / PAGE_SIZE)));
-  let paged = $derived(filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE));
 
-  // 搜索时自动回到第一页
+  // 排序后的列表
+  let sorted = $derived(() => {
+    if (sortField === 'default') {
+      return filtered;
+    }
+    const sorted = [...filtered];
+    sorted.sort((a, b) => {
+      let cmp = 0;
+      if (sortField === 'title') {
+        cmp = a.title.localeCompare(b.title, 'zh-CN');
+      } else if (sortField === 'note_count') {
+        cmp = a.note_count - b.note_count;
+      }
+      return sortOrder === 'asc' ? cmp : -cmp;
+    });
+    return sorted;
+  });
+
+  let totalPages = $derived(Math.max(1, Math.ceil(sorted().length / PAGE_SIZE)));
+  let paged = $derived(sorted().slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE));
+
+  // 搜索或排序变化时自动回到第一页
   $effect(() => {
     if (search !== prevSearch) {
       prevSearch = search;
       page = 1;
     }
+  });
+
+  $effect(() => {
+    page = 1;
   });
 
   async function loadBooks() {
@@ -42,6 +71,21 @@
       console.error(e);
     }
     loading = false;
+  }
+
+  function handleAction(action: string, bookIndex: number) {
+    // bookIndex 是 0-based，转换为 1-based
+    navigateToPageWithBook(action, bookIndex + 1);
+  }
+
+  function toggleSort(field: SortField) {
+    if (sortField === field) {
+      // 切换排序方向
+      sortOrder = sortOrder === 'asc' ? 'desc' : 'asc';
+    } else {
+      sortField = field;
+      sortOrder = 'desc';
+    }
   }
 
   $effect(() => { loadBooks(); });
@@ -60,6 +104,31 @@
     </div>
   </div>
 
+  <div class="sort-bar">
+    <span class="sort-label">排序：</span>
+    <button
+      class="sort-btn"
+      class:active={sortField === 'default'}
+      onclick={() => { sortField = 'default'; }}
+    >
+      默认
+    </button>
+    <button
+      class="sort-btn"
+      class:active={sortField === 'title'}
+      onclick={() => toggleSort('title')}
+    >
+      书名 {sortField === 'title' ? (sortOrder === 'asc' ? '↑' : '↓') : ''}
+    </button>
+    <button
+      class="sort-btn"
+      class:active={sortField === 'note_count'}
+      onclick={() => toggleSort('note_count')}
+    >
+      笔记数 {sortField === 'note_count' ? (sortOrder === 'asc' ? '↑' : '↓') : ''}
+    </button>
+  </div>
+
   {#if loading}
     <LoadingSpinner message="加载书籍列表..." />
   {:else if books.length === 0}
@@ -69,8 +138,8 @@
     </div>
   {:else}
     <div class="list">
-      {#each paged as book}
-        <BookCard {book} />
+      {#each paged as book, idx}
+        <BookCard {book} bookIndex={(page - 1) * PAGE_SIZE + idx} onAction={handleAction} />
       {/each}
     </div>
 
@@ -84,7 +153,7 @@
 
 <style>
   .page { padding: 24px; }
-  .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+  .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
   h2 { font-size: 20px; color: var(--text-primary); }
   .search-box { display: flex; gap: 8px; }
   input {
@@ -104,6 +173,35 @@
     color: var(--text-primary);
     cursor: pointer;
     font-size: 14px;
+  }
+  .sort-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 16px;
+    font-size: 13px;
+  }
+  .sort-label {
+    color: var(--text-secondary);
+  }
+  .sort-btn {
+    padding: 4px 12px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg-secondary);
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-size: 13px;
+    transition: all 0.15s;
+  }
+  .sort-btn:hover {
+    background: var(--bg-primary);
+    color: var(--text-primary);
+  }
+  .sort-btn.active {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: white;
   }
   .list { display: flex; flex-direction: column; gap: 8px; }
   .pagination {

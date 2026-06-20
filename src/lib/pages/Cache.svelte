@@ -2,6 +2,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import ConfirmDialog from "../components/ConfirmDialog.svelte";
   import SearchableSelect from "../components/SearchableSelect.svelte";
+  import { selectedBookIndex } from "../stores.svelte";
 
   interface Book { asset_id: string; title: string; author: string; note_count: number; }
   interface CacheEntry { key: string; highlight: string; explanation: string; tags: string[]; updated: string; }
@@ -21,6 +22,14 @@
 
   $effect(() => {
     invoke<Book[]>("get_books").then(b => { books = b; });
+  });
+
+  // 从全局状态同步选中书籍
+  $effect(() => {
+    const idx = selectedBookIndex.value;
+    if (idx !== null && idx > 0 && idx <= books.length) {
+      selectedIndex = idx;
+    }
   });
 
   $effect(() => {

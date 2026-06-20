@@ -2,6 +2,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import SearchableSelect from "../components/SearchableSelect.svelte";
   import Toast from "../components/Toast.svelte";
+  import { selectedBookIndex } from "../stores.svelte";
 
   interface Book {
     asset_id: string;
@@ -48,6 +49,14 @@
       .catch((e) => {
         toastMsg = `加载书籍失败: ${e}`;
       });
+  });
+
+  // 从全局状态同步选中书籍
+  $effect(() => {
+    const idx = selectedBookIndex.value;
+    if (idx !== null && idx > 0 && idx <= books.length) {
+      selectedIndex = idx;
+    }
   });
 
   $effect(() => {
