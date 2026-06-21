@@ -65,24 +65,6 @@ pub fn build_enrich_prompt_with_template(highlight: &str, context: Option<&str>,
         .replace("{note_section}", &note_section)
 }
 
-/// 构建批量处理的提示词
-pub fn build_batch_prompt(highlights: &[&str]) -> String {
-    let mut prompt = String::new();
-
-    prompt.push_str("你是一个阅读助手。请分析以下摘录，为每一条提供解释、标签和复习问题。\n\n");
-    prompt.push_str("请按照以下 JSON 数组格式返回结果：\n");
-    prompt.push_str("[\n");
-    prompt.push_str("  {\"explanation\": \"...\", \"tags\": [\"...\"], \"question\": \"...\"},\n");
-    prompt.push_str("  ...\n");
-    prompt.push_str("]\n\n");
-
-    for (i, h) in highlights.iter().enumerate() {
-        prompt.push_str(&format!("摘录 {}: {}\n", i + 1, h));
-    }
-
-    prompt
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -120,7 +120,9 @@ impl DB {
 
 /// 查找注释数据库
 fn find_annotation_db() -> Result<PathBuf> {
-    let home = std::env::var("HOME").unwrap_or_default();
+    let home = crate::utils::home_dir()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default();
     let base_path = format!(
         "{}/Library/Containers/com.apple.iBooksX/Data/Documents/AEAnnotation",
         home
@@ -152,7 +154,9 @@ fn find_annotation_db() -> Result<PathBuf> {
 
 /// 查找书籍库数据库
 fn find_library_db() -> Result<PathBuf> {
-    let home = std::env::var("HOME").unwrap_or_default();
+    let home = crate::utils::home_dir()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default();
     let base_path = format!(
         "{}/Library/Containers/com.apple.iBooksX/Data/Documents/BKLibrary",
         home

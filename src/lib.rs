@@ -23,4 +23,4 @@ pub use exporter::{export_book, ExportFormat};
 pub use models::*;
 pub use prompt::{build_enrich_prompt, build_enrich_prompt_with_template};
 pub use provider::{parse_llm_result, LLMProvider};
-pub use utils::sanitize_filename;
+pub use utils::{home_dir, sanitize_filename};

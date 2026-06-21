@@ -10,7 +10,7 @@ pub struct AppState {
 
 impl AppState {
     pub fn new() -> Self {
-        let cache_path = home::home_dir()
+        let cache_path = apple_books_exporter::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
             .join("Library/Application Support/books-exporter/cache.json");
         std::fs::create_dir_all(cache_path.parent().unwrap()).ok();

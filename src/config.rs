@@ -4,7 +4,7 @@ use crate::models::Config;
 use anyhow::{Context, Result};
 use serde_json;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// 默认配置文件路径
 const DEFAULT_CONFIG_PATH: &str = "knowledge_config.json";
@@ -44,45 +44,6 @@ pub fn save_config(config: &Config, path: Option<&Path>) -> Result<()> {
         .with_context(|| format!("无法写入配置文件: {:?}", config_path))?;
 
     Ok(())
-}
-
-/// 获取配置目录（Apple Books 数据目录）
-pub fn get_apple_books_dir() -> PathBuf {
-    home::home_dir()
-        .map(|h| h.join("Library/Containers/com.apple.iBooksX/Data/Documents"))
-        .unwrap_or_else(|| PathBuf::from("~/Library/Containers/com.apple.iBooksX/Data/Documents"))
-}
-
-/// 获取 BKLibrary 数据库路径
-pub fn get_bklibrary_db_path() -> Option<PathBuf> {
-    let base_dir = get_apple_books_dir().join("BKLibrary");
-
-    if !base_dir.exists() {
-        return None;
-    }
-
-    // 查找最新的 BKLibrary-*.sqlite 文件
-    let mut latest: Option<(PathBuf, u64)> = None;
-
-    if let Ok(entries) = fs::read_dir(&base_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().map_or(false, |e| e == "sqlite") {
-                if let Ok(metadata) = fs::metadata(&path) {
-                    if let Some(modified) = metadata.modified().ok() {
-                        let timestamp = modified.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
-                        match &latest {
-                            None => latest = Some((path, timestamp)),
-                            Some((_, ts)) if timestamp > *ts => latest = Some((path, timestamp)),
-                            _ => {}
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    latest.map(|(p, _)| p)
 }
 
 #[cfg(test)]

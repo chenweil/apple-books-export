@@ -13,9 +13,6 @@
   // 卡片生成配置
   let enrichPrompt = $state("");
   let enrichApi = $state("");
-  let imageApi = $state("");
-  let maxHighlightLen = $state(500);
-  let maxExplanationLen = $state(1000);
 
   // 状态
   let saving = $state(false);
@@ -56,9 +53,6 @@
       outputDir = c.card_output || "";
       enrichPrompt = c.card_gen?.enrich_prompt || defaultPrompt;
       enrichApi = c.card_gen?.enrich_api || "";
-      imageApi = c.card_gen?.image_api || "";
-      maxHighlightLen = c.card_gen?.max_highlight_len || 500;
-      maxExplanationLen = c.card_gen?.max_explanation_len || 1000;
     });
   });
 
@@ -84,16 +78,10 @@
           card_gen: {
             enrich_prompt: enrichPrompt,
             enrich_api: enrichApi,
-            image_api: imageApi,
-            max_highlight_len: maxHighlightLen,
-            max_explanation_len: maxExplanationLen,
           },
-          epub_mappings: {},
           output_format: outputFormat,
           card_style: "dark",
           card_output: outputDir,
-          context_chars: 2000,
-          filename_max_length: 50,
         }
       });
       saved = true;
@@ -183,23 +171,6 @@
             <option value={api.name}>{api.name} ({api.model || '未设置'})</option>
           {/each}
         </select>
-      </label>
-      <label>
-        图片生成 API
-        <select bind:value={imageApi}>
-          <option value="">使用第一个 API</option>
-          {#each apiConfigs as api}
-            <option value={api.name}>{api.name} ({api.model || '未设置'})</option>
-          {/each}
-        </select>
-      </label>
-      <label>
-        高亮最大长度
-        <input type="number" bind:value={maxHighlightLen} min="100" max="2000" />
-      </label>
-      <label>
-        解释最大长度
-        <input type="number" bind:value={maxExplanationLen} min="100" max="5000" />
       </label>
       <label>
         <div class="label-header">

@@ -1,7 +1,6 @@
 //! Apple Books Exporter - Data Models
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 /// 书籍信息
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -81,9 +80,6 @@ impl Default for ApiConfig {
 pub struct CardGenConfig {
     pub enrich_prompt: String,      // AI 增强的 prompt 模板
     pub enrich_api: String,         // AI 增强使用的 API 配置名（空则用默认）
-    pub image_api: String,          // 图片生成使用的 API 配置名
-    pub max_highlight_len: usize,   // 高亮最大字符数
-    pub max_explanation_len: usize, // 解释最大字符数
 }
 
 impl Default for CardGenConfig {
@@ -91,9 +87,6 @@ impl Default for CardGenConfig {
         Self {
             enrich_prompt: "你是一个阅读助手，帮助读者理解书籍内容。请对以下摘录进行分析，提供：\n1. 解释：用通俗易懂的语言解释这段内容的含义\n2. 标签：3-5 个关键词标签，用逗号分隔\n3. 复习问题：一个能帮助读者回顾和理解的问题\n\n请按照以下 JSON 格式返回结果：\n{\n  \"explanation\": \"解释内容\",\n  \"tags\": [\"标签1\", \"标签2\", \"标签3\"],\n  \"question\": \"复习问题\"\n}\n\n摘录内容：\n> {highlight}".to_string(),
             enrich_api: String::new(),
-            image_api: String::new(),
-            max_highlight_len: 500,
-            max_explanation_len: 1000,
         }
     }
 }
@@ -112,25 +105,15 @@ impl Default for LLMConfig {
     }
 }
 
-/// EPUB 映射
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EpubMapping {
-    pub epub: String,
-    pub output: String,
-}
-
 /// 主配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub llm: LLMConfig,
     pub api_configs: Vec<ApiConfig>,  // 多个 API 配置
     pub card_gen: CardGenConfig,
-    pub epub_mappings: HashMap<String, EpubMapping>,
     pub output_format: String,
     pub card_style: String,
     pub card_output: String,
-    pub context_chars: u32,
-    pub filename_max_length: u32,
 }
 
 impl Default for Config {
@@ -139,12 +122,9 @@ impl Default for Config {
             llm: LLMConfig::default(),
             api_configs: vec![ApiConfig::default()],
             card_gen: CardGenConfig::default(),
-            epub_mappings: HashMap::new(),
             output_format: "obsidian".to_string(),
             card_style: "dark".to_string(),
             card_output: "~/cards/".to_string(),
-            context_chars: 200,
-            filename_max_length: 20,
         }
     }
 }

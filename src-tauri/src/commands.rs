@@ -57,18 +57,18 @@ pub fn get_book_chapters(
 }
 
 fn get_config_path() -> PathBuf {
-    home::home_dir()
+    apple_books_exporter::home_dir()
         .map(|h| h.join("Library/Application Support/books-exporter/config.json"))
         .unwrap_or_else(|| PathBuf::from("config.json"))
 }
 
 fn expand_user_path(path: &str) -> PathBuf {
     if path == "~" {
-        return home::home_dir().unwrap_or_else(|| PathBuf::from(path));
+        return apple_books_exporter::home_dir().unwrap_or_else(|| PathBuf::from(path));
     }
 
     if let Some(rest) = path.strip_prefix("~/") {
-        if let Some(home) = home::home_dir() {
+        if let Some(home) = apple_books_exporter::home_dir() {
             return home.join(rest);
         }
     }
