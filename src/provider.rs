@@ -85,11 +85,38 @@ impl LLMProvider {
             temperature: 0.3,
         };
 
+        let url = format!("{}/chat/completions", self.base_url);
         let mut last_error = None;
         let delays = self.retry_delays.clone();
 
         for attempt in 0..self.max_retries {
-            match self.send_request(&payload).await {
+            let result: Result<String> = async {
+                let response = self
+                    .client
+                    .post(&url)
+                    .header("Authorization", format!("Bearer {}", self.api_key))
+                    .header("Content-Type", "application/json")
+                    .json(&payload)
+                    .send()
+                    .await
+                    .context("发送 LLM 请求失败")?;
+
+                if !response.status().is_success() {
+                    let status = response.status();
+                    let error_body = response.text().await.unwrap_or_default();
+                    anyhow::bail!("LLM API 返回错误 {}: {}", status, error_body);
+                }
+
+                let resp: ChatCompletionResponse = response.json().await.context("解析 LLM 响应失败")?;
+                resp.choices
+                    .into_iter()
+                    .next()
+                    .map(|c| c.message.content)
+                    .ok_or_else(|| anyhow::anyhow!("LLM 响应中没有内容"))
+            }
+            .await;
+
+            match result {
                 Ok(content) => return Ok(content),
                 Err(e) => {
                     last_error = Some(e);
@@ -103,52 +130,6 @@ impl LLMProvider {
         }
 
         Err(last_error.unwrap_or_else(|| anyhow::anyhow!("未知错误")))
-    }
-
-    /// 发送批量提示（顺序调用）
-    pub async fn batch_complete(&self, prompts: &[&str], system: Option<&str>) -> Result<Vec<String>> {
-        let mut results = Vec::with_capacity(prompts.len());
-        for prompt in prompts {
-            let result = self.complete(prompt, system).await?;
-            results.push(result);
-        }
-        Ok(results)
-    }
-
-    /// 发送 API 请求
-    async fn send_request(&self, payload: &ChatCompletionRequest) -> Result<String> {
-        let url = format!("{}/chat/completions", self.base_url);
-
-        let response = self
-            .client
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .header("Content-Type", "application/json")
-            .json(payload)
-            .send()
-            .await
-            .context("发送 LLM 请求失败")?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let error_body = response.text().await.unwrap_or_default();
-            return Err(anyhow::anyhow!(
-                "LLM API 返回错误 {}: {}",
-                status,
-                error_body
-            ));
-        }
-
-        let resp: ChatCompletionResponse = response
-            .json()
-            .await
-            .context("解析 LLM 响应失败")?;
-
-        resp.choices
-            .into_iter()
-            .next()
-            .map(|c| c.message.content)
-            .ok_or_else(|| anyhow::anyhow!("LLM 响应中没有内容"))
     }
 }
 

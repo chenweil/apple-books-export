@@ -20,9 +20,7 @@ pub fn check_db_access() -> bool {
 
 #[tauri::command]
 pub fn get_books(state: tauri::State<AppState>) -> Result<Vec<Book>, String> {
-    let db = state.get_db()?;
-    let db = db.as_ref().unwrap();
-    db.list_books().map_err(|e| e.to_string())
+    state.get_db()?.list_books().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -30,9 +28,10 @@ pub fn get_annotations(
     asset_id: String,
     state: tauri::State<AppState>,
 ) -> Result<Vec<Annotation>, String> {
-    let db = state.get_db()?;
-    let db = db.as_ref().unwrap();
-    db.get_annotations(&asset_id).map_err(|e| e.to_string())
+    state
+        .get_db()?
+        .get_annotations(&asset_id)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -41,7 +40,6 @@ pub fn get_book_chapters(
     state: tauri::State<AppState>,
 ) -> Result<Vec<apple_books_exporter::chapter::ChapterInfo>, String> {
     let db = state.get_db()?;
-    let db = db.as_ref().unwrap();
     let books = db.list_books().map_err(|e| e.to_string())?;
 
     if book_index == 0 || book_index > books.len() {
@@ -155,11 +153,7 @@ pub async fn export_book_cmd(
     window: tauri::WebviewWindow,
 ) -> Result<String, String> {
     let db = state.get_db()?;
-    let books = db
-        .as_ref()
-        .unwrap()
-        .list_books()
-        .map_err(|e| e.to_string())?;
+    let books = db.list_books().map_err(|e| e.to_string())?;
 
     if book_index == 0 || book_index > books.len() {
         return Err("无效的书籍序号".to_string());
@@ -167,8 +161,6 @@ pub async fn export_book_cmd(
 
     let book = &books[book_index - 1];
     let annotations = db
-        .as_ref()
-        .unwrap()
         .get_annotations(&book.asset_id)
         .map_err(|e| e.to_string())?;
 
@@ -259,18 +251,17 @@ pub async fn enrich_book_cmd(
         config.llm.base_url, config.llm.model
     );
 
-    // Collect DB data into owned values so the MutexGuard is dropped before any .await
+    // 限定 scope 让 MutexGuard 在 .await 之前 drop
     let (book, annotations) = {
         let db = state.get_db()?;
-        let db_ref = db.as_ref().unwrap();
-        let books = db_ref.list_books().map_err(|e| e.to_string())?;
+        let books = db.list_books().map_err(|e| e.to_string())?;
 
         if book_index == 0 || book_index > books.len() {
             return Err("无效的书籍序号".to_string());
         }
 
         let book = books[book_index - 1].clone();
-        let annotations = db_ref
+        let annotations = db
             .get_annotations(&book.asset_id)
             .map_err(|e| e.to_string())?;
         (book, annotations)
@@ -417,15 +408,14 @@ pub async fn chapter_coach_cmd(
 
     let (book, annotations) = {
         let db = state.get_db()?;
-        let db_ref = db.as_ref().unwrap();
-        let books = db_ref.list_books().map_err(|e| e.to_string())?;
+        let books = db.list_books().map_err(|e| e.to_string())?;
 
         if book_index == 0 || book_index > books.len() {
             return Err("无效的书籍序号".to_string());
         }
 
         let book = books[book_index - 1].clone();
-        let annotations = db_ref
+        let annotations = db
             .get_annotations(&book.asset_id)
             .map_err(|e| e.to_string())?;
         (book, annotations)
@@ -514,11 +504,7 @@ pub async fn generate_cards_cmd(
     window: tauri::WebviewWindow,
 ) -> Result<serde_json::Value, String> {
     let db = state.get_db()?;
-    let books = db
-        .as_ref()
-        .unwrap()
-        .list_books()
-        .map_err(|e| e.to_string())?;
+    let books = db.list_books().map_err(|e| e.to_string())?;
 
     if book_index == 0 || book_index > books.len() {
         return Err("无效的书籍序号".to_string());
@@ -526,8 +512,6 @@ pub async fn generate_cards_cmd(
 
     let book = &books[book_index - 1];
     let annotations = db
-        .as_ref()
-        .unwrap()
         .get_annotations(&book.asset_id)
         .map_err(|e| e.to_string())?;
 

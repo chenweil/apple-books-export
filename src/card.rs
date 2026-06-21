@@ -4,7 +4,6 @@
 use image::{ImageBuffer, Rgba};
 use rusttype::{Font, Point, Scale};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 /// 卡片样式
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -44,8 +43,7 @@ impl CardStyle {
     pub fn accent_color(&self) -> Rgba<u8> {
         match self {
             CardStyle::Dark => Rgba([139, 233, 253, 255]),
-            CardStyle::Light => Rgba([100, 150, 200, 255]),
-            CardStyle::Minimal => Rgba([100, 150, 200, 255]),
+            CardStyle::Light | CardStyle::Minimal => Rgba([100, 150, 200, 255]),
         }
     }
 
@@ -59,56 +57,9 @@ impl CardStyle {
     }
 }
 
-/// 字体配置
-pub struct FontConfig {
-    pub font_path: String,
-    pub size: f32,
-}
-
-impl Default for FontConfig {
-    fn default() -> Self {
-        let font_path = if cfg!(target_os = "macos") {
-            "/System/Library/Fonts/PingFang.ttc".to_string()
-        } else if cfg!(target_os = "linux") {
-            "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc".to_string()
-        } else {
-            "NotoSansSC-R.ttf".to_string()
-        };
-        Self {
-            font_path,
-            size: 28.0,
-        }
-    }
-}
-
-/// 卡片配置
-pub struct CardConfig {
-    pub style: CardStyle,
-    pub width: u32,
-    pub height: u32,
-    pub padding: u32,
-    pub font_size: f32,
-    pub line_height: f32,
-    pub font_config: FontConfig,
-}
-
-impl Default for CardConfig {
-    fn default() -> Self {
-        Self {
-            style: CardStyle::Dark,
-            width: 800,
-            height: 600,
-            padding: 60,
-            font_size: 28.0,
-            line_height: 45.0,
-            font_config: FontConfig::default(),
-        }
-    }
-}
-
 /// 字体管理器
 pub struct FontManager {
-    font: Arc<Font<'static>>,
+    font: Font<'static>,
     scale: Scale,
 }
 
@@ -123,7 +74,7 @@ impl FontManager {
                 PathBuf::from("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
             ];
 
-            if let Some(home) = home::home_dir() {
+            if let Some(home) = crate::utils::home_dir() {
                 paths.push(home.join("Library/Fonts/NotoSansSC-R.ttf"));
             }
 
@@ -139,20 +90,11 @@ impl FontManager {
             Font::try_from_vec(font_data).ok_or_else(|| anyhow::anyhow!("无法加载字体文件"))?;
         let scale = Scale::uniform(size);
 
-        Ok(Self {
-            font: Arc::new(font),
-            scale,
-        })
-    }
-
-    /// 计算文本高度（多行）
-    pub fn text_height(&self, text: &str, max_width: f32) -> f32 {
-        let lines = self.wrap_text(text, max_width);
-        lines.len() as f32 * self.scale.y
+        Ok(Self { font, scale })
     }
 
     /// 文本换行
-    pub fn wrap_text(&self, text: &str, max_width: f32) -> Vec<String> {
+    fn wrap_text(&self, text: &str, max_width: f32) -> Vec<String> {
         let mut lines = Vec::new();
         let mut current = String::new();
         let mut current_width = 0.0;
@@ -184,22 +126,18 @@ impl FontManager {
     }
 
     /// 绘制文本到图片
-    pub fn draw_text(
+    fn draw_text(
         &self,
         img: &mut ImageBuffer<Rgba<u8>, Vec<u8>>,
         text: &str,
         x: f32,
-        y: f32,
+        mut y: f32,
         color: Rgba<u8>,
-    ) -> f32 {
-        let mut current_y = y;
-
+    ) {
         for line in self.wrap_text(text, img.width() as f32) {
-            self.draw_line(img, &line, x, current_y, color);
-            current_y += self.scale.y;
+            self.draw_line(img, &line, x, y, color);
+            y += self.scale.y;
         }
-
-        current_y - y
     }
 
     /// 绘制单行文本
@@ -254,30 +192,37 @@ pub fn generate_card(
     style: CardStyle,
     output_path: &Path,
 ) -> anyhow::Result<()> {
-    let config = CardConfig::default();
+    let width: u32 = 800;
+    let padding: u32 = 60;
+    let font_size: f32 = 28.0;
+    let font_path = if cfg!(target_os = "macos") {
+        "/System/Library/Fonts/PingFang.ttc"
+    } else if cfg!(target_os = "linux") {
+        "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc"
+    } else {
+        "NotoSansSC-R.ttf"
+    };
 
-    // 加载字体
-    let font_manager = FontManager::new(&config.font_config.font_path, config.font_size)?;
-
-    let width = config.width;
-    let text_width = (width - config.padding * 2) as f32;
+    let font_manager = FontManager::new(font_path, font_size)?;
+    let text_width = (width - padding * 2) as f32;
 
     // 截断高亮文本（最多 8 行）
     let highlight_truncated = truncate_to_lines(highlight, &font_manager, text_width, 8);
-    let highlight_height = font_manager.text_height(&highlight_truncated, text_width);
+    let highlight_lines = font_manager.wrap_text(&highlight_truncated, text_width).len() as f32;
+    let highlight_height = highlight_lines * font_manager.scale.y;
 
     // 截断解释文本（最多 10 行）
     let exp_truncated =
         explanation.map(|exp| truncate_to_lines(exp, &font_manager, text_width, 10));
     let exp_height = exp_truncated
         .as_ref()
-        .map(|e| font_manager.text_height(e, text_width))
+        .map(|e| font_manager.wrap_text(e, text_width).len() as f32 * font_manager.scale.y)
         .unwrap_or(0.0);
 
     // 动态计算卡片高度
     let min_height = 400;
     let content_height =
-        (config.padding as f32 * 2.0) + 40.0 + highlight_height + 30.0 + exp_height + 60.0;
+        (padding as f32 * 2.0) + 40.0 + highlight_height + 30.0 + exp_height + 60.0;
     let height = (content_height as u32).max(min_height);
 
     let mut img = ImageBuffer::new(width, height);
@@ -292,8 +237,8 @@ pub fn generate_card(
     draw_accent_line(&mut img, style.accent_color());
 
     // 计算文本区域
-    let text_x = config.padding as f32;
-    let text_y = (config.padding + 40) as f32;
+    let text_x = padding as f32;
+    let text_y = (padding + 40) as f32;
 
     // 绘制高亮内容（主要文字）
     font_manager.draw_text(
@@ -311,7 +256,7 @@ pub fn generate_card(
         // 绘制分隔线
         draw_horizontal_line(
             &mut img,
-            config.padding,
+            padding,
             exp_y as u32 - 10,
             text_width as u32,
             style.border_color(),
@@ -321,7 +266,7 @@ pub fn generate_card(
     }
 
     // 绘制底部信息
-    let footer_y = (height - config.padding as u32 - 30) as f32;
+    let footer_y = (height - padding as u32 - 30) as f32;
     draw_footer(&mut img, book_title, footer_y, style, &font_manager);
 
     // 保存图片
@@ -394,9 +339,8 @@ fn draw_footer(
     );
 
     // 书名
-    let text_color = style.text_color();
     let footer_text = format!("[ {} ]", book_title);
-    font_manager.draw_text(img, &footer_text, 60.0, y, text_color);
+    font_manager.draw_text(img, &footer_text, 60.0, y, style.text_color());
 }
 
 /// 生成卡片文件名

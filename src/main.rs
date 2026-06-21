@@ -127,8 +127,8 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::List => cmd_list(&cli.config),
-        Commands::Export { index, output, format } => cmd_export(&cli.config, index, output, &format),
+        Commands::List => cmd_list(),
+        Commands::Export { index, output, format } => cmd_export(index, output, &format),
         Commands::Enrich { book, index: single_index, all, force, output, format } => {
             cmd_enrich(&cli.config, book, single_index, all, force, output, &format).await
         }
@@ -142,7 +142,7 @@ async fn main() -> anyhow::Result<()> {
     }
 }
 
-fn cmd_list(_config_path: &PathBuf) -> anyhow::Result<()> {
+fn cmd_list() -> anyhow::Result<()> {
     println!("Apple Books Exporter v0.1.0");
     println!("正在加载书籍列表...\n");
 
@@ -170,7 +170,7 @@ fn cmd_list(_config_path: &PathBuf) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn cmd_export(_config_path: &PathBuf, index: usize, output: Option<PathBuf>, format: &str) -> anyhow::Result<()> {
+fn cmd_export(index: usize, output: Option<PathBuf>, format: &str) -> anyhow::Result<()> {
     println!("导出命令：书籍 #{}", index);
 
     let db = DB::open_apple_books()?;

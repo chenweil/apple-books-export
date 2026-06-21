@@ -1,6 +1,22 @@
 //! Apple Books Exporter - EPUB CFI Parser
 
+use std::sync::LazyLock;
 use regex::Regex;
+
+/// 中文字符（CJK Unified Ideographs）
+fn is_cjk(s: &str) -> bool {
+    s.chars().any(|c| matches!(c, '\u{4e00}'..='\u{9fff}'))
+}
+
+static RE_BRACKET: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\[([^\]]+)\]").unwrap());
+static RE_HEX_LONG: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[0-9a-f]{8,}").unwrap());
+static RE_ID_NUM: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^id\d{3,}$").unwrap());
+static RE_CHAPTER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)(chapter|ch|section)\d+").unwrap());
+static RE_WORD: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[a-zA-Z][a-zA-Z0-9_-]*$").unwrap());
+static RE_HTML_EXT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)\.(xhtml|html)$").unwrap());
+static RE_SECTION: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)Section(\d+)").unwrap());
+static RE_CHAPTER_NUM: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)(ch|chapter)(\d+)").unwrap());
+static RE_ID_INDEX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^id(\d+)$").unwrap());
 
 /// 从 EPUB CFI 字符串中提取 manifest item ID
 pub fn extract_item_id(cfi: &str) -> Option<String> {
@@ -8,11 +24,22 @@ pub fn extract_item_id(cfi: &str) -> Option<String> {
         return None;
     }
 
-    let re = Regex::new(r"\[([^\]]+)\]").ok()?;
-    let captures = re.captures(cfi)?;
+    let captures = RE_BRACKET.captures(cfi)?;
     let item_id = captures.get(1)?.as_str();
 
     Some(item_id.to_string())
+}
+
+fn is_meaningless_id(s: &str) -> bool {
+    (s.len() > 20 && RE_HEX_LONG.is_match(s)) || RE_ID_NUM.is_match(s)
+}
+
+fn is_valid_chapter(s: &str) -> bool {
+    if s.ends_with('-') || s.ends_with('_') {
+        return false;
+    }
+
+    is_cjk(s) || RE_CHAPTER.is_match(s) || (s.len() > 3 && RE_WORD.is_match(s))
 }
 
 /// 从 EPUB CFI 字符串中提取章节标题
@@ -21,8 +48,7 @@ pub fn extract_chapter_title(cfi: &str) -> Option<String> {
         return None;
     }
 
-    let re = Regex::new(r"\[([^\]]+)\]").ok()?;
-    let matches: Vec<&str> = re
+    let matches: Vec<&str> = RE_BRACKET
         .captures_iter(cfi)
         .filter_map(|c| c.get(1))
         .map(|m| m.as_str())
@@ -32,117 +58,50 @@ pub fn extract_chapter_title(cfi: &str) -> Option<String> {
         return None;
     }
 
-    /// 判断是否为无意义的 ID（UUID 或 id 后跟大量数字）
-    fn is_meaningless_id(s: &str) -> bool {
-        if s.len() > 20 {
-            if let Ok(re) = Regex::new(r"[0-9a-f]{8,}") {
-                if re.is_match(s) {
-                    return true;
-                }
-            }
-        }
-        if let Ok(re) = Regex::new(r"^id\d{3,}$") {
-            if re.is_match(s) {
-                return true;
-            }
-        }
-        false
-    }
-
-    /// 判断是否为有效的章节标识
-    fn is_valid_chapter(s: &str) -> bool {
-        if s.ends_with('-') || s.ends_with('_') {
-            return false;
-        }
-
-        // 包含中文字符
-        if let Ok(re) = Regex::new(r"[一 - 鿿]") {
-            if re.is_match(s) {
-                return true;
-            }
-        }
-
-        // chapter/ch/section 后跟数字
-        if let Ok(re) = Regex::new(r"(?i)(chapter|ch|section)\d+") {
-            if re.is_match(s) {
-                return true;
-            }
-        }
-
-        // 字母开头的文件名
-        if s.len() > 3 {
-            if let Ok(re) = Regex::new(r"^[a-zA-Z][a-zA-Z0-9_-]*$") {
-                if re.is_match(s) {
-                    return true;
-                }
-            }
-        }
-
-        false
-    }
-
     let mut chapter_candidates: Vec<String> = Vec::new();
 
     // 从后往前遍历匹配（最后一个有意义的通常是章节）
     for &match_str in matches.iter().rev() {
         // 去除文件扩展名
-        let base = if let Ok(re) = Regex::new(r"(?i)\.(xhtml|html)$") {
-            if re.is_match(match_str) {
-                re.replace(match_str, "").to_string()
-            } else {
-                match_str.to_string()
-            }
+        let base = if RE_HTML_EXT.is_match(match_str) {
+            RE_HTML_EXT.replace(match_str, "").to_string()
         } else {
             match_str.to_string()
         };
 
         // 中文标题 - 提取分隔符后的部分
-        if let Ok(re) = Regex::new(r"[一 - 鿿]") {
-            if re.is_match(&base) {
-                if base.contains('-') || base.contains('_') {
-                    if let Ok(re) = Regex::new(r"[-_]") {
-                        if let Some(caps) = re.captures(&base) {
-                            if let Some(part) = caps.get(1) {
-                                let part_str = part.as_str().trim();
-                                if part_str.len() > 2 {
-                                    return Some(part_str.to_string());
-                                }
-                            }
-                        }
-                    }
+        if is_cjk(&base) {
+            if let Some(idx) = base.find(|c: char| c == '-' || c == '_') {
+                let part = base[idx + 1..].trim();
+                if part.len() > 2 {
+                    return Some(part.to_string());
                 }
-                return Some(base);
             }
+            return Some(base);
         }
 
         // 文件名带扩展名 - 尝试 section/chapter 模式
-        if let Ok(re) = Regex::new(r"(?i)\.(xhtml|html)$") {
-            if re.is_match(match_str) {
-                if let Ok(re) = Regex::new(r"(?i)Section(\d+)") {
-                    if let Some(caps) = re.captures(&base) {
-                        if let Some(num) = caps.get(1) {
-                            if let Ok(n) = num.as_str().parse::<u32>() {
-                                return Some(format!("第{}章", n));
-                            }
-                        }
+        if RE_HTML_EXT.is_match(match_str) {
+            if let Some(caps) = RE_SECTION.captures(&base) {
+                if let Some(num) = caps.get(1) {
+                    if let Ok(n) = num.as_str().parse::<u32>() {
+                        return Some(format!("第{}章", n));
                     }
                 }
-
-                if let Ok(re) = Regex::new(r"(?i)(ch|chapter)(\d+)") {
-                    if let Some(caps) = re.captures(&base) {
-                        if let Some(num) = caps.get(2) {
-                            if let Ok(n) = num.as_str().parse::<u32>() {
-                                return Some(format!("第{}章", n));
-                            }
-                        }
-                    }
-                }
-
-                if base.len() > 3 && !is_meaningless_id(&base) {
-                    chapter_candidates.push(base);
-                }
-                continue;
             }
+
+            if let Some(caps) = RE_CHAPTER_NUM.captures(&base) {
+                if let Some(num) = caps.get(2) {
+                    if let Ok(n) = num.as_str().parse::<u32>() {
+                        return Some(format!("第{}章", n));
+                    }
+                }
+            }
+
+            if base.len() > 3 && !is_meaningless_id(&base) {
+                chapter_candidates.push(base);
+            }
+            continue;
         }
 
         if base.len() > 3 && !is_meaningless_id(&base) && is_valid_chapter(&base) {
@@ -156,11 +115,9 @@ pub fn extract_chapter_title(cfi: &str) -> Option<String> {
 /// 格式化章节显示
 pub fn format_chapter_display(chapter: Option<&str>, index: usize) -> String {
     if let Some(chapter) = chapter {
-        if let Ok(re) = Regex::new(r"^id(\d+)$") {
-            if let Some(caps) = re.captures(chapter) {
-                if let Some(num) = caps.get(1) {
-                    return format!("位置 {}", num.as_str());
-                }
+        if let Some(caps) = RE_ID_INDEX.captures(chapter) {
+            if let Some(num) = caps.get(1) {
+                return format!("位置 {}", num.as_str());
             }
         }
         return chapter.to_string();
