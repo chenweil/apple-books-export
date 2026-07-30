@@ -23,6 +23,8 @@ output/
 
 # Claude Code settings (local)
 .claude/settings.local.json
+.claude/skills/
+.agents/
 
 # macOS
 .DS_Store
