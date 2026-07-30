@@ -32,7 +32,11 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     /// 列出所有有笔记的书籍
-    List,
+    List {
+        /// 以稳定的机器可读 JSON 输出
+        #[arg(long)]
+        json: bool,
+    },
 
     /// 导出笔记为 Markdown
     Export {
@@ -127,7 +131,7 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::List => cmd_list(),
+        Commands::List { json } => cmd_list(json),
         Commands::Export { index, output, format } => cmd_export(index, output, &format),
         Commands::Enrich { book, index: single_index, all, force, output, format } => {
             cmd_enrich(&cli.config, book, single_index, all, force, output, &format).await
@@ -142,12 +146,17 @@ async fn main() -> anyhow::Result<()> {
     }
 }
 
-fn cmd_list() -> anyhow::Result<()> {
-    println!("Apple Books Exporter v0.1.0");
-    println!("正在加载书籍列表...\n");
-
+fn cmd_list(json: bool) -> anyhow::Result<()> {
     let db = DB::open_apple_books()?;
     let books = db.list_books()?;
+
+    if json {
+        println!("{}", serialize_book_list(&books)?);
+        return Ok(());
+    }
+
+    println!("Apple Books Exporter v0.1.0");
+    println!("正在加载书籍列表...\n");
 
     if books.is_empty() {
         println!("未找到有笔记的书籍。");
@@ -168,6 +177,13 @@ fn cmd_list() -> anyhow::Result<()> {
     println!("\n共 {} 本书", books.len());
 
     Ok(())
+}
+
+fn serialize_book_list(books: &[apple_books_exporter::Book]) -> serde_json::Result<String> {
+    serde_json::to_string(&serde_json::json!({
+        "schema_version": 1,
+        "books": books,
+    }))
 }
 
 fn cmd_export(index: usize, output: Option<PathBuf>, format: &str) -> anyhow::Result<()> {
@@ -588,4 +604,30 @@ fn cmd_config(
     println!("  Card Style: {}", config.card_style);
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use apple_books_exporter::Book;
+
+    #[test]
+    fn serializes_versioned_book_list_json() {
+        let books = vec![Book {
+            asset_id: "book-1".to_string(),
+            title: "纳瓦尔宝典".to_string(),
+            author: "Eric Jorgenson".to_string(),
+            note_count: 218,
+        }];
+
+        let output = serialize_book_list(&books).expect("book list should serialize");
+        let value: serde_json::Value =
+            serde_json::from_str(&output).expect("book list should be valid JSON");
+
+        assert_eq!(value["schema_version"], 1);
+        assert_eq!(value["books"][0]["asset_id"], "book-1");
+        assert_eq!(value["books"][0]["title"], "纳瓦尔宝典");
+        assert_eq!(value["books"][0]["author"], "Eric Jorgenson");
+        assert_eq!(value["books"][0]["note_count"], 218);
+    }
 }

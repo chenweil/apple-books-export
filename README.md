@@ -10,6 +10,7 @@ Rust 版本 Apple Books 笔记导出工具，支持 CLI 和 GUI，可导出笔�
 - 🤖 AI 增强：为笔记添加解释、标签、复习问题
 - 🎴 图片卡片：生成精美的知识卡片
 - 🖥️ GUI 支持：Tauri 跨平台桌面应用
+- ⌨️ TUI 支持：OpenTUI 只读搜索和浏览书籍
 - 🤖 AI Agent Skill：支持 AI 助手直接调用
 
 ## 系统要求
@@ -62,12 +63,35 @@ npm run tauri dev
 npm run tauri build
 ```
 
+### 方式四：TUI（只读）
+
+当前 TUI 第一阶段支持搜索、浏览书籍和查看笔记数量，不执行导出、AI、卡片或配置写操作。
+
+```bash
+# 首次使用
+cargo build
+cd tui && bun install && cd ..
+
+# 启动
+npm run tui
+
+# 验证
+npm run test:tui
+npm run typecheck:tui
+```
+
+默认依次查找 `target/release/apple-books-exporter`、`target/debug/apple-books-exporter`
+和 `PATH`。也可通过 `APPLE_BOOKS_EXPORTER_BIN` 指定后端二进制。
+
 ## CLI 命令
 
 ### 列出书籍
 
 ```bash
 apple-books-exporter list
+
+# 稳定的机器可读协议（供 TUI 等客户端使用）
+apple-books-exporter list --json
 ```
 
 ### 导出笔记
@@ -228,6 +252,9 @@ apple-books-export/
 ├── src-tauri/                     # Tauri GUI
 │   ├── src/main.rs                # Tauri 入口
 │   └── tauri.conf.json            # Tauri 配置
+├── tui/                           # OpenTUI 只读终端界面
+│   ├── src/                       # Core API 应用、后端协议与测试
+│   └── package.json               # Bun 脚本与 OpenTUI 依赖
 ├── src/lib/                       # Svelte 前端
 │   ├── pages/                     # 页面组件
 │   └── components/                # UI 组件
