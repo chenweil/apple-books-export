@@ -7,11 +7,16 @@ final class BookDetailView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     private let statusLabel = NSTextField(labelWithString: "从左侧列表选择一本书")
     private let tableView = NSTableView()
     private let scrollView = NSScrollView()
+    private let exportButton = NSButton(title: "导出 Markdown", target: nil, action: nil)
+    private var isExporting = false
+
+    var onExportRequested: (() -> Void)?
 
     var annotations: [Annotation] = [] {
         didSet {
             tableView.reloadData()
             statusLabel.stringValue = annotations.isEmpty ? "没有找到笔记" : "共 \(annotations.count) 条笔记"
+            exportButton.isEnabled = !isExporting && !annotations.isEmpty
         }
     }
 
@@ -36,6 +41,16 @@ final class BookDetailView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         statusLabel.stringValue = "读取失败：\(error.localizedDescription)"
     }
 
+    func setExporting(_ exporting: Bool) {
+        isExporting = exporting
+        exportButton.title = exporting ? "正在导出…" : "导出 Markdown"
+        exportButton.isEnabled = !exporting && !annotations.isEmpty
+    }
+
+    @objc private func exportRequested() {
+        onExportRequested?()
+    }
+
     private func configureView() {
         titleLabel.font = .systemFont(ofSize: 20, weight: .bold)
         titleLabel.lineBreakMode = .byTruncatingTail
@@ -58,6 +73,11 @@ final class BookDetailView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         scrollView.hasVerticalScroller = true
         scrollView.borderType = .bezelBorder
 
+        exportButton.translatesAutoresizingMaskIntoConstraints = false
+        exportButton.target = self
+        exportButton.action = #selector(exportRequested)
+        exportButton.isEnabled = false
+
         let header = NSStackView(views: [titleLabel, authorLabel, statsLabel, statusLabel])
         header.orientation = .vertical
         header.alignment = .leading
@@ -66,6 +86,7 @@ final class BookDetailView: NSView, NSTableViewDataSource, NSTableViewDelegate {
 
         addSubview(header)
         addSubview(scrollView)
+        addSubview(exportButton)
 
         NSLayoutConstraint.activate([
             header.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
@@ -74,7 +95,9 @@ final class BookDetailView: NSView, NSTableViewDataSource, NSTableViewDelegate {
             scrollView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
             scrollView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
             scrollView.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 12),
-            scrollView.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -16)
+            scrollView.bottomAnchor.constraint(equalTo: exportButton.topAnchor, constant: -12),
+            exportButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
+            exportButton.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -16)
         ])
     }
 

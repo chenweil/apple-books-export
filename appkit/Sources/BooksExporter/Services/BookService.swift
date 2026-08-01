@@ -35,7 +35,8 @@ class BookService {
     
     func exportToMarkdown(book: Book, annotations: [Annotation], outputURL: URL) async throws {
         isBusy = true
-        
+        defer { isBusy = false }
+
         let fileURL = outputURL.appendingPathComponent("\(sanitizedTitle(book.title)).md")
         
         var content = "# \(book.title)\n\n"
@@ -69,7 +70,6 @@ class BookService {
         }
         
         try content.write(to: fileURL, atomically: true, encoding: .utf8)
-        isBusy = false
     }
     
     private func sanitizedTitle(_ title: String) -> String {
