@@ -37,39 +37,43 @@ class BookService {
         isBusy = true
         defer { isBusy = false }
 
+        let content = markdownContent(for: book, annotations: annotations)
         let fileURL = outputURL.appendingPathComponent("\(sanitizedTitle(book.title)).md")
-        
+        try content.write(to: fileURL, atomically: true, encoding: .utf8)
+    }
+
+    func markdownContent(for book: Book, annotations: [Annotation]) -> String {
         var content = "# \(book.title)\n\n"
         content += "**作者**: \(book.author)\n\n"
         content += "**笔记数量**: \(book.totalAnnotations)\n\n"
         content += "---\n\n"
-        
+
         let groupedAnnotations = Dictionary(grouping: annotations) { $0.type }
-        
+
         for type in AnnotationType.allCases.sorted(by: { $0.sortOrder < $1.sortOrder }) {
             guard let typeAnnotations = groupedAnnotations[type], !typeAnnotations.isEmpty else {
                 continue
             }
-            
+
             content += "## \(type.displayName)\n\n"
-            
+
             for (index, annotation) in typeAnnotations.enumerated() {
                 content += "### \(index + 1). \(annotation.displayLocation)\n"
                 content += "*\(formatDate(annotation.createdAt))*\n\n"
-                
+
                 if let text = annotation.contentText {
                     content += "> \(text)\n\n"
                 }
-                
+
                 if let note = annotation.noteText, !note.isEmpty {
                     content += "**笔记**: \(note)\n\n"
                 }
-                
+
                 content += "---\n\n"
             }
         }
-        
-        try content.write(to: fileURL, atomically: true, encoding: .utf8)
+
+        return content
     }
     
     private func sanitizedTitle(_ title: String) -> String {

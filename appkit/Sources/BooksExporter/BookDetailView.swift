@@ -8,15 +8,19 @@ final class BookDetailView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     private let tableView = NSTableView()
     private let scrollView = NSScrollView()
     private let exportButton = NSButton(title: "导出 Markdown", target: nil, action: nil)
+    private let copyButton = NSButton(title: "复制 Markdown", target: nil, action: nil)
     private var isExporting = false
+    private var isCopying = false
 
     var onExportRequested: (() -> Void)?
+    var onCopyRequested: (() -> Void)?
 
     var annotations: [Annotation] = [] {
         didSet {
             tableView.reloadData()
             statusLabel.stringValue = annotations.isEmpty ? "没有找到笔记" : "共 \(annotations.count) 条笔记"
             exportButton.isEnabled = !isExporting && !annotations.isEmpty
+            copyButton.isEnabled = !isCopying && !annotations.isEmpty
         }
     }
 
@@ -47,8 +51,18 @@ final class BookDetailView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         exportButton.isEnabled = !exporting && !annotations.isEmpty
     }
 
+    func setCopying(_ copying: Bool) {
+        isCopying = copying
+        copyButton.title = copying ? "正在复制…" : "复制 Markdown"
+        copyButton.isEnabled = !copying && !annotations.isEmpty
+    }
+
     @objc private func exportRequested() {
         onExportRequested?()
+    }
+
+    @objc private func copyRequested() {
+        onCopyRequested?()
     }
 
     private func configureView() {
@@ -78,15 +92,26 @@ final class BookDetailView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         exportButton.action = #selector(exportRequested)
         exportButton.isEnabled = false
 
+        copyButton.translatesAutoresizingMaskIntoConstraints = false
+        copyButton.target = self
+        copyButton.action = #selector(copyRequested)
+        copyButton.isEnabled = false
+
         let header = NSStackView(views: [titleLabel, authorLabel, statsLabel, statusLabel])
         header.orientation = .vertical
         header.alignment = .leading
         header.spacing = 6
         header.translatesAutoresizingMaskIntoConstraints = false
 
+        let buttons = NSStackView(views: [exportButton, copyButton])
+        buttons.orientation = .horizontal
+        buttons.alignment = .trailing
+        buttons.spacing = 8
+        buttons.translatesAutoresizingMaskIntoConstraints = false
+
         addSubview(header)
         addSubview(scrollView)
-        addSubview(exportButton)
+        addSubview(buttons)
 
         NSLayoutConstraint.activate([
             header.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
@@ -95,9 +120,9 @@ final class BookDetailView: NSView, NSTableViewDataSource, NSTableViewDelegate {
             scrollView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
             scrollView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
             scrollView.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 12),
-            scrollView.bottomAnchor.constraint(equalTo: exportButton.topAnchor, constant: -12),
-            exportButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
-            exportButton.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -16)
+            scrollView.bottomAnchor.constraint(equalTo: buttons.topAnchor, constant: -12),
+            buttons.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
+            buttons.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -16)
         ])
     }
 

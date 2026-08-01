@@ -6,15 +6,20 @@ final class BookDetailViewController: NSViewController {
     private var selectedBook: Book?
     private var loadTask: Task<Void, Never>?
     private var exportTask: Task<Void, Never>?
+    private var copyTask: Task<Void, Never>?
 
     deinit {
         loadTask?.cancel()
         exportTask?.cancel()
+        copyTask?.cancel()
     }
 
     override func loadView() {
         detailView.onExportRequested = { [weak self] in
             self?.chooseExportDirectory()
+        }
+        detailView.onCopyRequested = { [weak self] in
+            self?.copySelectedBook()
         }
         view = detailView
     }
@@ -79,11 +84,30 @@ final class BookDetailViewController: NSViewController {
         }
     }
 
+    private func copySelectedBook() {
+        guard let book = selectedBook, !detailView.annotations.isEmpty else { return }
+
+        copyTask?.cancel()
+        detailView.setCopying(true)
+        let content = bookService.markdownContent(for: book, annotations: detailView.annotations)
+
+        copyTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { detailView.setCopying(false) }
+
+            let pasteboard = NSPasteboard.general
+            pasteboard.clearContents()
+            pasteboard.setString(content, forType: .string)
+            guard !Task.isCancelled else { return }
+            showAlert(message: "已复制", details: "Markdown 已复制到剪贴板")
+        }
+    }
+
     private func showAlert(message: String, details: String) {
         let alert = NSAlert()
         alert.messageText = message
         alert.informativeText = details
-        alert.alertStyle = message == "导出完成" ? .informational : .warning
+        alert.alertStyle = message == "导出完成" || message == "已复制" ? .informational : .warning
 
         if let window = view.window {
             alert.beginSheetModal(for: window)
