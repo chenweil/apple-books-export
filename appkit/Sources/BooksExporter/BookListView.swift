@@ -1,16 +1,19 @@
 import AppKit
 
-final class BookListView: NSView, NSTableViewDataSource, NSTableViewDelegate {
+final class BookListView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSSearchFieldDelegate {
     private let statusLabel = NSTextField(labelWithString: "正在读取 Apple Books…")
+    private let searchField = NSSearchField()
     private let tableView = NSTableView()
     private let scrollView = NSScrollView()
 
     var onSelectionChanged: ((Book?) -> Void)?
 
+    private var allBooks: [Book] = []
+
     var books: [Book] = [] {
         didSet {
             tableView.reloadData()
-            statusLabel.stringValue = books.isEmpty ? "没有找到带笔记的书籍" : "共 \(books.count) 本书"
+            statusLabel.stringValue = statusText()
         }
     }
 
@@ -31,9 +34,43 @@ final class BookListView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         statusLabel.stringValue = "读取失败：\(error.localizedDescription)"
     }
 
+    func setBooks(_ books: [Book]) {
+        allBooks = books
+        applyFilter()
+    }
+
+    private func statusText() -> String {
+        let trimmedQuery = searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmedQuery.isEmpty {
+            return books.isEmpty ? "没有找到带笔记的书籍" : "共 \(books.count) 本书"
+        }
+        return "找到 \(books.count) 本书"
+    }
+
+    private func applyFilter() {
+        let raw = searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        books = raw.isEmpty
+            ? allBooks
+            : allBooks.filter {
+                $0.title.lowercased().contains(raw) || $0.author.lowercased().contains(raw)
+            }
+        if tableView.selectedRow >= books.count {
+            tableView.deselectAll(nil)
+            onSelectionChanged?(nil)
+        }
+    }
+
+    func controlTextDidChange(_ obj: Notification) {
+        applyFilter()
+    }
+
     private func configureView() {
         statusLabel.translatesAutoresizingMaskIntoConstraints = false
         statusLabel.textColor = .secondaryLabelColor
+
+        searchField.translatesAutoresizingMaskIntoConstraints = false
+        searchField.delegate = self
+        searchField.placeholderString = "搜索书名或作者"
 
         let bookColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("book"))
         bookColumn.title = "书名"
@@ -57,15 +94,19 @@ final class BookListView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         scrollView.borderType = .bezelBorder
 
         addSubview(statusLabel)
+        addSubview(searchField)
         addSubview(scrollView)
 
         NSLayoutConstraint.activate([
             statusLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
             statusLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
             statusLabel.topAnchor.constraint(equalTo: topAnchor, constant: 16),
+            searchField.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
+            searchField.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
+            searchField.topAnchor.constraint(equalTo: statusLabel.bottomAnchor, constant: 8),
             scrollView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
             scrollView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
-            scrollView.topAnchor.constraint(equalTo: statusLabel.bottomAnchor, constant: 10),
+            scrollView.topAnchor.constraint(equalTo: searchField.bottomAnchor, constant: 8),
             scrollView.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -16)
         ])
     }

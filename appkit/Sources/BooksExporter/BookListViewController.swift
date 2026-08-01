@@ -29,7 +29,7 @@ final class BookListViewController: NSViewController {
         Task { @MainActor [weak self] in
             guard let self else { return }
             let books = await bookService.listBooks()
-            bookListView.books = books
+            bookListView.setBooks(books)
             if let error = bookService.currentError {
                 bookListView.setError(error)
             }
