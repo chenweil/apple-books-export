@@ -1,25 +1,34 @@
 import AppKit
 
-final class MainViewController: NSSplitViewController {
+final class MainViewController: NSViewController {
+    private let splitView = NSSplitView()
     private let bookListViewController = BookListViewController()
     private let bookDetailViewController = BookDetailViewController()
+    private var didSetInitialPosition = false
 
-    override func viewDidLoad() {
-        super.viewDidLoad()
+    override func loadView() {
         splitView.isVertical = true
         splitView.dividerStyle = .thin
 
-        let listItem = NSSplitViewItem(viewController: bookListViewController)
-        listItem.minimumThickness = 320
-        listItem.preferredThicknessFraction = 0.4
+        view = splitView
 
-        let detailItem = NSSplitViewItem(viewController: bookDetailViewController)
-        detailItem.minimumThickness = 480
-        detailItem.maximumThickness = 860
+        addChild(bookListViewController)
+        addChild(bookDetailViewController)
 
-        addSplitViewItem(listItem)
-        addSplitViewItem(detailItem)
+        splitView.addSubview(bookListViewController.view)
+        splitView.addSubview(bookDetailViewController.view)
+    }
 
+    override func viewDidAppear() {
+        super.viewDidAppear()
+        if !didSetInitialPosition && splitView.subviews.count == 2 {
+            splitView.setPosition(420, ofDividerAt: 0)
+            didSetInitialPosition = true
+        }
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
         bookListViewController.onBookSelected = { [weak self] book in
             self?.bookDetailViewController.show(book: book)
         }
