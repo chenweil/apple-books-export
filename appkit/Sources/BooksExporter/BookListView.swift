@@ -8,14 +8,16 @@ final class BookListView: NSView, NSTableViewDataSource, NSTableViewDelegate, NS
 
     var onSelectionChanged: ((Book?) -> Void)?
 
-    private var allBooks: [Book] = []
-
     var books: [Book] = [] {
         didSet {
             tableView.reloadData()
             statusLabel.stringValue = statusText()
         }
     }
+
+    private var allBooks: [Book] = []
+    private var sortColumn: String?
+    private var sortAscending: Bool = true
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -49,11 +51,12 @@ final class BookListView: NSView, NSTableViewDataSource, NSTableViewDelegate, NS
 
     private func applyFilter() {
         let raw = searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        books = raw.isEmpty
+        let filtered = raw.isEmpty
             ? allBooks
             : allBooks.filter {
                 $0.title.lowercased().contains(raw) || $0.author.lowercased().contains(raw)
             }
+        books = BookListSorter.sort(filtered, by: sortColumn, ascending: sortAscending)
         if tableView.selectedRow >= books.count {
             tableView.deselectAll(nil)
             onSelectionChanged?(nil)
@@ -62,6 +65,32 @@ final class BookListView: NSView, NSTableViewDataSource, NSTableViewDelegate, NS
 
     func controlTextDidChange(_ obj: Notification) {
         applyFilter()
+    }
+
+    func tableView(_ tableView: NSTableView, didClick tableColumn: NSTableColumn) {
+        let id = tableColumn.identifier.rawValue
+        if sortColumn == id {
+            sortAscending.toggle()
+        } else {
+            sortColumn = id
+            sortAscending = true
+        }
+        updateSortIndicators()
+        tableView.deselectAll(nil)
+        onSelectionChanged?(nil)
+        applyFilter()
+    }
+
+    private func updateSortIndicators() {
+        for column in tableView.tableColumns {
+            let id = column.identifier.rawValue
+            if id == sortColumn {
+                let symbol = sortAscending ? "arrow.up" : "arrow.down"
+                tableView.setIndicatorImage(NSImage(systemSymbolName: symbol, accessibilityDescription: nil), in: column)
+            } else {
+                tableView.setIndicatorImage(nil, in: column)
+            }
+        }
     }
 
     private func configureView() {
