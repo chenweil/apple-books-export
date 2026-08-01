@@ -125,10 +125,11 @@ final class BookListView: NSView, NSTableViewDataSource, NSTableViewDelegate, NS
         let bookColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("book"))
         bookColumn.title = "书名"
         bookColumn.width = 240
+        bookColumn.resizingMask = .autoresizingMask
 
         let countColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("count"))
         countColumn.title = "笔记"
-        countColumn.width = 70
+        countColumn.width = 80
 
         tableView.addTableColumn(bookColumn)
         tableView.addTableColumn(countColumn)

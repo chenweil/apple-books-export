@@ -11,6 +11,7 @@ final class BookDetailView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     private let copyButton = NSButton(title: "复制 Markdown", target: nil, action: nil)
     private var isExporting = false
     private var isCopying = false
+    private let contentWidthLimit: CGFloat = 720
 
     var onExportRequested: (() -> Void)?
     var onCopyRequested: (() -> Void)?
@@ -109,18 +110,29 @@ final class BookDetailView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         buttons.spacing = 8
         buttons.translatesAutoresizingMaskIntoConstraints = false
 
-        addSubview(header)
-        addSubview(scrollView)
+        let content = NSView()
+        content.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(content)
+        content.addSubview(header)
+        content.addSubview(scrollView)
         addSubview(buttons)
 
         NSLayoutConstraint.activate([
-            header.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
-            header.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
-            header.topAnchor.constraint(equalTo: topAnchor, constant: 16),
-            scrollView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
-            scrollView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
+            content.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
+            content.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
+            content.topAnchor.constraint(equalTo: topAnchor, constant: 16),
+            content.bottomAnchor.constraint(equalTo: buttons.topAnchor, constant: -12),
+            content.widthAnchor.constraint(lessThanOrEqualToConstant: contentWidthLimit),
+
+            header.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            header.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            header.topAnchor.constraint(equalTo: content.topAnchor),
+
+            scrollView.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            scrollView.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             scrollView.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 12),
-            scrollView.bottomAnchor.constraint(equalTo: buttons.topAnchor, constant: -12),
+            scrollView.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+
             buttons.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
             buttons.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -16)
         ])

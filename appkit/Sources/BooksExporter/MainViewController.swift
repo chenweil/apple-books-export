@@ -10,12 +10,12 @@ final class MainViewController: NSSplitViewController {
         splitView.dividerStyle = .thin
 
         let listItem = NSSplitViewItem(viewController: bookListViewController)
-        listItem.minimumThickness = 260
-        listItem.maximumThickness = 400
-        listItem.preferredThicknessFraction = 0.38
+        listItem.minimumThickness = 320
+        listItem.preferredThicknessFraction = 0.4
 
         let detailItem = NSSplitViewItem(viewController: bookDetailViewController)
-        detailItem.minimumThickness = 360
+        detailItem.minimumThickness = 480
+        detailItem.maximumThickness = 860
 
         addSplitViewItem(listItem)
         addSplitViewItem(detailItem)
