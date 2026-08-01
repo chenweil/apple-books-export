@@ -23,6 +23,8 @@ class BookService {
     }
     
     func getAnnotations(for bookId: String) async -> [Annotation] {
+        currentError = nil
+
         do {
             return try databaseService.getAnnotations(for: bookId)
         } catch {

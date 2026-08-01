@@ -5,6 +5,8 @@ final class BookListView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     private let tableView = NSTableView()
     private let scrollView = NSScrollView()
 
+    var onSelectionChanged: ((Book?) -> Void)?
+
     var books: [Book] = [] {
         didSet {
             tableView.reloadData()
@@ -35,18 +37,13 @@ final class BookListView: NSView, NSTableViewDataSource, NSTableViewDelegate {
 
         let bookColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("book"))
         bookColumn.title = "书名"
-        bookColumn.width = 360
-
-        let authorColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("author"))
-        authorColumn.title = "作者"
-        authorColumn.width = 220
+        bookColumn.width = 240
 
         let countColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("count"))
         countColumn.title = "笔记"
-        countColumn.width = 100
+        countColumn.width = 70
 
         tableView.addTableColumn(bookColumn)
-        tableView.addTableColumn(authorColumn)
         tableView.addTableColumn(countColumn)
         tableView.headerView = NSTableHeaderView()
         tableView.delegate = self
@@ -77,13 +74,17 @@ final class BookListView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         books.count
     }
 
+    func tableViewSelectionDidChange(_ notification: Notification) {
+        let row = tableView.selectedRow
+        onSelectionChanged?(books.indices.contains(row) ? books[row] : nil)
+    }
+
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         let book = books[row]
         let text: String
 
         switch tableColumn?.identifier.rawValue {
         case "book": text = book.title
-        case "author": text = book.author
         case "count": text = book.displayTotalCount
         default: text = ""
         }
