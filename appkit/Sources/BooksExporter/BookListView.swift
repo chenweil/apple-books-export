@@ -91,7 +91,12 @@ final class BookListView: NSView, NSTableViewDataSource, NSTableViewDelegate, NS
     func tableView(_ tableView: NSTableView, didClick tableColumn: NSTableColumn) {
         let id = tableColumn.identifier.rawValue
         if sortColumn == id {
-            sortAscending.toggle()
+            if sortAscending {
+                sortAscending = false
+            } else {
+                sortColumn = nil
+                sortAscending = true
+            }
         } else {
             sortColumn = id
             sortAscending = true
