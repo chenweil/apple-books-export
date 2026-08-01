@@ -5,8 +5,10 @@ final class BookListView: NSView, NSTableViewDataSource, NSTableViewDelegate, NS
     private let searchField = NSSearchField()
     private let tableView = NSTableView()
     private let scrollView = NSScrollView()
+    private let exportAllButton = NSButton(title: "导出全部 Markdown", target: nil, action: nil)
 
     var onSelectionChanged: ((Book?) -> Void)?
+    var onExportAllRequested: (() -> Void)?
 
     var books: [Book] = [] {
         didSet {
@@ -16,11 +18,30 @@ final class BookListView: NSView, NSTableViewDataSource, NSTableViewDelegate, NS
     }
 
     private var allBooks: [Book] = []
-    private var sortColumn: String?
-    private var sortAscending: Bool = true
+    private var sortColumn: String? = nil {
+        didSet { UserDefaults.standard.set(sortColumn, forKey: BookListView.sortColumnKey) }
+    }
+    private var sortAscending: Bool = true {
+        didSet { UserDefaults.standard.set(sortAscending, forKey: BookListView.sortAscendingKey) }
+    }
+    private var isLoading = false {
+        didSet {
+            searchField.isEnabled = !isLoading
+            tableView.isEnabled = !isLoading
+            exportAllButton.isEnabled = !isLoading
+            statusLabel.stringValue = isLoading ? "正在读取 Apple Books…" : statusText()
+        }
+    }
+
+    private static let sortColumnKey = "appkit.sortColumn"
+    private static let sortAscendingKey = "appkit.sortAscending"
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
+        if let savedSortColumn = UserDefaults.standard.string(forKey: BookListView.sortColumnKey) {
+            sortColumn = savedSortColumn
+            sortAscending = UserDefaults.standard.bool(forKey: BookListView.sortAscendingKey)
+        }
         configureView()
     }
 
@@ -29,7 +50,7 @@ final class BookListView: NSView, NSTableViewDataSource, NSTableViewDelegate, NS
     }
 
     func setLoading(_ loading: Bool) {
-        statusLabel.stringValue = loading ? "正在读取 Apple Books…" : statusLabel.stringValue
+        isLoading = loading
     }
 
     func setError(_ error: Error) {
@@ -122,9 +143,15 @@ final class BookListView: NSView, NSTableViewDataSource, NSTableViewDelegate, NS
         scrollView.hasVerticalScroller = true
         scrollView.borderType = .bezelBorder
 
+        exportAllButton.translatesAutoresizingMaskIntoConstraints = false
+        exportAllButton.target = self
+        exportAllButton.action = #selector(exportAllRequested)
+        exportAllButton.isEnabled = false
+
         addSubview(statusLabel)
         addSubview(searchField)
         addSubview(scrollView)
+        addSubview(exportAllButton)
 
         NSLayoutConstraint.activate([
             statusLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
@@ -136,8 +163,15 @@ final class BookListView: NSView, NSTableViewDataSource, NSTableViewDelegate, NS
             scrollView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
             scrollView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
             scrollView.topAnchor.constraint(equalTo: searchField.bottomAnchor, constant: 8),
-            scrollView.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -16)
+            scrollView.bottomAnchor.constraint(equalTo: exportAllButton.topAnchor, constant: -12),
+            exportAllButton.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
+            exportAllButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
+            exportAllButton.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -16)
         ])
+    }
+
+    @objc private func exportAllRequested() {
+        onExportAllRequested?()
     }
 
     func numberOfRows(in tableView: NSTableView) -> Int {

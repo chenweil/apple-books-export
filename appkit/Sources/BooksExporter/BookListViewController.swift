@@ -7,6 +7,7 @@ final class BookListViewController: NSViewController {
     private var hasShownPermissionAlert = false
 
     var onBookSelected: ((Book) -> Void)?
+    var onExportAllRequested: (([Book]) -> Void)?
 
     override func loadView() {
         view = bookListView
@@ -17,6 +18,10 @@ final class BookListViewController: NSViewController {
         bookListView.onSelectionChanged = { [weak self] book in
             guard let book else { return }
             self?.onBookSelected?(book)
+        }
+        bookListView.onExportAllRequested = { [weak self] in
+            guard let self else { return }
+            self.onExportAllRequested?(self.bookListView.books)
         }
 
         guard !hasLoadedBooks else { return }
@@ -32,6 +37,7 @@ final class BookListViewController: NSViewController {
             guard let self else { return }
             let books = await bookService.listBooks()
             bookListView.setBooks(books)
+            bookListView.setLoading(false)
             if let error = bookService.currentError {
                 let retry: Bool
                 if let dbError = error as? DatabaseError,
