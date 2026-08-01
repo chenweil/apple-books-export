@@ -71,6 +71,7 @@ final class BookDetailView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         titleLabel.lineBreakMode = .byTruncatingTail
         authorLabel.textColor = .secondaryLabelColor
         statsLabel.textColor = .secondaryLabelColor
+        statsLabel.font = .monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
         statusLabel.textColor = .secondaryLabelColor
 
         let annotationColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("annotation"))
@@ -81,7 +82,7 @@ final class BookDetailView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         tableView.dataSource = self
         tableView.gridStyleMask = .solidHorizontalGridLineMask
         tableView.gridColor = .separatorColor
-        tableView.rowHeight = 64
+        tableView.usesAutomaticRowHeights = true
 
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         scrollView.documentView = tableView
@@ -104,9 +105,11 @@ final class BookDetailView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         header.spacing = 6
         header.translatesAutoresizingMaskIntoConstraints = false
 
-        let buttons = NSStackView(views: [exportButton, copyButton])
+        // 主操作靠右,符合 macOS 惯例;水平 stack 的 alignment 必须是 Y 轴属性,
+        // 设成 .trailing 会把两个按钮压到同一 x 上纵向堆叠。
+        let buttons = NSStackView(views: [copyButton, exportButton])
         buttons.orientation = .horizontal
-        buttons.alignment = .trailing
+        buttons.alignment = .centerY
         buttons.spacing = 8
         buttons.translatesAutoresizingMaskIntoConstraints = false
 
@@ -117,12 +120,19 @@ final class BookDetailView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         content.addSubview(scrollView)
         addSubview(buttons)
 
+        // 原先 leading/trailing 都用 == 再叠加 width <= 720,三者互斥,
+        // 上限被静默丢弃(实测 747pt)。改成居中 + 两侧至少 16pt + 上限。
+        let preferredWidth = content.widthAnchor.constraint(equalToConstant: contentWidthLimit)
+        preferredWidth.priority = .defaultHigh
+
         NSLayoutConstraint.activate([
-            content.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
-            content.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
+            content.centerXAnchor.constraint(equalTo: centerXAnchor),
+            content.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 16),
+            content.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -16),
+            content.widthAnchor.constraint(lessThanOrEqualToConstant: contentWidthLimit),
+            preferredWidth,
             content.topAnchor.constraint(equalTo: topAnchor, constant: 16),
             content.bottomAnchor.constraint(equalTo: buttons.topAnchor, constant: -12),
-            content.widthAnchor.constraint(lessThanOrEqualToConstant: contentWidthLimit),
 
             header.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             header.trailingAnchor.constraint(equalTo: content.trailingAnchor),
@@ -133,7 +143,7 @@ final class BookDetailView: NSView, NSTableViewDataSource, NSTableViewDelegate {
             scrollView.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 12),
             scrollView.bottomAnchor.constraint(equalTo: content.bottomAnchor),
 
-            buttons.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
+            buttons.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             buttons.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -16)
         ])
     }
@@ -142,24 +152,11 @@ final class BookDetailView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         annotations.count
     }
 
-    func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
-        64
-    }
-
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
-        let annotation = annotations[row]
-        var text = annotation.displayLocation
-        if let content = annotation.contentText, !content.isEmpty {
-            text += "\n\(content)"
-        }
-        if let note = annotation.noteText, !note.isEmpty {
-            text += "\n笔记：\(note)"
-        }
-
-        let label = NSTextField(wrappingLabelWithString: text)
-        label.font = .systemFont(ofSize: 12)
-        label.lineBreakMode = .byTruncatingTail
-        label.maximumNumberOfLines = 3
-        return label
+        let cell = tableView.makeView(withIdentifier: AnnotationCellView.reuseIdentifier, owner: self) as? AnnotationCellView
+            ?? AnnotationCellView(frame: .zero)
+        cell.updateLayoutWidth(tableColumn?.width ?? tableView.bounds.width)
+        cell.configure(with: annotations[row])
+        return cell
     }
 }

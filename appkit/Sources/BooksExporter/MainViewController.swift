@@ -1,6 +1,15 @@
 import AppKit
 
-final class MainViewController: NSViewController {
+final class MainViewController: NSViewController, NSSplitViewDelegate {
+    static let minimumListWidth: CGFloat = 280
+    static let minimumDetailWidth: CGFloat = 420
+    static let minimumContentSize = NSSize(
+        width: minimumListWidth + minimumDetailWidth + dividerThickness,
+        height: 480
+    )
+    private static let dividerThickness: CGFloat = 1
+    private static let initialListWidth: CGFloat = 420
+
     private let splitView = NSSplitView()
     private let bookListViewController = BookListViewController()
     private let bookDetailViewController = BookDetailViewController()
@@ -9,6 +18,7 @@ final class MainViewController: NSViewController {
     override func loadView() {
         splitView.isVertical = true
         splitView.dividerStyle = .thin
+        splitView.delegate = self
 
         view = splitView
 
@@ -19,10 +29,23 @@ final class MainViewController: NSViewController {
         splitView.addSubview(bookDetailViewController.view)
     }
 
+    // 不设约束时分隔条可拖到底,把书单或整个详情栏(含导出按钮)拖没。
+    func splitView(_ splitView: NSSplitView, constrainMinCoordinate proposedMinimumPosition: CGFloat, ofSubviewAt dividerIndex: Int) -> CGFloat {
+        max(proposedMinimumPosition, MainViewController.minimumListWidth)
+    }
+
+    func splitView(_ splitView: NSSplitView, constrainMaxCoordinate proposedMaximumPosition: CGFloat, ofSubviewAt dividerIndex: Int) -> CGFloat {
+        min(proposedMaximumPosition, splitView.bounds.width - MainViewController.minimumDetailWidth - MainViewController.dividerThickness)
+    }
+
+    func splitView(_ splitView: NSSplitView, canCollapseSubview subview: NSView) -> Bool {
+        false
+    }
+
     override func viewDidAppear() {
         super.viewDidAppear()
         if !didSetInitialPosition && splitView.subviews.count == 2 {
-            splitView.setPosition(420, ofDividerAt: 0)
+            splitView.setPosition(MainViewController.initialListWidth, ofDividerAt: 0)
             didSetInitialPosition = true
         }
     }
@@ -42,8 +65,8 @@ final class MainViewController: NSViewController {
         guard let window = view.window else { return }
 
         let panel = NSOpenPanel()
-        panel.title = "选择批量导出目录"
-        panel.prompt = "导出全部"
+        panel.title = "选择导出目录(\(books.count) 本)"
+        panel.prompt = "导出"
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.canCreateDirectories = true

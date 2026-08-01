@@ -3,7 +3,11 @@ import AppKit
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var window: NSWindow!
 
+    private static let appName = "Books Exporter"
+
     func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.mainMenu = MainMenu.build(appName: AppDelegate.appName)
+
         let viewController = MainViewController()
         window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1200, height: 720),
@@ -12,8 +16,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             defer: false
         )
         window.contentViewController = viewController
-        window.title = "Books Exporter"
+        window.title = AppDelegate.appName
         window.setContentSize(NSSize(width: 1200, height: 720))
+        window.contentMinSize = MainViewController.minimumContentSize
         window.center()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)

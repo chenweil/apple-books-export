@@ -5,7 +5,7 @@ final class BookListView: NSView, NSTableViewDataSource, NSTableViewDelegate, NS
     private let searchField = NSSearchField()
     private let tableView = NSTableView()
     private let scrollView = NSScrollView()
-    private let exportAllButton = NSButton(title: "导出全部 Markdown", target: nil, action: nil)
+    private let exportAllButton = NSButton(title: "导出 Markdown", target: nil, action: nil)
 
     var onSelectionChanged: ((Book?) -> Void)?
     var onExportAllRequested: (() -> Void)?
@@ -14,6 +14,7 @@ final class BookListView: NSView, NSTableViewDataSource, NSTableViewDelegate, NS
         didSet {
             tableView.reloadData()
             statusLabel.stringValue = statusText()
+            updateExportAllButton()
         }
     }
 
@@ -28,9 +29,16 @@ final class BookListView: NSView, NSTableViewDataSource, NSTableViewDelegate, NS
         didSet {
             searchField.isEnabled = !isLoading
             tableView.isEnabled = !isLoading
-            exportAllButton.isEnabled = !isLoading
             statusLabel.stringValue = isLoading ? "正在读取 Apple Books…" : statusText()
+            updateExportAllButton()
         }
+    }
+
+    /// 按钮导出的是当前(可能已过滤的)结果,标题必须跟着结果数走,
+    /// 否则搜索后仍写「全部」就是在误导一次不可撤销的批量写盘。
+    private func updateExportAllButton() {
+        exportAllButton.title = books.isEmpty ? "导出 Markdown" : "导出当前 \(books.count) 本"
+        exportAllButton.isEnabled = !isLoading && !books.isEmpty
     }
 
     private static let sortColumnKey = "appkit.sortColumn"
@@ -63,11 +71,15 @@ final class BookListView: NSView, NSTableViewDataSource, NSTableViewDelegate, NS
     }
 
     private func statusText() -> String {
-        let trimmedQuery = searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmedQuery.isEmpty {
-            return books.isEmpty ? "没有找到带笔记的书籍" : "共 \(books.count) 本书"
+        let query = searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        if query.isEmpty {
+            return books.isEmpty
+                ? "没有带笔记的书籍。在 Apple Books 里高亮或写下笔记后再回到这里。"
+                : "共 \(books.count) 本书"
         }
-        return "找到 \(books.count) 本书"
+        return books.isEmpty
+            ? "没有匹配「\(query)」的书 · 清空搜索框查看全部"
+            : "找到 \(books.count) 本书"
     }
 
     private func applyFilter() {
@@ -191,14 +203,27 @@ final class BookListView: NSView, NSTableViewDataSource, NSTableViewDelegate, NS
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         let book = books[row]
-        let text: String
+        let identifier = tableColumn?.identifier ?? NSUserInterfaceItemIdentifier("book")
+        let isCountColumn = identifier.rawValue == "count"
 
-        switch tableColumn?.identifier.rawValue {
-        case "book": text = book.title
-        case "count": text = book.displayTotalCount
-        default: text = ""
+        let label = tableView.makeView(withIdentifier: identifier, owner: self) as? NSTextField
+            ?? makeCellLabel(identifier: identifier, tabularDigits: isCountColumn)
+
+        switch identifier.rawValue {
+        case "book": label.stringValue = book.title
+        case "count": label.stringValue = book.displayTotalCount
+        default: label.stringValue = ""
         }
+        return label
+    }
 
-        return NSTextField(labelWithString: text)
+    private func makeCellLabel(identifier: NSUserInterfaceItemIdentifier, tabularDigits: Bool) -> NSTextField {
+        let label = NSTextField(labelWithString: "")
+        label.identifier = identifier
+        label.lineBreakMode = .byTruncatingTail
+        if tabularDigits {
+            label.font = .monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
+        }
+        return label
     }
 }
