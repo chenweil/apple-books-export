@@ -1,5 +1,5 @@
+import AppKit
 import Foundation
-import SwiftUI
 
 func setupDatabasePermissions() {
     let homeDir = FileManager.default.homeDirectoryForCurrentUser

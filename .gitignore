@@ -25,6 +25,20 @@ venv/
 xcuserdata/
 *.xcuserstate
 
+# Xcode build artifacts
+DerivedData/
+*.moved-aside
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# Swift Package Manager
+.build/
+Packages/
+Package.resolved
+*.xcodeproj/
+
 # AI
 .claude/
 

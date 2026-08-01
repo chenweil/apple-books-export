@@ -1,127 +1,66 @@
-# Apple Books 笔记导出工具
+# Apple Books Exporter — AppKit GUI(实验)
 
-导出 macOS Apple Books 中的笔记、标注、书签为 Markdown 文件。
+基于 [swiftui 分支] 的 AppKit 实验。导出 macOS Apple Books 中的笔记、标注、书签为 Markdown 文件。
 
-## 功能
-
-- 列出 Apple Books 书库中所有做过笔记的书籍
-- 显示每本书的笔记数量（高亮、标注、笔记、书签分类统计）
-- 交互式选择书籍并导出为 Markdown
-- 支持预览笔记内容后再决定是否导出
-- 进度条显示导出过程
+> **状态**: 实验性研究项目,可能归档。当前聚焦 AppKit GUI 栈,核心数据逻辑(SQLite 访问、模型)从 swiftui 分支复用。
 
 ## 系统要求
 
-- macOS（Apple Books 数据仅存在于 macOS）
-- Python 3.14（需要 python-tk@3.14）
-- Apple Books 中有做过笔记/标注的书籍
+- macOS 14.0+
+- Swift 5.5+(用于 `import SQLite3` 模块化)
+- Full Disk Access 权限(读取 Apple Books 数据库)
 
-## 安装
-
-```bash
-# 1. 安装 Python 和 Tkinter
-brew install python@3.14 python-tk@3.14
-
-# 2. 安装依赖
-/opt/homebrew/bin/python3.14 -m pip install PySimpleGUI --break-system-packages
-
-# 3. 进入项目目录
-cd ~/books-exporter
-```
-
-## 使用
-
-### GUI 模式
+## 构建与运行
 
 ```bash
-./run-gui.sh
+cd appkit
+swift build           # 编译
+swift run BooksExporter   # 运行(会自动激活窗口)
 ```
 
-或
-
-```bash
-/opt/homebrew/bin/python3.14 -m gui.main
-```
-
-界面左侧显示书籍列表（按笔记数排序），右侧显示选中书的详情和统计。点击"预览"查看笔记内容，点击"导出"选择保存位置。
-
-### CLI 模式
-
-```bash
-# 列出所有书籍
-python3 books_exporter.py list
-
-# 交互式选择导出
-python3 books_exporter.py export
-
-# 导出第 N 本书
-python3 books_exporter.py export 1
-
-# 指定导出目录
-python3 books_exporter.py export 3 -o ~/Desktop
-```
+或用 Xcode 打开 `appkit/Package.swift` 后按 Run。
 
 ## 项目结构
 
 ```
-books-exporter/
-├── books_exporter.py        # CLI 核心 + 数据层
-├── gui/
-│   ├── main.py             # GUI 入口
-│   ├── main_window.py      # 主窗口
-│   ├── book_list.py        # 书籍列表面板
-│   ├── detail_panel.py     # 详情面板
-│   ├── preview_window.py   # 预览弹窗
-│   └── export_dialog.py    # 导出进度弹窗
-├── services/
-│   └── book_service.py    # 业务逻辑封装
-├── run-gui.sh             # GUI 启动脚本
-├── requirements.txt        # 依赖
-└── README.md
+appkit/
+├── Package.swift              # SPM 清单
+├── Sources/BooksExporter/
+│   ├── BooksExporter-Bridging-Header.h  # SQLite C API(暂时保留)
+│   ├── Models/                # 从 swiftui 复用
+│   │   ├── Book.swift
+│   │   ├── Annotation.swift
+│   │   └── AnnotationType.swift
+│   ├── Services/              # 从 swiftui 复用
+│   │   ├── DatabaseService.swift
+│   │   └── BookService.swift
+│   ├── Utilities/             # 从 swiftui 复用
+│   │   └── PermissionHelper.swift
+│   ├── Controllers/           # 新建,M1 架构核心
+│   └── Views/                 # 新建,NSView 子类
+└── README.md                  # 本文件
 ```
 
-## 数据来源
+## 当前进度
 
-Apple Books 的笔记数据存储在：
-```
-~/Library/Containers/com.apple.iBooksX/Data/Documents/
-├── BKLibrary/BKLibrary-*.sqlite      # 书籍元数据
-└── AEAnnotation/AEAnnotation_*.sqlite # 笔记/标注数据
-```
+| 阶段 | 状态 | 内容 |
+|---|---|---|
+| W1 | 计划 | 空窗口骨架(NSApplication + AppDelegate + 占位 ViewController) |
+| W2 | 计划 | BookListView(NSTableView 显示 Apple Books 数据) |
+| W3+ | 未来 | Detail / Export 等视图 |
 
-## 导出格式
+## 架构选择
 
-导出的 Markdown 文件按笔记类型分组：
+采用 **M1 纯 MVC**:
 
-```markdown
-# 书名
+- NSViewController 是核心,直接持有 Model
+- 自定义 NSView 子类作为 UI
+- 不引入 ViewModel 层(SwiftUI MVVM 是 SwiftUI 没有 view controller 才逼出的妥协)
 
-**作者**: 作者名
+风格选择 **P1 纯代码 Programmatic**:不依赖 Storyboard / XIB,所有 UI 用 Swift 代码构建。
 
-**笔记数量**: N
+## 跟其他分支的关系
 
----
-
-## 高亮与标注
-
-### 1. 位置: epubcfi(...)
-*2025-01-15 10:30*
-
-> 高亮文字
-
-**笔记**: 我的笔记内容
-
----
-
-## 独立笔记
-
-## 书签
-```
-
-## macOS 权限
-
-如果遇到"无法读取数据"提示，确保在 **系统设置 → 隐私与安全性 → 完全磁盘访问权限** 中给予终端或 Python 完全磁盘访问权限。
-
-## License
-
-MIT
+- **基于 `swiftui`**:Models / Services / Utilities 全复用(目录结构保留,内容零修改)
+- **平行于 `main`**:main 是 Rust + Tauri GUI 主线,跟本分支无关
+- **目标**:验证 AppKit 作为另一条 GUI 路径的可行性,不替代 Tauri
