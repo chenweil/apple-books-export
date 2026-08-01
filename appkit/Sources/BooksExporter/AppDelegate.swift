@@ -4,7 +4,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var window: NSWindow!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        let viewController = PlaceholderViewController()
+        let viewController = BookListViewController()
         window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 800, height: 500),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],

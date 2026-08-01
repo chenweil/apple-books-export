@@ -46,7 +46,7 @@ appkit/
 | 阶段 | 状态 | 内容 |
 |---|---|---|
 | W1 | 完成 | 空窗口骨架(NSApplication + AppDelegate + 占位 ViewController) |
-| W2 | 计划 | BookListView(NSTableView 显示 Apple Books 数据) |
+| W2 | 完成 | BookListView(NSTableView 显示 Apple Books 数据) |
 | W3+ | 未来 | Detail / Export 等视图 |
 
 ## 架构选择
