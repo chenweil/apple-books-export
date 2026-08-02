@@ -8,6 +8,9 @@ Cargo.lock
 dist/
 build/
 
+# Swift Package Manager(appkit 分支的构建缓存,切分支后会残留在本目录)
+.build/
+
 # Node
 node_modules/
 
