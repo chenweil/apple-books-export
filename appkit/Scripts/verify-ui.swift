@@ -34,6 +34,7 @@ enum VerifyLayout {
         checkAnnotationRowHeight()
         checkSortAccessibility()
         checkAnnotationFilter()
+        checkExportScope()
 
         print("\n\(failures.isEmpty ? "全部通过" : "失败 \(failures.count) 项: \(failures.joined(separator: ", "))")")
         exit(failures.isEmpty ? 0 : 1)
@@ -295,5 +296,85 @@ enum VerifyLayout {
         if let action = control.action {
             NSApp.sendAction(action, to: control.target, from: control)
         }
+    }
+
+    private static func checkExportScope() {
+        print("\n导出范围:全书 vs 当前筛选")
+        let book = Book(id: "b1", title: "测试书", author: "某人",
+                        totalAnnotations: 6, highlightsCount: 3,
+                        notesCount: 2, bookmarksCount: 1)
+        let annotations =
+            (0..<3).map { sample("h\($0)", .highlight) }
+            + (0..<2).map { sample("n\($0)", .note) }
+            + [sample("b0", .bookmark)]
+
+        let detail = BookDetailView()
+        hosted(detail, width: 779, height: 700)
+        detail.show(book: book)
+        detail.setAnnotations(annotations)
+
+        guard let exportButton = view(named: "export", in: detail) as? NSButton,
+              let exportMenu = view(named: "export-menu", in: detail) as? NSPopUpButton,
+              let segmented = firstSegmentedControl(in: detail) else {
+            check("导出控件可定位", false, "找不到 export / export-menu")
+            return
+        }
+
+        // 未筛选:普通按钮,没有歧义,不需要下拉
+        check("未筛选时显示普通按钮", !exportButton.isHidden && exportMenu.isHidden,
+              "button.hidden=\(exportButton.isHidden) menu.hidden=\(exportMenu.isHidden)")
+        check("未筛选时标题带条数", exportButton.title.contains("6"), "\"\(exportButton.title)\"")
+
+        // 筛选后:换成下拉,两项分别写明范围与条数
+        select(segment: 1, in: segmented)
+        check("筛选后切换为下拉按钮", exportButton.isHidden && !exportMenu.isHidden,
+              "button.hidden=\(exportButton.isHidden) menu.hidden=\(exportMenu.isHidden)")
+
+        let items = Array(exportMenu.menu?.items.dropFirst() ?? [])
+        check("下拉有两项", items.count == 2, "\(items.map(\.title))")
+        check("第一项 = 当前筛选 3 条高亮",
+              items.first.map { $0.title.contains("筛选") && $0.title.contains("3") } ?? false,
+              "\"\(items.first?.title ?? "nil")\"")
+        check("第二项 = 全书 6 条",
+              items.last.map { $0.title.contains("全书") && $0.title.contains("6") } ?? false,
+              "\"\(items.last?.title ?? "nil")\"")
+
+        // 两项必须真的送出不同的集合
+        var delivered: [Annotation]?
+        detail.onExportRequested = { delivered = $0 }
+
+        delivered = nil
+        invoke(items[0])
+        check("选「当前筛选」送出 3 条高亮",
+              delivered?.count == 3 && (delivered?.allSatisfy { $0.type == .highlight } ?? false),
+              "\(delivered?.count ?? -1) 条")
+
+        delivered = nil
+        invoke(items[1])
+        check("选「全书」送出全部 6 条", delivered?.count == 6, "\(delivered?.count ?? -1) 条")
+
+        // 未筛选时点普通按钮同样要送出全部
+        select(segment: 0, in: segmented)
+        delivered = nil
+        invoke(exportButton)
+        check("未筛选点按钮送出全部 6 条", delivered?.count == 6, "\(delivered?.count ?? -1) 条")
+    }
+
+    private static func invoke(_ item: NSMenuItem) {
+        guard let action = item.action else { return }
+        NSApp.sendAction(action, to: item.target, from: item)
+    }
+
+    private static func invoke(_ control: NSControl) {
+        guard let action = control.action else { return }
+        NSApp.sendAction(action, to: control.target, from: control)
+    }
+
+    private static func view(named identifier: String, in view: NSView) -> NSView? {
+        if view.identifier?.rawValue == identifier { return view }
+        for subview in view.subviews {
+            if let found = self.view(named: identifier, in: subview) { return found }
+        }
+        return nil
     }
 }

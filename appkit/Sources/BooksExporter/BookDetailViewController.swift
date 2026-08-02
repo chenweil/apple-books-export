@@ -15,11 +15,11 @@ final class BookDetailViewController: NSViewController {
     }
 
     override func loadView() {
-        detailView.onExportRequested = { [weak self] in
-            self?.chooseExportDirectory()
+        detailView.onExportRequested = { [weak self] annotations in
+            self?.chooseExportDirectory(for: annotations)
         }
-        detailView.onCopyRequested = { [weak self] in
-            self?.copySelectedBook()
+        detailView.onCopyRequested = { [weak self] annotations in
+            self?.copySelectedBook(annotations)
         }
         view = detailView
     }
@@ -40,11 +40,11 @@ final class BookDetailViewController: NSViewController {
         }
     }
 
-    private func chooseExportDirectory() {
-        guard let window = view.window else { return }
+    private func chooseExportDirectory(for annotations: [Annotation]) {
+        guard let window = view.window, !annotations.isEmpty else { return }
 
         let panel = NSOpenPanel()
-        panel.title = "选择导出目录"
+        panel.title = "选择导出目录（\(annotations.count) 条）"
         panel.prompt = "导出"
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
@@ -52,16 +52,15 @@ final class BookDetailViewController: NSViewController {
         panel.allowsMultipleSelection = false
         panel.beginSheetModal(for: window) { [weak self] response in
             guard response == .OK, let directoryURL = panel.url else { return }
-            self?.exportSelectedBook(to: directoryURL)
+            self?.exportSelectedBook(annotations, to: directoryURL)
         }
     }
 
-    private func exportSelectedBook(to directoryURL: URL) {
-        guard let book = selectedBook, !detailView.annotations.isEmpty else { return }
+    private func exportSelectedBook(_ annotations: [Annotation], to directoryURL: URL) {
+        guard let book = selectedBook, !annotations.isEmpty else { return }
 
         exportTask?.cancel()
         detailView.setExporting(true)
-        let annotations = detailView.annotations
 
         exportTask = Task { @MainActor [weak self] in
             guard let self else { return }
@@ -76,7 +75,7 @@ final class BookDetailViewController: NSViewController {
                 guard !Task.isCancelled else { return }
                 showAlert(
                     message: "导出完成",
-                    details: "Markdown 已保存到：\(directoryURL.path)"
+                    details: "已导出 \(annotations.count) 条到：\(directoryURL.path)"
                 )
             } catch {
                 showAlert(message: "导出失败", details: error.localizedDescription)
@@ -84,12 +83,12 @@ final class BookDetailViewController: NSViewController {
         }
     }
 
-    private func copySelectedBook() {
-        guard let book = selectedBook, !detailView.annotations.isEmpty else { return }
+    private func copySelectedBook(_ annotations: [Annotation]) {
+        guard let book = selectedBook, !annotations.isEmpty else { return }
 
         copyTask?.cancel()
         detailView.setCopying(true)
-        let content = bookService.markdownContent(for: book, annotations: detailView.annotations)
+        let content = bookService.markdownContent(for: book, annotations: annotations)
 
         copyTask = Task { @MainActor [weak self] in
             guard let self else { return }
@@ -99,7 +98,7 @@ final class BookDetailViewController: NSViewController {
             pasteboard.clearContents()
             pasteboard.setString(content, forType: .string)
             guard !Task.isCancelled else { return }
-            showAlert(message: "已复制", details: "Markdown 已复制到剪贴板")
+            showAlert(message: "已复制", details: "已复制 \(annotations.count) 条 Markdown 到剪贴板")
         }
     }
 

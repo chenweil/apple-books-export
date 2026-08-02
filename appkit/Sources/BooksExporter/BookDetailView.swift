@@ -9,12 +9,14 @@ final class BookDetailView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     private let scrollView = NSScrollView()
     private let exportButton = NSButton(title: "导出 Markdown", target: nil, action: nil)
     private let copyButton = NSButton(title: "复制 Markdown", target: nil, action: nil)
+    private let exportMenuButton = NSPopUpButton(frame: .zero, pullsDown: true)
+    private let copyMenuButton = NSPopUpButton(frame: .zero, pullsDown: true)
     private var isExporting = false
     private var isCopying = false
     private let contentWidthLimit: CGFloat = 720
 
-    var onExportRequested: (() -> Void)?
-    var onCopyRequested: (() -> Void)?
+    var onExportRequested: (([Annotation]) -> Void)?
+    var onCopyRequested: (([Annotation]) -> Void)?
 
     private var book: Book?
     private var allAnnotations: [Annotation] = []
@@ -52,16 +54,72 @@ final class BookDetailView: NSView, NSTableViewDataSource, NSTableViewDelegate {
 
     /// 按钮标题跟着当前展示的条数走 —— 筛选之后仍写「导出 Markdown」
     /// 会让人以为导的是全书,跟书单页的「导出当前 N 本」是同一类问题。
+    /// 一旦有筛选,「全书」和「当前筛选」就是两个不同的动作,换成下拉让用户明选,
+    /// 而不是让按钮替他猜。
     private func updateActionButtons() {
-        let count = annotations.count
+        let filtered = annotations.count
+        let total = allAnnotations.count
+        let isFiltering = filter != .all
+
+        exportButton.isHidden = isFiltering
+        copyButton.isHidden = isFiltering
+        exportMenuButton.isHidden = !isFiltering
+        copyMenuButton.isHidden = !isFiltering
+
         exportButton.title = isExporting
             ? "正在导出…"
-            : (count == 0 ? "导出 Markdown" : "导出当前 \(count) 条")
+            : (total == 0 ? "导出 Markdown" : "导出 \(total) 条")
         copyButton.title = isCopying
             ? "正在复制…"
-            : (count == 0 ? "复制 Markdown" : "复制当前 \(count) 条")
-        exportButton.isEnabled = !isExporting && count > 0
-        copyButton.isEnabled = !isCopying && count > 0
+            : (total == 0 ? "复制 Markdown" : "复制 \(total) 条")
+        exportButton.isEnabled = !isExporting && total > 0
+        copyButton.isEnabled = !isCopying && total > 0
+
+        guard isFiltering else { return }
+
+        let scopeName = filter.scopeName
+        rebuildMenu(
+            on: exportMenuButton,
+            title: isExporting ? "正在导出…" : "导出",
+            filteredTitle: "导出当前筛选（\(filtered) 条\(scopeName)）",
+            allTitle: "导出全书（\(total) 条）",
+            filteredAction: #selector(exportFilteredRequested),
+            allAction: #selector(exportAllRequested)
+        )
+        rebuildMenu(
+            on: copyMenuButton,
+            title: isCopying ? "正在复制…" : "复制",
+            filteredTitle: "复制当前筛选（\(filtered) 条\(scopeName)）",
+            allTitle: "复制全书（\(total) 条）",
+            filteredAction: #selector(copyFilteredRequested),
+            allAction: #selector(copyAllRequested)
+        )
+        exportMenuButton.isEnabled = !isExporting && total > 0
+        copyMenuButton.isEnabled = !isCopying && total > 0
+    }
+
+    /// pullsDown 的第 0 项是按钮自身的标题,不参与点击。
+    private func rebuildMenu(
+        on button: NSPopUpButton,
+        title: String,
+        filteredTitle: String,
+        allTitle: String,
+        filteredAction: Selector,
+        allAction: Selector
+    ) {
+        let menu = NSMenu()
+        menu.addItem(NSMenuItem(title: title, action: nil, keyEquivalent: ""))
+
+        let filteredItem = NSMenuItem(title: filteredTitle, action: filteredAction, keyEquivalent: "")
+        filteredItem.target = self
+        filteredItem.isEnabled = !annotations.isEmpty
+        menu.addItem(filteredItem)
+
+        let allItem = NSMenuItem(title: allTitle, action: allAction, keyEquivalent: "")
+        allItem.target = self
+        menu.addItem(allItem)
+
+        button.menu = menu
     }
 
     override init(frame frameRect: NSRect) {
@@ -117,11 +175,27 @@ final class BookDetailView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     }
 
     @objc private func exportRequested() {
-        onExportRequested?()
+        onExportRequested?(allAnnotations)
     }
 
     @objc private func copyRequested() {
-        onCopyRequested?()
+        onCopyRequested?(allAnnotations)
+    }
+
+    @objc private func exportFilteredRequested() {
+        onExportRequested?(annotations)
+    }
+
+    @objc private func exportAllRequested() {
+        onExportRequested?(allAnnotations)
+    }
+
+    @objc private func copyFilteredRequested() {
+        onCopyRequested?(annotations)
+    }
+
+    @objc private func copyAllRequested() {
+        onCopyRequested?(allAnnotations)
     }
 
     private func configureView() {
@@ -160,11 +234,21 @@ final class BookDetailView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         exportButton.target = self
         exportButton.action = #selector(exportRequested)
         exportButton.isEnabled = false
+        exportButton.identifier = NSUserInterfaceItemIdentifier("export")
 
         copyButton.translatesAutoresizingMaskIntoConstraints = false
         copyButton.target = self
         copyButton.action = #selector(copyRequested)
         copyButton.isEnabled = false
+        copyButton.identifier = NSUserInterfaceItemIdentifier("copy")
+
+        exportMenuButton.translatesAutoresizingMaskIntoConstraints = false
+        exportMenuButton.identifier = NSUserInterfaceItemIdentifier("export-menu")
+        exportMenuButton.isHidden = true
+
+        copyMenuButton.translatesAutoresizingMaskIntoConstraints = false
+        copyMenuButton.identifier = NSUserInterfaceItemIdentifier("copy-menu")
+        copyMenuButton.isHidden = true
 
         let header = NSStackView(views: [titleLabel, authorLabel, typeFilter, statusLabel])
         header.orientation = .vertical
@@ -174,7 +258,7 @@ final class BookDetailView: NSView, NSTableViewDataSource, NSTableViewDelegate {
 
         // 主操作靠右,符合 macOS 惯例;水平 stack 的 alignment 必须是 Y 轴属性,
         // 设成 .trailing 会把两个按钮压到同一 x 上纵向堆叠。
-        let buttons = NSStackView(views: [copyButton, exportButton])
+        let buttons = NSStackView(views: [copyButton, copyMenuButton, exportButton, exportMenuButton])
         buttons.orientation = .horizontal
         buttons.alignment = .centerY
         buttons.spacing = 8

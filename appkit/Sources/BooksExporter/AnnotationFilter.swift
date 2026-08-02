@@ -29,6 +29,14 @@ enum AnnotationFilter: Equatable {
         }
     }
 
+    /// 描述当前筛选范围的名词,用在「导出当前筛选（3 条高亮）」里。
+    var scopeName: String {
+        switch self {
+        case .all: return "笔记"
+        case .type(let type): return type.shortName
+        }
+    }
+
     func apply(to annotations: [Annotation]) -> [Annotation] {
         switch self {
         case .all:
