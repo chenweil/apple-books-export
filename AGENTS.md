@@ -74,14 +74,26 @@ cd src-tauri && cargo tauri dev
 - Rust stable toolchain
 - Node.js(仅 GUI 开发需要)
 
-## 笔记分类 (`ANNOTATION_TYPE_MAP`)
+## 笔记分类
 
-| Code | 含义 |
+**不要用 `ZANNOTATIONTYPE` 判断笔记类型。** 该字段与内容并不对应:实测本地库
+type 1 有 105 条、type 3 有 379 条,`ZANNOTATIONSELECTEDTEXT` /
+`ZANNOTATIONNOTE` / `ZANNOTATIONREPRESENTATIVETEXT` 三个字段全为空。它们不是
+书签(全部带高亮样式、近半数带选区范围),而是取词失败的高亮。真正的书签
+(type 0)本地库一条都没有,且 `ZAEANNOTATION` 是唯一的标注表。
+
+按**内容**分类:
+
+| 条件 | 含义 |
 |------|------|
-| 0 | 书签 |
-| 1 | 笔记 |
-| 2 | 高亮 |
-| 3 | 标注 |
+| `ZANNOTATIONNOTE` 非空 | 笔记(即给高亮加的批注,原文在 `ZANNOTATIONSELECTEDTEXT`) |
+| 仅 `ZANNOTATIONSELECTEDTEXT` 非空 | 高亮 |
+| 两者皆空 | 空壳,导出与计数都应跳过 |
+
+Apple Books 不把「笔记」存成独立对象 —— 笔记就是给高亮加批注,两者同在一行。
+
+计数口径必须与导出口径一致,否则列表显示 307 条、导出只有 302 条
+(见 `db::tests::count_excludes_annotations_without_text_or_note`)。
 
 ## 时间戳
 

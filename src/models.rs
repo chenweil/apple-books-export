@@ -18,7 +18,7 @@ pub struct Annotation {
     pub selected_text: Option<String>,
     pub note: Option<String>,
     pub location: Option<String>, // CFI
-    pub annotation_type: u32,     // 0=bookmark, 1=note, 2=highlight, 3=annotation
+    pub annotation_type: u32,     // Apple Books 原始值;与内容不对应,勿用于分类,见 CLAUDE.md
     pub creation_date: Option<f64>,
 }
 
