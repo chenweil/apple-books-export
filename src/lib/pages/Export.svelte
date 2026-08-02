@@ -49,14 +49,20 @@
         lines.push("");
         lines.push("## 高亮与标注");
         lines.push("");
-        const highlights = annotations.filter(a => a.selected_text);
-        for (const ann of highlights.slice(0, 5)) {
-          lines.push(`> ${ann.selected_text!.slice(0, 100)}${ann.selected_text!.length > 100 ? "..." : ""}`);
+        // 与 Rust 导出口径一致(src/exporter.rs):正文和批注都为空才跳过。
+        // 数据层已经滤掉空壳,这里保留判断是为了让「只有批注」的条目也能进预览 ——
+        // 原先的 filter(a => a.selected_text) 会把它们漏掉,预览条数就和实际导出对不上。
+        const entries = annotations.filter(a => a.selected_text || a.note);
+        for (const ann of entries.slice(0, 5)) {
+          const text = ann.selected_text;
+          if (text) {
+            lines.push(`> ${text.slice(0, 100)}${text.length > 100 ? "..." : ""}`);
+          }
           if (ann.note) lines.push(`笔记: ${ann.note}`);
           lines.push("");
         }
-        if (highlights.length > 5) {
-          lines.push(`... 还有 ${highlights.length - 5} 条`);
+        if (entries.length > 5) {
+          lines.push(`... 还有 ${entries.length - 5} 条`);
         }
         preview = lines.join("\n");
       });
