@@ -114,7 +114,7 @@ git tag v0.3.3 && git push --tags
 
 - `main` — 当前 Rust 版本,稳定
 - `rust-version` — 下一个 Rust 版本开发
-- `swiftui` — 历史 SwiftUI 实验(归档)
+- `appkit` — AppKit GUI 实验;早先的 `swiftui` 分支已删除,其全部历史都在这条线上
 - `python-legacy` — 已废弃的 Python 实现(归档)
 
 ## 约束
