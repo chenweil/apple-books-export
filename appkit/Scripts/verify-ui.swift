@@ -36,6 +36,7 @@ enum VerifyLayout {
         checkAnnotationFilter()
         checkExportScope()
         checkClassifier()
+        checkBookRowCentering()
 
         print("\n\(failures.isEmpty ? "全部通过" : "失败 \(failures.count) 项: \(failures.joined(separator: ", "))")")
         exit(failures.isEmpty ? 0 : 1)
@@ -412,5 +413,36 @@ enum VerifyLayout {
               "enabled=\(segmented.isEnabled(forSegment: 2))")
         check("高亮非 0 时该段可点", segmented.isEnabled(forSegment: 1),
               "enabled=\(segmented.isEnabled(forSegment: 1))")
+    }
+
+    private static func checkBookRowCentering() {
+        print("\n书单行文字垂直居中")
+        guard let (list, table, bookColumn, countColumn) = makeList() else { return }
+        list.setBooks([Book(id: "b1", title: "测试书", author: "某人",
+                            totalAnnotations: 3, highlightsCount: 3, notesCount: 0)])
+
+        for (name, column) in [("书名", bookColumn), ("笔记数", countColumn)] {
+            guard let raw = list.tableView(table, viewFor: column, row: 0) else {
+                check("\(name)列能取到 cell", false, "viewFor 返回 nil")
+                continue
+            }
+            // 裸 NSTextField 会被表格撑满整行,单行文字画在顶部 —— 必须是
+            // NSTableCellView,内部 label 用 centerY 约束定位。
+            guard let cell = raw as? NSTableCellView, let label = cell.textField else {
+                check("\(name)列是 NSTableCellView", false, "实际是 \(type(of: raw))")
+                continue
+            }
+
+            cell.frame = NSRect(x: 0, y: 0, width: 240, height: table.rowHeight)
+            cell.layoutSubtreeIfNeeded()
+
+            let offset = abs(label.frame.midY - cell.bounds.midY)
+            check("\(name)列文字垂直居中", offset < 1.0,
+                  "行高=\(table.rowHeight) cell 中线=\(cell.bounds.midY) 文字中线=\(label.frame.midY) 偏差=\(offset)")
+            // 若 label 被拉满行高,midY 会「碰巧」相等但文字仍画在顶部,
+            // 所以同时要求它保持自身高度。
+            check("\(name)列文字保持自身高度", label.frame.height < cell.bounds.height,
+                  "label 高=\(label.frame.height) 行高=\(cell.bounds.height)")
+        }
     }
 }

@@ -238,23 +238,13 @@ final class BookListView: NSView, NSTableViewDataSource, NSTableViewDelegate, NS
         guard let identifier = tableColumn?.identifier,
               let column = BookColumn(rawValue: identifier.rawValue) else { return nil }
 
-        let label = tableView.makeView(withIdentifier: identifier, owner: self) as? NSTextField
-            ?? makeCellLabel(identifier: identifier, tabularDigits: column == .count)
+        let cell = tableView.makeView(withIdentifier: identifier, owner: self) as? BookCellView
+            ?? BookCellView(identifier: identifier, tabularDigits: column == .count)
 
         switch column {
-        case .book: label.stringValue = book.title
-        case .count: label.stringValue = book.displayTotalCount
+        case .book: cell.configure(text: book.title)
+        case .count: cell.configure(text: book.displayTotalCount)
         }
-        return label
-    }
-
-    private func makeCellLabel(identifier: NSUserInterfaceItemIdentifier, tabularDigits: Bool) -> NSTextField {
-        let label = NSTextField(labelWithString: "")
-        label.identifier = identifier
-        label.lineBreakMode = .byTruncatingTail
-        if tabularDigits {
-            label.font = .monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
-        }
-        return label
+        return cell
     }
 }
