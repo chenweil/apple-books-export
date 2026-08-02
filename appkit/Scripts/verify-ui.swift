@@ -35,6 +35,7 @@ enum VerifyLayout {
         checkSortAccessibility()
         checkAnnotationFilter()
         checkExportScope()
+        checkClassifier()
 
         print("\n\(failures.isEmpty ? "全部通过" : "失败 \(failures.count) 项: \(failures.joined(separator: ", "))")")
         exit(failures.isEmpty ? 0 : 1)
@@ -221,26 +222,24 @@ enum VerifyLayout {
     private static func checkAnnotationFilter() {
         print("\n笔记类型筛选")
         let book = Book(id: "b1", title: "测试书", author: "某人",
-                        totalAnnotations: 6, highlightsCount: 3,
-                        notesCount: 2, bookmarksCount: 1)
+                        totalAnnotations: 5, highlightsCount: 3, notesCount: 2)
         let annotations =
             (0..<3).map { sample("h\($0)", .highlight) }
             + (0..<2).map { sample("n\($0)", .note) }
-            + [sample("b0", .bookmark)]
 
         // 纯函数层
         check("filter .all 不改变集合",
-              AnnotationFilter.all.apply(to: annotations).count == 6,
+              AnnotationFilter.all.apply(to: annotations).count == 5,
               "\(AnnotationFilter.all.apply(to: annotations).count)")
         check("filter .highlight 只留高亮",
               AnnotationFilter.type(.highlight).apply(to: annotations).allSatisfy { $0.type == .highlight }
                   && AnnotationFilter.type(.highlight).apply(to: annotations).count == 3,
               "\(AnnotationFilter.type(.highlight).apply(to: annotations).count) 条")
-        check("段顺序为 全部/高亮/笔记/书签",
-              AnnotationFilter.ordered == [.all, .type(.highlight), .type(.note), .type(.bookmark)],
+        check("段顺序为 全部/高亮/笔记",
+              AnnotationFilter.ordered == [.all, .type(.highlight), .type(.note)],
               "\(AnnotationFilter.ordered.map { $0.title(for: book) })")
         check("段标题带计数",
-              AnnotationFilter.ordered.map { $0.title(for: book) } == ["全部 6", "高亮 3", "笔记 2", "书签 1"],
+              AnnotationFilter.ordered.map { $0.title(for: book) } == ["全部 5", "高亮 3", "笔记 2"],
               "\(AnnotationFilter.ordered.map { $0.title(for: book) })")
 
         // UI 层
@@ -254,22 +253,22 @@ enum VerifyLayout {
 
         detail.show(book: book)
         detail.setAnnotations(annotations)
-        check("段数 = 4", segmented.segmentCount == 4, "\(segmented.segmentCount)")
+        check("段数 = 3", segmented.segmentCount == 3, "\(segmented.segmentCount)")
         check("默认选中「全部」", segmented.selectedSegment == 0, "selectedSegment=\(segmented.selectedSegment)")
-        check("默认显示全部 6 条", detail.annotations.count == 6, "\(detail.annotations.count)")
+        check("默认显示全部 5 条", detail.annotations.count == 5, "\(detail.annotations.count)")
 
         select(segment: 1, in: segmented)
         check("选「高亮」后只剩 3 条",
               detail.annotations.count == 3 && detail.annotations.allSatisfy { $0.type == .highlight },
               "\(detail.annotations.count) 条")
 
-        select(segment: 3, in: segmented)
-        check("选「书签」后只剩 1 条",
-              detail.annotations.count == 1 && detail.annotations.allSatisfy { $0.type == .bookmark },
+        select(segment: 2, in: segmented)
+        check("选「笔记」后只剩 2 条",
+              detail.annotations.count == 2 && detail.annotations.allSatisfy { $0.type == .note },
               "\(detail.annotations.count) 条")
 
         select(segment: 0, in: segmented)
-        check("切回「全部」恢复 6 条", detail.annotations.count == 6, "\(detail.annotations.count)")
+        check("切回「全部」恢复 5 条", detail.annotations.count == 5, "\(detail.annotations.count)")
 
         // 换书必须重置筛选,否则新书会沿用上一本的筛选却没有任何提示
         select(segment: 1, in: segmented)
@@ -301,12 +300,10 @@ enum VerifyLayout {
     private static func checkExportScope() {
         print("\n导出范围:全书 vs 当前筛选")
         let book = Book(id: "b1", title: "测试书", author: "某人",
-                        totalAnnotations: 6, highlightsCount: 3,
-                        notesCount: 2, bookmarksCount: 1)
+                        totalAnnotations: 5, highlightsCount: 3, notesCount: 2)
         let annotations =
             (0..<3).map { sample("h\($0)", .highlight) }
             + (0..<2).map { sample("n\($0)", .note) }
-            + [sample("b0", .bookmark)]
 
         let detail = BookDetailView()
         hosted(detail, width: 779, height: 700)
@@ -323,7 +320,7 @@ enum VerifyLayout {
         // 未筛选:普通按钮,没有歧义,不需要下拉
         check("未筛选时显示普通按钮", !exportButton.isHidden && exportMenu.isHidden,
               "button.hidden=\(exportButton.isHidden) menu.hidden=\(exportMenu.isHidden)")
-        check("未筛选时标题带条数", exportButton.title.contains("6"), "\"\(exportButton.title)\"")
+        check("未筛选时标题带条数", exportButton.title.contains("5"), "\"\(exportButton.title)\"")
 
         // 筛选后:换成下拉,两项分别写明范围与条数
         select(segment: 1, in: segmented)
@@ -335,8 +332,8 @@ enum VerifyLayout {
         check("第一项 = 当前筛选 3 条高亮",
               items.first.map { $0.title.contains("筛选") && $0.title.contains("3") } ?? false,
               "\"\(items.first?.title ?? "nil")\"")
-        check("第二项 = 全书 6 条",
-              items.last.map { $0.title.contains("全书") && $0.title.contains("6") } ?? false,
+        check("第二项 = 全书 5 条",
+              items.last.map { $0.title.contains("全书") && $0.title.contains("5") } ?? false,
               "\"\(items.last?.title ?? "nil")\"")
 
         // 两项必须真的送出不同的集合
@@ -351,13 +348,13 @@ enum VerifyLayout {
 
         delivered = nil
         invoke(items[1])
-        check("选「全书」送出全部 6 条", delivered?.count == 6, "\(delivered?.count ?? -1) 条")
+        check("选「全书」送出全部 5 条", delivered?.count == 5, "\(delivered?.count ?? -1) 条")
 
         // 未筛选时点普通按钮同样要送出全部
         select(segment: 0, in: segmented)
         delivered = nil
         invoke(exportButton)
-        check("未筛选点按钮送出全部 6 条", delivered?.count == 6, "\(delivered?.count ?? -1) 条")
+        check("未筛选点按钮送出全部 5 条", delivered?.count == 5, "\(delivered?.count ?? -1) 条")
     }
 
     private static func invoke(_ item: NSMenuItem) {
@@ -376,5 +373,44 @@ enum VerifyLayout {
             if let found = self.view(named: identifier, in: subview) { return found }
         }
         return nil
+    }
+
+    private static func checkClassifier() {
+        print("\n标注分类(按内容,不按 ZANNOTATIONTYPE)")
+
+        check("有批注 → 笔记",
+              AnnotationClassifier.classify(hasNote: true, hasSelectedText: true) == .note,
+              "\(String(describing: AnnotationClassifier.classify(hasNote: true, hasSelectedText: true)))")
+        check("只有正文 → 高亮",
+              AnnotationClassifier.classify(hasNote: false, hasSelectedText: true) == .highlight,
+              "\(String(describing: AnnotationClassifier.classify(hasNote: false, hasSelectedText: true)))")
+        check("批注但无正文 → 仍是笔记",
+              AnnotationClassifier.classify(hasNote: true, hasSelectedText: false) == .note,
+              "\(String(describing: AnnotationClassifier.classify(hasNote: true, hasSelectedText: false)))")
+        // 这一条正是 bug 的根源:旧代码按 type 把这类空行当成「独立笔记」
+        check("无正文也无批注 → 丢弃",
+              AnnotationClassifier.classify(hasNote: false, hasSelectedText: false) == nil,
+              "\(String(describing: AnnotationClassifier.classify(hasNote: false, hasSelectedText: false)))")
+
+        check("笔记与高亮不重叠",
+              AnnotationType.allCases.count == 2
+                  && AnnotationType.allCases.contains(.note)
+                  && AnnotationType.allCases.contains(.highlight),
+              "\(AnnotationType.allCases.map(\.shortName))")
+
+        // 计数为 0 的分段必须置灰,否则又是一个点进去必然空的死路
+        let noNotes = Book(id: "b2", title: "只有高亮的书", author: "某人",
+                           totalAnnotations: 3, highlightsCount: 3, notesCount: 0)
+        let detail = BookDetailView()
+        hosted(detail, width: 779, height: 700)
+        detail.show(book: noNotes)
+        guard let segmented = firstSegmentedControl(in: detail) else {
+            check("分段控件可定位", false, "找不到")
+            return
+        }
+        check("笔记为 0 时该段置灰", !segmented.isEnabled(forSegment: 2),
+              "enabled=\(segmented.isEnabled(forSegment: 2))")
+        check("高亮非 0 时该段可点", segmented.isEnabled(forSegment: 1),
+              "enabled=\(segmented.isEnabled(forSegment: 1))")
     }
 }

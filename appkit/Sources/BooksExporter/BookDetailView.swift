@@ -149,7 +149,8 @@ final class BookDetailView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     private func updateFilterTitles(for book: Book) {
         for (index, option) in AnnotationFilter.ordered.enumerated() {
             typeFilter.setLabel(option.title(for: book), forSegment: index)
-            typeFilter.setEnabled(true, forSegment: index)
+            // 计数为 0 的分段点进去必然是空列表,置灰而不是留个死路。
+            typeFilter.setEnabled(option.count(in: book) > 0, forSegment: index)
         }
     }
 

@@ -7,7 +7,6 @@ struct Book: Identifiable, Codable, Hashable {
     let totalAnnotations: Int
     let highlightsCount: Int
     let notesCount: Int
-    let bookmarksCount: Int
 
     var displayTotalCount: String {
         if totalAnnotations > 0 {
@@ -21,7 +20,6 @@ struct Book: Identifiable, Codable, Hashable {
         switch type {
         case .highlight: return highlightsCount
         case .note: return notesCount
-        case .bookmark: return bookmarksCount
         }
     }
 }

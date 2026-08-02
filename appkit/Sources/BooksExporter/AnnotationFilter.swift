@@ -12,6 +12,13 @@ enum AnnotationFilter: Equatable {
             .sorted { $0.sortOrder < $1.sortOrder }
             .map { .type($0) }
 
+    func count(in book: Book) -> Int {
+        switch self {
+        case .all: return book.totalAnnotations
+        case .type(let type): return book.count(of: type)
+        }
+    }
+
     func title(for book: Book) -> String {
         switch self {
         case .all:

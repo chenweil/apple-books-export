@@ -61,15 +61,14 @@ class DatabaseService {
         try open()
         defer { close() }
 
-        // Step 1: Query AEAnnotation for annotation counts per book
+        // Step 1: 逐条取「有无批注 / 有无正文」,在 Swift 侧用 AnnotationClassifier 归类。
+        // 不在 SQL 里写分类规则,否则这里和 getAnnotations 会各写一份、迟早漂移。
         let countQuery = """
         SELECT ZANNOTATIONASSETID,
-               SUM(CASE WHEN ZANNOTATIONTYPE IN (2,3) THEN 1 ELSE 0 END) as highlights,
-               SUM(CASE WHEN ZANNOTATIONTYPE = 1 THEN 1 ELSE 0 END) as notes,
-               SUM(CASE WHEN ZANNOTATIONTYPE = 0 THEN 1 ELSE 0 END) as bookmarks
+               CASE WHEN COALESCE(ZANNOTATIONNOTE, '') <> '' THEN 1 ELSE 0 END,
+               CASE WHEN COALESCE(ZANNOTATIONSELECTEDTEXT, '') <> '' THEN 1 ELSE 0 END
         FROM ZAEANNOTATION
         WHERE (ZANNOTATIONDELETED IS NULL OR ZANNOTATIONDELETED = 0)
-        GROUP BY ZANNOTATIONASSETID
         """
 
         var countStatement: OpaquePointer?
@@ -79,19 +78,28 @@ class DatabaseService {
         defer { sqlite3_finalize(countStatement) }
 
         struct AnnotationCount {
-            let highlights: Int
-            let notes: Int
-            let bookmarks: Int
-            var total: Int { highlights + notes + bookmarks }
+            var highlights = 0
+            var notes = 0
+            var total: Int { highlights + notes }
         }
 
         var countsByAssetId: [String: AnnotationCount] = [:]
         while sqlite3_step(countStatement) == SQLITE_ROW {
             guard let assetId = sqlite3_column_text(countStatement, 0) else { continue }
-            let h = Int(sqlite3_column_int(countStatement, 1))
-            let n = Int(sqlite3_column_int(countStatement, 2))
-            let b = Int(sqlite3_column_int(countStatement, 3))
-            countsByAssetId[String(cString: assetId)] = AnnotationCount(highlights: h, notes: n, bookmarks: b)
+            let hasNote = sqlite3_column_int(countStatement, 1) == 1
+            let hasSelectedText = sqlite3_column_int(countStatement, 2) == 1
+
+            guard let type = AnnotationClassifier.classify(hasNote: hasNote, hasSelectedText: hasSelectedText) else {
+                continue
+            }
+
+            let key = String(cString: assetId)
+            var count = countsByAssetId[key] ?? AnnotationCount()
+            switch type {
+            case .highlight: count.highlights += 1
+            case .note: count.notes += 1
+            }
+            countsByAssetId[key] = count
         }
 
         guard !countsByAssetId.isEmpty else { return [] }
@@ -121,8 +129,7 @@ class DatabaseService {
                     author: author,
                     totalAnnotations: count.total,
                     highlightsCount: count.highlights,
-                    notesCount: count.notes,
-                    bookmarksCount: count.bookmarks
+                    notesCount: count.notes
                 ))
             }
         }
@@ -161,21 +168,18 @@ class DatabaseService {
         
         while sqlite3_step(statement) == SQLITE_ROW {
             guard let uid = sqlite3_column_text(statement, 0) else { continue }
-            
-            let typeRaw = sqlite3_column_int(statement, 1)
+
             let content = sqlite3_column_text(statement, 2).map { String(cString: $0) }
             let note = sqlite3_column_text(statement, 3).map { String(cString: $0) }
             let createdAtRaw = sqlite3_column_double(statement, 4)
             let location = sqlite3_column_text(statement, 5).map { String(cString: $0) } ?? ""
-            
-            let type: AnnotationType
-            switch Int(typeRaw) {
-            case 0: type = .bookmark
-            case 1: type = .note
-            case 2, 3: type = .highlight
-            default: continue
-            }
-            
+
+            // 没有正文也没有批注的行只会渲染成一个孤零零的位置,丢弃。
+            guard let type = AnnotationClassifier.classify(
+                hasNote: !(note ?? "").isEmpty,
+                hasSelectedText: !(content ?? "").isEmpty
+            ) else { continue }
+
             let createdAt = Date(timeIntervalSinceReferenceDate: TimeInterval(createdAtRaw))
             
             annotations.append(Annotation(
