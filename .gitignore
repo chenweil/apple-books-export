@@ -47,3 +47,14 @@ exports/
 *.md
 !README.md
 !.gitignore
+
+# main 分支的文件与构建产物（切分支后残留在工作区，不属于本分支）
+# 没有这几条时，在 appkit 上执行 git add -A 会把它们全部暂存，
+# 其中 knowledge_config.json 含 API key。
+/target/
+node_modules/
+Cargo.lock
+knowledge_config.json
+.agents/
+/src-tauri/
+/tui/
