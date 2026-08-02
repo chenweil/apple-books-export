@@ -33,6 +33,7 @@ enum VerifyLayout {
         checkDetailLayout()
         checkAnnotationRowHeight()
         checkSortAccessibility()
+        checkAnnotationFilter()
 
         print("\n\(failures.isEmpty ? "全部通过" : "失败 \(failures.count) 项: \(failures.joined(separator: ", "))")")
         exit(failures.isEmpty ? 0 : 1)
@@ -214,5 +215,85 @@ enum VerifyLayout {
             return "无 AXSortDirection"
         }
         return "\(value)"
+    }
+
+    private static func checkAnnotationFilter() {
+        print("\n笔记类型筛选")
+        let book = Book(id: "b1", title: "测试书", author: "某人",
+                        totalAnnotations: 6, highlightsCount: 3,
+                        notesCount: 2, bookmarksCount: 1)
+        let annotations =
+            (0..<3).map { sample("h\($0)", .highlight) }
+            + (0..<2).map { sample("n\($0)", .note) }
+            + [sample("b0", .bookmark)]
+
+        // 纯函数层
+        check("filter .all 不改变集合",
+              AnnotationFilter.all.apply(to: annotations).count == 6,
+              "\(AnnotationFilter.all.apply(to: annotations).count)")
+        check("filter .highlight 只留高亮",
+              AnnotationFilter.type(.highlight).apply(to: annotations).allSatisfy { $0.type == .highlight }
+                  && AnnotationFilter.type(.highlight).apply(to: annotations).count == 3,
+              "\(AnnotationFilter.type(.highlight).apply(to: annotations).count) 条")
+        check("段顺序为 全部/高亮/笔记/书签",
+              AnnotationFilter.ordered == [.all, .type(.highlight), .type(.note), .type(.bookmark)],
+              "\(AnnotationFilter.ordered.map { $0.title(for: book) })")
+        check("段标题带计数",
+              AnnotationFilter.ordered.map { $0.title(for: book) } == ["全部 6", "高亮 3", "笔记 2", "书签 1"],
+              "\(AnnotationFilter.ordered.map { $0.title(for: book) })")
+
+        // UI 层
+        let detail = BookDetailView()
+        hosted(detail, width: 779, height: 700)
+        guard let segmented = firstSegmentedControl(in: detail) else {
+            check("详情页有分段筛选控件", false, "找不到 NSSegmentedControl")
+            return
+        }
+        check("详情页有分段筛选控件", true, "\(segmented.segmentCount) 段")
+
+        detail.show(book: book)
+        detail.setAnnotations(annotations)
+        check("段数 = 4", segmented.segmentCount == 4, "\(segmented.segmentCount)")
+        check("默认选中「全部」", segmented.selectedSegment == 0, "selectedSegment=\(segmented.selectedSegment)")
+        check("默认显示全部 6 条", detail.annotations.count == 6, "\(detail.annotations.count)")
+
+        select(segment: 1, in: segmented)
+        check("选「高亮」后只剩 3 条",
+              detail.annotations.count == 3 && detail.annotations.allSatisfy { $0.type == .highlight },
+              "\(detail.annotations.count) 条")
+
+        select(segment: 3, in: segmented)
+        check("选「书签」后只剩 1 条",
+              detail.annotations.count == 1 && detail.annotations.allSatisfy { $0.type == .bookmark },
+              "\(detail.annotations.count) 条")
+
+        select(segment: 0, in: segmented)
+        check("切回「全部」恢复 6 条", detail.annotations.count == 6, "\(detail.annotations.count)")
+
+        // 换书必须重置筛选,否则新书会沿用上一本的筛选却没有任何提示
+        select(segment: 1, in: segmented)
+        detail.show(book: book)
+        check("换书重置为「全部」", segmented.selectedSegment == 0, "selectedSegment=\(segmented.selectedSegment)")
+    }
+
+    private static func sample(_ id: String, _ type: AnnotationType) -> Annotation {
+        Annotation(id: id, type: type, chapterTitle: "第一章", locationInfo: "",
+                   contentText: "正文 \(id)", noteText: nil,
+                   createdAt: Date(timeIntervalSinceReferenceDate: 0))
+    }
+
+    private static func firstSegmentedControl(in view: NSView) -> NSSegmentedControl? {
+        if let control = view as? NSSegmentedControl { return control }
+        for subview in view.subviews {
+            if let found = firstSegmentedControl(in: subview) { return found }
+        }
+        return nil
+    }
+
+    private static func select(segment: Int, in control: NSSegmentedControl) {
+        control.selectedSegment = segment
+        if let action = control.action {
+            NSApp.sendAction(action, to: control.target, from: control)
+        }
     }
 }

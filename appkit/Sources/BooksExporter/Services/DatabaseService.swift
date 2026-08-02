@@ -121,7 +121,6 @@ class DatabaseService {
                     author: author,
                     totalAnnotations: count.total,
                     highlightsCount: count.highlights,
-                    annotationsCount: 0,
                     notesCount: count.notes,
                     bookmarksCount: count.bookmarks
                 ))

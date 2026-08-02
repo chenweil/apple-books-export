@@ -3,7 +3,7 @@ import AppKit
 final class BookDetailView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     private let titleLabel = NSTextField(labelWithString: "选择一本书")
     private let authorLabel = NSTextField(labelWithString: "")
-    private let statsLabel = NSTextField(labelWithString: "")
+    private let typeFilter = NSSegmentedControl()
     private let statusLabel = NSTextField(labelWithString: "从左侧列表选择一本书")
     private let tableView = NSTableView()
     private let scrollView = NSScrollView()
@@ -16,13 +16,52 @@ final class BookDetailView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     var onExportRequested: (() -> Void)?
     var onCopyRequested: (() -> Void)?
 
-    var annotations: [Annotation] = [] {
+    private var book: Book?
+    private var allAnnotations: [Annotation] = []
+    private var filter: AnnotationFilter = .all
+
+    /// 当前展示的(已按类型筛选的)笔记。导出与复制都以它为准 —— 所见即所导。
+    private(set) var annotations: [Annotation] = [] {
         didSet {
             tableView.reloadData()
-            statusLabel.stringValue = annotations.isEmpty ? "没有找到笔记" : "共 \(annotations.count) 条笔记"
-            exportButton.isEnabled = !isExporting && !annotations.isEmpty
-            copyButton.isEnabled = !isCopying && !annotations.isEmpty
+            statusLabel.stringValue = statusText()
+            updateActionButtons()
         }
+    }
+
+    func setAnnotations(_ annotations: [Annotation]) {
+        allAnnotations = annotations
+        applyFilter()
+    }
+
+    private func applyFilter() {
+        annotations = filter.apply(to: allAnnotations)
+    }
+
+    private func statusText() -> String {
+        guard !allAnnotations.isEmpty else { return "没有找到笔记" }
+        switch filter {
+        case .all:
+            return "共 \(annotations.count) 条笔记"
+        case .type(let type):
+            return annotations.isEmpty
+                ? "这本书没有\(type.shortName)"
+                : "\(annotations.count) 条\(type.shortName)"
+        }
+    }
+
+    /// 按钮标题跟着当前展示的条数走 —— 筛选之后仍写「导出 Markdown」
+    /// 会让人以为导的是全书,跟书单页的「导出当前 N 本」是同一类问题。
+    private func updateActionButtons() {
+        let count = annotations.count
+        exportButton.title = isExporting
+            ? "正在导出…"
+            : (count == 0 ? "导出 Markdown" : "导出当前 \(count) 条")
+        copyButton.title = isCopying
+            ? "正在复制…"
+            : (count == 0 ? "复制 Markdown" : "复制当前 \(count) 条")
+        exportButton.isEnabled = !isExporting && count > 0
+        copyButton.isEnabled = !isCopying && count > 0
     }
 
     override init(frame frameRect: NSRect) {
@@ -35,11 +74,32 @@ final class BookDetailView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     }
 
     func show(book: Book) {
+        self.book = book
         titleLabel.stringValue = book.title
         authorLabel.stringValue = "作者：\(book.author)"
-        statsLabel.stringValue = "高亮 \(book.highlightsCount)  ·  标注 \(book.annotationsCount)  ·  笔记 \(book.notesCount)  ·  书签 \(book.bookmarksCount)"
+
+        // 换书重置筛选,否则新书会沿用上一本的筛选却没有任何提示。
+        filter = .all
+        typeFilter.selectedSegment = 0
+        updateFilterTitles(for: book)
+
+        allAnnotations = []
         annotations = []
         statusLabel.stringValue = "正在读取笔记…"
+    }
+
+    private func updateFilterTitles(for book: Book) {
+        for (index, option) in AnnotationFilter.ordered.enumerated() {
+            typeFilter.setLabel(option.title(for: book), forSegment: index)
+            typeFilter.setEnabled(true, forSegment: index)
+        }
+    }
+
+    @objc private func filterChanged() {
+        let index = typeFilter.selectedSegment
+        guard AnnotationFilter.ordered.indices.contains(index) else { return }
+        filter = AnnotationFilter.ordered[index]
+        applyFilter()
     }
 
     func setError(_ error: Error) {
@@ -48,14 +108,12 @@ final class BookDetailView: NSView, NSTableViewDataSource, NSTableViewDelegate {
 
     func setExporting(_ exporting: Bool) {
         isExporting = exporting
-        exportButton.title = exporting ? "正在导出…" : "导出 Markdown"
-        exportButton.isEnabled = !exporting && !annotations.isEmpty
+        updateActionButtons()
     }
 
     func setCopying(_ copying: Bool) {
         isCopying = copying
-        copyButton.title = copying ? "正在复制…" : "复制 Markdown"
-        copyButton.isEnabled = !copying && !annotations.isEmpty
+        updateActionButtons()
     }
 
     @objc private func exportRequested() {
@@ -70,9 +128,18 @@ final class BookDetailView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         titleLabel.font = .systemFont(ofSize: 20, weight: .bold)
         titleLabel.lineBreakMode = .byTruncatingTail
         authorLabel.textColor = .secondaryLabelColor
-        statsLabel.textColor = .secondaryLabelColor
-        statsLabel.font = .monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
         statusLabel.textColor = .secondaryLabelColor
+
+        typeFilter.segmentStyle = .automatic
+        typeFilter.trackingMode = .selectOne
+        typeFilter.segmentCount = AnnotationFilter.ordered.count
+        typeFilter.font = .monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
+        typeFilter.target = self
+        typeFilter.action = #selector(filterChanged)
+        for (index, option) in AnnotationFilter.ordered.enumerated() {
+            typeFilter.setLabel(option.placeholderTitle, forSegment: index)
+        }
+        typeFilter.selectedSegment = 0
 
         let annotationColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("annotation"))
         annotationColumn.title = "笔记"
@@ -99,7 +166,7 @@ final class BookDetailView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         copyButton.action = #selector(copyRequested)
         copyButton.isEnabled = false
 
-        let header = NSStackView(views: [titleLabel, authorLabel, statsLabel, statusLabel])
+        let header = NSStackView(views: [titleLabel, authorLabel, typeFilter, statusLabel])
         header.orientation = .vertical
         header.alignment = .leading
         header.spacing = 6

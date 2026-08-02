@@ -33,7 +33,7 @@ final class BookDetailViewController: NSViewController {
             guard let self else { return }
             let annotations = await bookService.getAnnotations(for: book.id)
             guard !Task.isCancelled else { return }
-            detailView.annotations = annotations
+            detailView.setAnnotations(annotations)
             if let error = bookService.currentError {
                 detailView.setError(error)
             }
