@@ -19,8 +19,8 @@ final class BookListView: NSView, NSTableViewDataSource, NSTableViewDelegate, NS
     }
 
     private var allBooks: [Book] = []
-    private var sortColumn: String? = nil {
-        didSet { UserDefaults.standard.set(sortColumn, forKey: BookListView.sortColumnKey) }
+    private var sortColumn: BookColumn? = nil {
+        didSet { UserDefaults.standard.set(sortColumn?.rawValue, forKey: BookListView.sortColumnKey) }
     }
     private var sortAscending: Bool = true {
         didSet { UserDefaults.standard.set(sortAscending, forKey: BookListView.sortAscendingKey) }
@@ -41,16 +41,21 @@ final class BookListView: NSView, NSTableViewDataSource, NSTableViewDelegate, NS
         exportAllButton.isEnabled = !isLoading && !books.isEmpty
     }
 
-    private static let sortColumnKey = "appkit.sortColumn"
-    private static let sortAscendingKey = "appkit.sortAscending"
+    static let sortColumnKey = "appkit.sortColumn"
+    static let sortAscendingKey = "appkit.sortAscending"
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
-        if let savedSortColumn = UserDefaults.standard.string(forKey: BookListView.sortColumnKey) {
-            sortColumn = savedSortColumn
+        if let saved = UserDefaults.standard.string(forKey: BookListView.sortColumnKey),
+           let column = BookColumn(rawValue: saved) {
+            sortColumn = column
             sortAscending = UserDefaults.standard.bool(forKey: BookListView.sortAscendingKey)
         }
         configureView()
+
+        // 排序偏好是从 UserDefaults 恢复的,这里补画一次,
+        // 否则启动后数据已排序但表头没有任何状态。
+        syncSortHeader(announce: false)
     }
 
     required init?(coder: NSCoder) {
@@ -101,8 +106,9 @@ final class BookListView: NSView, NSTableViewDataSource, NSTableViewDelegate, NS
     }
 
     func tableView(_ tableView: NSTableView, didClick tableColumn: NSTableColumn) {
-        let id = tableColumn.identifier.rawValue
-        if sortColumn == id {
+        guard let clicked = BookColumn(rawValue: tableColumn.identifier.rawValue) else { return }
+
+        if sortColumn == clicked {
             if sortAscending {
                 sortAscending = false
             } else {
@@ -110,25 +116,51 @@ final class BookListView: NSView, NSTableViewDataSource, NSTableViewDelegate, NS
                 sortAscending = true
             }
         } else {
-            sortColumn = id
+            sortColumn = clicked
             sortAscending = true
         }
-        updateSortIndicators()
+        syncSortHeader(announce: true)
         tableView.deselectAll(nil)
         onSelectionChanged?(nil)
         applyFilter()
     }
 
-    private func updateSortIndicators() {
+    /// 三态循环是手写的,所以 AXSortDirection 也必须手写 —— NSTableView 原生的
+    /// sortDescriptorPrototype 表头只有升/降两态,套上去会丢掉「无排序」这一态。
+    /// VoiceOver 读的是表头 proxy 的 AXSortDirection;指示图标只是视觉通道,
+    /// 它的 accessibilityDescription 不会被 AX 客户端读到(实测为 nil)。
+    private func syncSortHeader(announce: Bool) {
         for column in tableView.tableColumns {
-            let id = column.identifier.rawValue
-            if id == sortColumn {
+            let isSorted = BookColumn(rawValue: column.identifier.rawValue) == sortColumn
+
+            if isSorted {
                 let symbol = sortAscending ? "arrow.up" : "arrow.down"
-                tableView.setIndicatorImage(NSImage(systemSymbolName: symbol, accessibilityDescription: nil), in: column)
+                tableView.setIndicatorImage(
+                    NSImage(systemSymbolName: symbol, accessibilityDescription: sortDescription),
+                    in: column
+                )
+                column.headerCell.setAccessibilitySortDirection(sortAscending ? .ascending : .descending)
             } else {
                 tableView.setIndicatorImage(nil, in: column)
+                column.headerCell.setAccessibilitySortDirection(.unknown)
             }
         }
+
+        // AXSortDirection 只有主动查询才读得到。用户点完表头焦点还停在表头上,
+        // 不播报的话状态变化是无声的。
+        guard announce else { return }
+        NSAccessibility.post(
+            element: NSApp as Any,
+            notification: .announcementRequested,
+            userInfo: [
+                .announcement: sortColumn == nil ? "已取消排序" : "\(sortColumn!.title),\(sortDescription)",
+                .priority: NSAccessibilityPriorityLevel.medium.rawValue
+            ]
+        )
+    }
+
+    private var sortDescription: String {
+        sortAscending ? "已按升序排序" : "已按降序排序"
     }
 
     private func configureView() {
@@ -139,13 +171,13 @@ final class BookListView: NSView, NSTableViewDataSource, NSTableViewDelegate, NS
         searchField.delegate = self
         searchField.placeholderString = "搜索书名或作者"
 
-        let bookColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("book"))
-        bookColumn.title = "书名"
+        let bookColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(BookColumn.book.rawValue))
+        bookColumn.title = BookColumn.book.title
         bookColumn.width = 240
         bookColumn.resizingMask = .autoresizingMask
 
-        let countColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("count"))
-        countColumn.title = "笔记"
+        let countColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(BookColumn.count.rawValue))
+        countColumn.title = BookColumn.count.title
         countColumn.width = 80
 
         tableView.addTableColumn(bookColumn)
@@ -203,16 +235,15 @@ final class BookListView: NSView, NSTableViewDataSource, NSTableViewDelegate, NS
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         let book = books[row]
-        let identifier = tableColumn?.identifier ?? NSUserInterfaceItemIdentifier("book")
-        let isCountColumn = identifier.rawValue == "count"
+        guard let identifier = tableColumn?.identifier,
+              let column = BookColumn(rawValue: identifier.rawValue) else { return nil }
 
         let label = tableView.makeView(withIdentifier: identifier, owner: self) as? NSTextField
-            ?? makeCellLabel(identifier: identifier, tabularDigits: isCountColumn)
+            ?? makeCellLabel(identifier: identifier, tabularDigits: column == .count)
 
-        switch identifier.rawValue {
-        case "book": label.stringValue = book.title
-        case "count": label.stringValue = book.displayTotalCount
-        default: label.stringValue = ""
+        switch column {
+        case .book: label.stringValue = book.title
+        case .count: label.stringValue = book.displayTotalCount
         }
         return label
     }

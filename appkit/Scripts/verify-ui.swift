@@ -32,6 +32,7 @@ enum VerifyLayout {
         checkSplitView()
         checkDetailLayout()
         checkAnnotationRowHeight()
+        checkSortAccessibility()
 
         print("\n\(failures.isEmpty ? "全部通过" : "失败 \(failures.count) 项: \(failures.joined(separator: ", "))")")
         exit(failures.isEmpty ? 0 : 1)
@@ -124,5 +125,94 @@ enum VerifyLayout {
         hosted(cell, width: 600, height: cell.fittingSize.height)
         check("长文不被 64pt 截断", cell.fittingSize.height > 64,
               "fittingSize.height=\(cell.fittingSize.height)")
+    }
+
+    private static func checkSortAccessibility() {
+        print("\n#6 排序可访问性")
+        let defaults = UserDefaults.standard
+
+        // 无损保存/恢复:bool(forKey:) 对缺失键返回 false,直接回写会
+        // 凭空造出一个键,污染真实用户偏好。
+        let savedColumn = defaults.object(forKey: BookListView.sortColumnKey)
+        let savedAscending = defaults.object(forKey: BookListView.sortAscendingKey)
+        defer {
+            restore(savedColumn, forKey: BookListView.sortColumnKey)
+            restore(savedAscending, forKey: BookListView.sortAscendingKey)
+        }
+
+        defaults.removeObject(forKey: BookListView.sortColumnKey)
+        defaults.removeObject(forKey: BookListView.sortAscendingKey)
+
+        guard let (list, table, bookColumn, countColumn) = makeList() else { return }
+
+        check("初始无排序两列都是 unknown",
+              direction(table, bookColumn) == "AXUnknownSortDirection"
+                  && direction(table, countColumn) == "AXUnknownSortDirection",
+              "book=\(direction(table, bookColumn)) count=\(direction(table, countColumn))")
+
+        list.tableView(table, didClick: bookColumn)
+        check("第一次点击 = 升序", direction(table, bookColumn) == "AXAscendingSortDirection",
+              direction(table, bookColumn))
+        check("未参与排序的列保持 unknown", direction(table, countColumn) == "AXUnknownSortDirection",
+              direction(table, countColumn))
+
+        list.tableView(table, didClick: bookColumn)
+        check("第二次点击 = 降序", direction(table, bookColumn) == "AXDescendingSortDirection",
+              direction(table, bookColumn))
+
+        list.tableView(table, didClick: bookColumn)
+        check("第三次点击 = 回到无排序(三态保留)",
+              direction(table, bookColumn) == "AXUnknownSortDirection", direction(table, bookColumn))
+        check("无排序时不留指示图标", table.indicatorImage(in: bookColumn) == nil,
+              table.indicatorImage(in: bookColumn)?.accessibilityDescription ?? "nil")
+
+        // 排序偏好持久化后,启动时必须把状态带出来,否则它只存在于数据里。
+        defaults.set(BookColumn.count.rawValue, forKey: BookListView.sortColumnKey)
+        defaults.set(false, forKey: BookListView.sortAscendingKey)
+        guard let (_, restoredTable, _, restoredCount) = makeList() else { return }
+        check("恢复保存的排序会显示指示图标", restoredTable.indicatorImage(in: restoredCount) != nil,
+              restoredTable.indicatorImage(in: restoredCount)?.accessibilityDescription ?? "nil")
+        check("恢复保存的排序方向正确",
+              direction(restoredTable, restoredCount) == "AXDescendingSortDirection",
+              direction(restoredTable, restoredCount))
+    }
+
+    private static func restore(_ value: Any?, forKey key: String) {
+        if let value {
+            UserDefaults.standard.set(value, forKey: key)
+        } else {
+            UserDefaults.standard.removeObject(forKey: key)
+        }
+    }
+
+    private static func makeList() -> (BookListView, NSTableView, NSTableColumn, NSTableColumn)? {
+        let list = BookListView()
+        list.frame = NSRect(x: 0, y: 0, width: 420, height: 600)
+        list.layoutSubtreeIfNeeded()
+        guard let table = list.subviews.compactMap({ $0 as? NSScrollView }).first?.documentView as? NSTableView,
+              let book = table.tableColumns.first(where: { $0.identifier.rawValue == BookColumn.book.rawValue }),
+              let count = table.tableColumns.first(where: { $0.identifier.rawValue == BookColumn.count.rawValue }) else {
+            check("书单表格可解析", false, "找不到表格或列")
+            return nil
+        }
+        table.headerView?.tableView = table
+        return (list, table, book, count)
+    }
+
+    /// 读 VoiceOver 真正消费的通道 —— 表头 proxy 上的 AXSortDirection。
+    /// 直接读 headerCell.accessibilitySortDirection() 只是把刚写进去的值
+    /// 再读一遍,测不到 AppKit 是否真的把它转发给了 AX 客户端。
+    private static func direction(_ table: NSTableView, _ column: NSTableColumn) -> String {
+        guard let index = table.tableColumns.firstIndex(of: column),
+              let children = table.headerView?.accessibilityChildren(),
+              index < children.count else { return "无 proxy" }
+
+        let element = children[index] as AnyObject
+        let selector = Selector(("accessibilityAttributeValue:"))
+        guard element.responds(to: selector),
+              let value = element.perform(selector, with: "AXSortDirection")?.takeUnretainedValue() else {
+            return "无 AXSortDirection"
+        }
+        return "\(value)"
     }
 }
