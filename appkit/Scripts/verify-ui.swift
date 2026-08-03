@@ -418,6 +418,10 @@ enum VerifyLayout {
                   && firstButtonFrame.maxX > firstCell.bounds.maxX - 20
                   && secondButtonFrame.maxX > secondCell.bounds.maxX - 20,
               "long.maxX=\(firstButtonFrame.maxX) short.maxX=\(secondButtonFrame.maxX) cells=\(firstCell.bounds.maxX)/\(secondCell.bounds.maxX)")
+        check("生成卡片入口垂直居中",
+              abs(firstButtonFrame.midY - firstCell.bounds.midY) <= 1
+                  && abs(secondButtonFrame.midY - secondCell.bounds.midY) <= 1,
+              "long.midY=\(firstButtonFrame.midY)/\(firstCell.bounds.midY) short.midY=\(secondButtonFrame.midY)/\(secondCell.bounds.midY)")
     }
 
     private static func checkShareCardAlternativeLayout() {

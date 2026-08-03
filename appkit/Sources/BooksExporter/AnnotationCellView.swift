@@ -60,7 +60,7 @@ final class AnnotationCellView: NSTableCellView {
         cardButton.setContentCompressionResistancePriority(.required, for: .horizontal)
 
         rowStack.orientation = .horizontal
-        rowStack.alignment = .top
+        rowStack.alignment = .centerY
         rowStack.distribution = .fill
         rowStack.spacing = 12
         rowStack.translatesAutoresizingMaskIntoConstraints = false
