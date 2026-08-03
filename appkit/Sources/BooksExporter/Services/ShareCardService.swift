@@ -317,12 +317,19 @@ public final class ShareCardService {
                       options: [.usesLineFragmentOrigin, .usesFontLeading])
         }
 
+        let footerParagraphStyle = NSMutableParagraphStyle()
+        footerParagraphStyle.alignment = .left
+        footerParagraphStyle.lineBreakMode = .byCharWrapping
         let footerAttributes: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: 30, weight: .medium),
-            .foregroundColor: NSColor(calibratedWhite: 0.18, alpha: 0.78)
+            .foregroundColor: NSColor(calibratedWhite: 0.18, alpha: 0.78),
+            .paragraphStyle: footerParagraphStyle
         ]
         NSAttributedString(string: card.attributionText, attributes: footerAttributes)
-            .draw(at: NSPoint(x: 130, y: 150))
+            .draw(
+                with: NSRect(x: 130, y: 90, width: 940, height: 180),
+                options: [.usesLineFragmentOrigin, .usesFontLeading]
+            )
 
         guard let data = bitmap.representation(using: .png, properties: [:]) else {
             throw ShareCardExportError.imageEncodingFailed

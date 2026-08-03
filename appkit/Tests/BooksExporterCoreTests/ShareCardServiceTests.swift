@@ -121,6 +121,49 @@ final class ShareCardServiceTests: XCTestCase {
         XCTAssertNotEqual(result.files.first?.lastPathComponent, result.files.last?.lastPathComponent)
     }
 
+    func testLongAttributionWrapsAcrossFooterLines() throws {
+        let book = Book(
+            id: "book-long-attribution",
+            title: "纳瓦尔宝典（硅谷投资人纳瓦尔十年人生智慧，教你如何获得财富与幸福。新时代创业者必读）",
+            author: "长期思考与独立判断的阅读者",
+            totalAnnotations: 1,
+            highlightsCount: 1,
+            notesCount: 0
+        )
+        let card = ShareCardService().makeCard(
+            for: book,
+            annotation: makeAnnotation(content: "A short passage.", note: nil)
+        )
+        let image = try ShareCardService().previewImage(for: card)
+        let bitmap = try XCTUnwrap(image.representations.compactMap { $0 as? NSBitmapImageRep }.first)
+
+        let footerRows = (1300..<1580).map { y in
+            let darkPixels = (120..<1080).reduce(into: 0) { count, x in
+                guard let color = bitmap.colorAt(x: x, y: y),
+                      let converted = color.usingColorSpace(.deviceRGB) else { return }
+                var red: CGFloat = 0
+                var green: CGFloat = 0
+                var blue: CGFloat = 0
+                var alpha: CGFloat = 0
+                converted.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
+                if alpha > 0.5 && red < 0.5 && green < 0.5 && blue < 0.5 {
+                    count += 1
+                }
+            }
+            return darkPixels > 80
+        }
+        var lineGroups = 0
+        var inLine = false
+        for hasDarkPixels in footerRows {
+            if hasDarkPixels && !inLine {
+                lineGroups += 1
+            }
+            inLine = hasDarkPixels
+        }
+
+        XCTAssertGreaterThanOrEqual(lineGroups, 2)
+    }
+
     func testExportFolderPreferenceIsOffByDefaultAndCanRevealAfterSaving() throws {
         let defaults = UserDefaults.standard
         let originalValue = defaults.object(forKey: ShareCardPreferences.openExportFolderKey)
