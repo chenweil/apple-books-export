@@ -4,6 +4,9 @@ AppKit 版本的 Apple Books 笔记导出工具,把高亮和笔记导出为 Mark
 
 > **状态**: 实验性研究项目,可能归档。当前聚焦 AppKit GUI 栈。
 
+当前 AppKit 版本: `v0.1.1` (`build 2`, unsigned)。变更记录见
+[`CHANGELOG.md`](CHANGELOG.md)。
+
 ## 系统要求
 
 - macOS 14.0+
@@ -32,10 +35,10 @@ chmod +x Scripts/package-dmg.sh
 ./Scripts/package-dmg.sh
 ```
 
-产物位于仓库根目录的 `dist/Books-Exporter-0.1.0-unsigned.dmg`。也可以覆盖版本号：
+产物位于仓库根目录的 `dist/Books-Exporter-0.1.1-unsigned.dmg`。也可以覆盖版本号：
 
 ```bash
-APP_VERSION=0.1.1 BUILD_VERSION=2 ./Scripts/package-dmg.sh
+APP_VERSION=0.1.2 BUILD_VERSION=3 ./Scripts/package-dmg.sh
 ```
 
 安装时将 DMG 中的 `Books Exporter.app` 拖到 `/Applications`。首次打开如果被 Gatekeeper 拦截，优先在 Finder 中右键应用并选择“打开”；必要时可执行：
