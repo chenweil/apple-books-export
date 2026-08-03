@@ -37,6 +37,7 @@ enum VerifyLayout {
         checkExportScope()
         checkCardEntry()
         checkShareCardAlternativeLayout()
+        checkShareCardActions()
         checkClassifier()
         checkBookRowCentering()
 
@@ -461,6 +462,33 @@ enum VerifyLayout {
               closeFrame.minX >= -0.5 && closeFrame.maxX <= editor.view.bounds.maxX + 0.5
                   && closeFrame.minY >= -0.5 && closeFrame.maxY <= editor.view.bounds.maxY + 0.5,
               "frame=\(closeFrame) editor=\(editor.view.bounds)")
+    }
+
+    private static func checkShareCardActions() {
+        print("\n分享卡片动作")
+        let book = Book(id: "b1", title: "测试书", author: "某人",
+                        totalAnnotations: 1, highlightsCount: 1, notesCount: 0)
+        var copiedImages: [NSImage] = []
+        let editor = ShareCardEditorViewController(
+            book: book,
+            annotation: sample("h0", .highlight),
+            copyHandler: { images in
+                copiedImages = images
+                return true
+            }
+        )
+        editor.loadView()
+        hosted(editor.view, width: 980, height: 700)
+        editor.view.layoutSubtreeIfNeeded()
+
+        guard let copyButton = view(titled: "复制图片", in: editor.view) as? NSButton else {
+            check("复制图片控件可定位", false, "找不到按钮")
+            return
+        }
+        check("复制图片默认可用", copyButton.isEnabled, "enabled=\(copyButton.isEnabled)")
+        invoke(copyButton)
+        check("复制图片传出预览图", copiedImages.count == 1 && copiedImages[0].size == ShareCardService.canvasSize,
+              "count=\(copiedImages.count) size=\(copiedImages.first?.size ?? .zero)")
     }
 
     private static func invoke(_ item: NSMenuItem) {

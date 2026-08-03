@@ -18,15 +18,27 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate 
     private let changeButton = NSButton(title: "换一换", target: nil, action: nil)
     private let alternativeStack = NSStackView()
     private let folderCheckbox = NSButton(checkboxWithTitle: "保存后打开文件夹", target: nil, action: nil)
+    private let copyButton = NSButton(title: "复制图片", target: nil, action: nil)
     private let saveButton = NSButton(title: "保存 PNG", target: nil, action: nil)
     private let shareButton = NSButton(title: "分享", target: nil, action: nil)
+    private let airDropButton = NSButton(title: "AirDrop", target: nil, action: nil)
     private let closeButton = NSButton(title: "完成", target: nil, action: nil)
     private let statusLabel = NSTextField(labelWithString: "")
+    private let copyHandler: ([NSImage]) -> Bool
 
-    init(book: Book, annotation: Annotation) {
+    init(
+        book: Book,
+        annotation: Annotation,
+        copyHandler: @escaping ([NSImage]) -> Bool = { images in
+            let pasteboard = NSPasteboard.general
+            pasteboard.clearContents()
+            return pasteboard.writeObjects(images)
+        }
+    ) {
         self.book = book
         self.annotation = annotation
         self.card = ShareCardService().makeCard(for: book, annotation: annotation)
+        self.copyHandler = copyHandler
         super.init(nibName: nil, bundle: nil)
         preferredContentSize = NSSize(width: 980, height: 700)
     }
@@ -99,6 +111,15 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate 
         folderCheckbox.target = self
         folderCheckbox.action = #selector(folderPreferenceChanged)
 
+        copyButton.image = NSImage(
+            systemSymbolName: "doc.on.doc",
+            accessibilityDescription: "复制图片"
+        )
+        copyButton.imagePosition = .imageLeading
+        copyButton.target = self
+        copyButton.action = #selector(copyRequested)
+        copyButton.isEnabled = false
+
         saveButton.image = NSImage(
             systemSymbolName: "square.and.arrow.down",
             accessibilityDescription: "保存 PNG"
@@ -116,6 +137,12 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate 
         shareButton.target = self
         shareButton.action = #selector(shareRequested)
         shareButton.isEnabled = false
+        shareButton.toolTip = "打开 macOS 分享面板（AirDrop、微信等可用服务）"
+
+        airDropButton.target = self
+        airDropButton.action = #selector(airDropRequested)
+        airDropButton.isHidden = true
+        airDropButton.isEnabled = false
 
         closeButton.target = self
         closeButton.action = #selector(closeRequested)
@@ -132,7 +159,7 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate 
         let controlsTitle = NSTextField(labelWithString: "卡片文字")
         controlsTitle.font = .systemFont(ofSize: 17, weight: .semibold)
 
-        let actionRow = NSStackView(views: [saveButton, shareButton, closeButton])
+        let actionRow = NSStackView(views: [copyButton, saveButton, shareButton, airDropButton, closeButton])
         actionRow.orientation = .horizontal
         actionRow.alignment = .centerY
         actionRow.spacing = 8
@@ -276,6 +303,10 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate 
             let result = try service.export(card, to: directoryURL)
             lastExportResult = result
             shareButton.isEnabled = !result.files.isEmpty
+            let canAirDrop = NSSharingService(named: .sendViaAirDrop)?
+                .canPerform(withItems: result.files) ?? false
+            airDropButton.isHidden = !canAirDrop
+            airDropButton.isEnabled = canAirDrop
             let count = result.files.count
             statusLabel.stringValue = count == 1 ? "已保存" : "已保存 \(count) 张卡片"
         } catch {
@@ -283,10 +314,34 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate 
         }
     }
 
+    @objc private func copyRequested() {
+        do {
+            let pages = service.pages(for: card)
+            let images = try pages.indices.map { try service.previewImage(for: card, pageIndex: $0) }
+            guard !images.isEmpty, copyHandler(images) else {
+                statusLabel.stringValue = "复制失败"
+                return
+            }
+            statusLabel.stringValue = images.count == 1 ? "已复制图片" : "已复制 \(images.count) 张图片"
+        } catch {
+            statusLabel.stringValue = "复制失败：\(error.localizedDescription)"
+        }
+    }
+
     @objc private func shareRequested() {
         guard let result = lastExportResult, !result.files.isEmpty else { return }
         sharePicker = NSSharingServicePicker(items: result.files)
         sharePicker?.show(relativeTo: shareButton.bounds, of: shareButton, preferredEdge: .minY)
+    }
+
+    @objc private func airDropRequested() {
+        guard let result = lastExportResult, !result.files.isEmpty,
+              let airDrop = NSSharingService(named: .sendViaAirDrop),
+              airDrop.canPerform(withItems: result.files) else {
+            statusLabel.stringValue = "AirDrop 当前不可用"
+            return
+        }
+        airDrop.perform(withItems: result.files)
     }
 
     @objc private func closeRequested() {
@@ -322,17 +377,21 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate 
     private func invalidateExport() {
         lastExportResult = nil
         shareButton.isEnabled = false
+        airDropButton.isHidden = true
+        airDropButton.isEnabled = false
         statusLabel.stringValue = ""
     }
 
     private func updatePreview() {
         do {
             previewImageView.image = try service.previewImage(for: card)
+            copyButton.isEnabled = true
             if statusLabel.stringValue.hasPrefix("无法") || statusLabel.stringValue.hasPrefix("保存失败") {
                 statusLabel.stringValue = ""
             }
         } catch {
             previewImageView.image = nil
+            copyButton.isEnabled = false
             statusLabel.stringValue = "请输入卡片文字"
         }
     }
