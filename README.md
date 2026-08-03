@@ -122,11 +122,11 @@ Apple Books 不把「笔记」存成独立对象 —— 笔记就是给高亮加
 | S3 | 完成 | 42pt 最小字号、连续卡片分页、文件命名和打开目录偏好 |
 | S4 | 完成 | 六个主题和按需四个完整 Alternative Cards |
 | S5 | 完成 | 保存轻提示、保存后系统分享和 AppKit library/test target 拆分 |
-| S6 | 完成 | Share Card 支持系统默认/思源黑体切换,预览与导出共用字体 |
+| S6 | 完成 | Share Card 支持系统默认、思源黑体、思源宋体、源界明朝体、演示悠然小楷、演示佛系体、站酷文艺体和庞门正道粗书体切换,预览与导出共用字体 |
 
-Share Card 编辑器当前提供“系统默认”和“思源黑体”两种字体。思源黑体随应用资源打包,
-`appkit/Sources/BooksExporter/Resources/fonts/SourceHanSans-LICENSE.txt` 保留其
-SIL Open Font License 1.1 文本。
+Share Card 编辑器当前提供“系统默认”、思源黑体、思源宋体、源界明朝体、演示悠然小楷、
+演示佛系体、站酷文艺体和庞门正道粗书体共八个选项。字体文件及来源/授权说明随应用资源
+打包,详见 `appkit/Sources/BooksExporter/Resources/fonts/FONT-SOURCES.txt`。
 
 ## 架构选择
 

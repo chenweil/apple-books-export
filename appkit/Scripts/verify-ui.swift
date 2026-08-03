@@ -508,7 +508,7 @@ enum VerifyLayout {
         }
 
         let titles = fontPopup.itemTitles
-        check("字体包含系统默认和思源黑体",
+        check("字体包含全部已接入选项",
               titles == ShareCardFont.allCases.map(\.displayName),
               "字体=\(titles)")
 

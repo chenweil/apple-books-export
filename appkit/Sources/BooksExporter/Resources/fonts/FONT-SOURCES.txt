@@ -1,0 +1,33 @@
+# Share Card Font Sources
+
+The files in this directory are bundled only for the Share Card renderer. The
+font files were retrieved and checked on 2026-08-04. Re-check the linked terms
+before making a public release, especially for fonts without a standard open
+source license.
+
+## Bundled fonts
+
+| File | PostScript name | Source and terms |
+| --- | --- | --- |
+| `SourceHanSansSC-Regular.otf` | `SourceHanSansSC-Regular` | Adobe Source Han Sans; SIL Open Font License 1.1. The license text is in `SourceHanSans-LICENSE.txt`. |
+| `SourceHanSerifSC-Regular.otf` | `SourceHanSerifSC-Regular` | [Adobe Source Han Serif](https://github.com/adobe-fonts/source-han-serif); SIL Open Font License 1.1. The license text is in `SourceHanSerif-LICENSE.txt`. |
+| `Genkai-Mincho.ttf` | `Genkaimincho` | [Genkai Mincho site](https://ffont.jp/genkaimincho/) and [BOOTH release](https://booth.pm/ja/items/1028548); the release states SIL Open Font License 1.1. The generic license text is in `OFL-1.1.txt`. |
+| `SlideYouran-Regular.ttf` | `slideyouran-Regular` | [Original release page](https://mp.weixin.qq.com/s/Q1lAIre4yJ-Zlf2CD82EPA). The publisher describes this font as free for commercial use across channels. |
+| `Slidefu-Regular.ttf` | `Slidefu-Regular` | [Original release page](https://mp.weixin.qq.com/s/iWn8SWH5ymBKmsGiHe8Yfw). The publisher describes this font as free for commercial use across channels. |
+| `ZcoolWenYiTi.ttf` | `zcoolwenyiti` | [Official ZCOOL asset page](https://www.zcool.com.cn/assets/ZNzg1Ng%3D%3D), which states free authorization for public use including commercial use. |
+| `PangMenZhengDao-Cu6.0-Regular.ttf` | `PangMenZhengDao-Cu6.0` | [Original release page](https://mp.weixin.qq.com/s/LZ_PMNc-3uX-Atmri4OLGQ). The release is listed as free for commercial use without authorization. |
+
+The four non-OFL files above are bundled based on the publisher statements
+linked above. Those statements are not replaced by this note or by the
+aggregator that helped locate the files. Do not sell the font files separately,
+modify the fonts, or claim a broader license than the original source grants.
+
+## Not bundled pending authorization
+
+- `手书体`: the [ZCOOL work page](https://www.zcool.com.cn/work/ZMjI2MDk1MDg=.html)
+  currently exposes attachment metadata saying authorization is unclear.
+- `锐字真言体`: the [publisher page](http://reeji.com/font/rui_zi_zhen_yan_ti/)
+  is listed as free for commercial use **with authorization required**.
+
+These two fonts can be added after the author or publisher provides permission
+that covers bundling the font in an application.

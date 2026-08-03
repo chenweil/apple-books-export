@@ -52,24 +52,38 @@ final class ShareCardServiceTests: XCTestCase {
         }
     }
 
-    func testBundledSourceHanSansFontRendersAndSurvivesAlternativeCards() throws {
+    func testBundledFontsRenderAndSurviveAlternativeCards() throws {
         let service = ShareCardService()
-        let card = service.makeCard(
-            for: makeBook(author: "A. Reader"),
-            annotation: makeAnnotation(content: "一段需要保留的中文书摘。", note: nil),
-            font: .sourceHanSansSC
-        )
+        let bundledFonts: [(ShareCardFont, String)] = [
+            (.sourceHanSansSC, "SourceHanSansSC-Regular"),
+            (.genkaiMincho, "Genkaimincho"),
+            (.slideYouran, "slideyouran-Regular"),
+            (.slideFu, "Slidefu-Regular"),
+            (.sourceHanSerifSC, "SourceHanSerifSC-Regular"),
+            (.zcoolWenYiTi, "zcoolwenyiti"),
+            (.pangMenZhengDao, "PangMenZhengDao-Cu6.0")
+        ]
+        XCTAssertEqual(bundledFonts.map(\.0), ShareCardFont.allCases.filter { $0 != .system })
 
-        XCTAssertEqual(card.font, .sourceHanSansSC)
-        XCTAssertEqual(service.pages(for: card).map(\.primaryText).joined(), card.primaryText)
+        for (font, postScriptName) in bundledFonts {
+            let card = service.makeCard(
+                for: makeBook(author: "A. Reader"),
+                annotation: makeAnnotation(content: "一段需要保留的中文书摘。", note: nil),
+                font: font
+            )
 
-        let image = try service.previewImage(for: card)
-        XCTAssertEqual(image.size, ShareCardService.canvasSize)
-        XCTAssertEqual(NSFont(name: "SourceHanSansSC-Regular", size: 42)?.fontName,
-                       "SourceHanSansSC-Regular")
+            XCTAssertEqual(card.font, font)
+            XCTAssertEqual(service.pages(for: card).map(\.primaryText).joined(), card.primaryText)
 
-        let alternatives = service.alternativeCards(for: card)
-        XCTAssertTrue(alternatives.allSatisfy { $0.font == .sourceHanSansSC })
+            let image = try service.previewImage(for: card)
+            XCTAssertEqual(image.size, ShareCardService.canvasSize)
+            XCTAssertEqual(NSFont(name: postScriptName, size: 42)?.fontName,
+                           postScriptName,
+                           "字体未注册: \(font.rawValue)")
+
+            let alternatives = service.alternativeCards(for: card)
+            XCTAssertTrue(alternatives.allSatisfy { $0.font == font })
+        }
     }
 
     func testNoteOnlyAnnotationUsesNoteAsPrimaryText() {

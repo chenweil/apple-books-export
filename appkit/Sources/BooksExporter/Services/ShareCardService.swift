@@ -47,11 +47,23 @@ public enum ShareCardTheme: String, CaseIterable, Codable {
 public enum ShareCardFont: String, CaseIterable, Codable {
     case system
     case sourceHanSansSC
+    case genkaiMincho
+    case slideYouran
+    case slideFu
+    case sourceHanSerifSC
+    case zcoolWenYiTi
+    case pangMenZhengDao
 
     public var displayName: String {
         switch self {
         case .system: return "系统默认"
         case .sourceHanSansSC: return "思源黑体"
+        case .genkaiMincho: return "源界明朝体"
+        case .slideYouran: return "演示悠然小楷"
+        case .slideFu: return "演示佛系体"
+        case .sourceHanSerifSC: return "思源宋体"
+        case .zcoolWenYiTi: return "站酷文艺体"
+        case .pangMenZhengDao: return "庞门正道粗书体"
         }
     }
 
@@ -59,6 +71,12 @@ public enum ShareCardFont: String, CaseIterable, Codable {
         switch self {
         case .system: return nil
         case .sourceHanSansSC: return "SourceHanSansSC-Regular"
+        case .genkaiMincho: return "Genkai-Mincho"
+        case .slideYouran: return "SlideYouran-Regular"
+        case .slideFu: return "Slidefu-Regular"
+        case .sourceHanSerifSC: return "SourceHanSerifSC-Regular"
+        case .zcoolWenYiTi: return "ZcoolWenYiTi"
+        case .pangMenZhengDao: return "PangMenZhengDao-Cu6.0-Regular"
         }
     }
 
@@ -66,6 +84,8 @@ public enum ShareCardFont: String, CaseIterable, Codable {
         switch self {
         case .system: return nil
         case .sourceHanSansSC: return "otf"
+        case .genkaiMincho, .slideYouran, .slideFu, .zcoolWenYiTi, .pangMenZhengDao: return "ttf"
+        case .sourceHanSerifSC: return "otf"
         }
     }
 
@@ -73,6 +93,12 @@ public enum ShareCardFont: String, CaseIterable, Codable {
         switch self {
         case .system: return nil
         case .sourceHanSansSC: return "SourceHanSansSC-Regular"
+        case .genkaiMincho: return "Genkaimincho"
+        case .slideYouran: return "slideyouran-Regular"
+        case .slideFu: return "Slidefu-Regular"
+        case .sourceHanSerifSC: return "SourceHanSerifSC-Regular"
+        case .zcoolWenYiTi: return "zcoolwenyiti"
+        case .pangMenZhengDao: return "PangMenZhengDao-Cu6.0"
         }
     }
 }
