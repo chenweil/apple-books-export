@@ -365,7 +365,11 @@ enum VerifyLayout {
         let book = Book(id: "b1", title: "测试书", author: "某人",
                         totalAnnotations: 2, highlightsCount: 1, notesCount: 1)
         let annotations = [
-            sample("h0", .highlight),
+            Annotation(
+                id: "h0", type: .highlight, chapterTitle: "第一章", locationInfo: "",
+                contentText: String(repeating: "这是一段较长的正文,用来验证生成卡片按钮不会随着内容宽度移动。", count: 8),
+                noteText: nil, createdAt: Date(timeIntervalSinceReferenceDate: 0)
+            ),
             sample("n0", .note)
         ]
         let detail = BookDetailView()
@@ -394,15 +398,26 @@ enum VerifyLayout {
         detail.onCardRequested = { requested = $0 }
         table.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
         detail.tableViewSelectionDidChange(Notification(name: NSTableView.selectionDidChangeNotification))
+        table.layoutSubtreeIfNeeded()
+        firstCell.layoutSubtreeIfNeeded()
         check("选中第一行显示入口", !firstButton.isHidden && secondButton.isHidden,
               "first=\(firstButton.isHidden) second=\(secondButton.isHidden)")
         invoke(firstButton)
         check("入口传出第一条标注", requested?.id == "h0", "id=\(requested?.id ?? "nil")")
+        let firstButtonFrame = frame(of: firstButton, in: firstCell)
 
         table.selectRowIndexes(IndexSet(integer: 1), byExtendingSelection: false)
         detail.tableViewSelectionDidChange(Notification(name: NSTableView.selectionDidChangeNotification))
+        table.layoutSubtreeIfNeeded()
+        secondCell.layoutSubtreeIfNeeded()
         check("切换后只显示第二行入口", firstButton.isHidden && !secondButton.isHidden,
               "first=\(firstButton.isHidden) second=\(secondButton.isHidden)")
+        let secondButtonFrame = frame(of: secondButton, in: secondCell)
+        check("生成卡片入口固定在行右侧",
+              abs(firstButtonFrame.maxX - secondButtonFrame.maxX) < 1
+                  && firstButtonFrame.maxX > firstCell.bounds.maxX - 20
+                  && secondButtonFrame.maxX > secondCell.bounds.maxX - 20,
+              "long.maxX=\(firstButtonFrame.maxX) short.maxX=\(secondButtonFrame.maxX) cells=\(firstCell.bounds.maxX)/\(secondCell.bounds.maxX)")
     }
 
     private static func checkShareCardAlternativeLayout() {
@@ -473,6 +488,11 @@ enum VerifyLayout {
     private static func buttons(in view: NSView) -> [NSButton] {
         let own = view as? NSButton
         return ([own].compactMap { $0 }) + view.subviews.flatMap { buttons(in: $0) }
+    }
+
+    private static func frame(of view: NSView, in ancestor: NSView) -> NSRect {
+        guard let superview = view.superview else { return .zero }
+        return superview.convert(view.frame, to: ancestor)
     }
 
     private static func firstTableView(in view: NSView) -> NSTableView? {

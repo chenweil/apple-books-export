@@ -43,6 +43,8 @@ final class AnnotationCellView: NSTableCellView {
         stack.alignment = .leading
         stack.spacing = AnnotationCellView.stackSpacing
         stack.translatesAutoresizingMaskIntoConstraints = false
+        stack.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        stack.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         [locationLabel, contentLabel, noteLabel].forEach { stack.addArrangedSubview($0) }
 
         cardButton.image = NSImage(
@@ -59,6 +61,7 @@ final class AnnotationCellView: NSTableCellView {
 
         rowStack.orientation = .horizontal
         rowStack.alignment = .top
+        rowStack.distribution = .fill
         rowStack.spacing = 12
         rowStack.translatesAutoresizingMaskIntoConstraints = false
         rowStack.addArrangedSubview(stack)
