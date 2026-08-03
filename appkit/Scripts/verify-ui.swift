@@ -38,6 +38,7 @@ enum VerifyLayout {
         checkCardEntry()
         checkShareCardAlternativeLayout()
         checkShareCardActions()
+        checkShareServiceFiltering()
         checkClassifier()
         checkBookRowCentering()
 
@@ -489,6 +490,39 @@ enum VerifyLayout {
         invoke(copyButton)
         check("复制图片传出预览图", copiedImages.count == 1 && copiedImages[0].size == ShareCardService.canvasSize,
               "count=\(copiedImages.count) size=\(copiedImages.first?.size ?? .zero)")
+    }
+
+    private static func checkShareServiceFiltering() {
+        print("\n分享服务过滤")
+        let book = Book(id: "b1", title: "测试书", author: "某人",
+                        totalAnnotations: 1, highlightsCount: 1, notesCount: 0)
+        let editor = ShareCardEditorViewController(book: book, annotation: sample("h0", .highlight))
+        let picker = NSSharingServicePicker(items: [])
+        let wechat = NSSharingService(
+            title: "微信",
+            image: NSImage(),
+            alternateImage: nil,
+            handler: {}
+        )
+        let englishWechat = NSSharingService(
+            title: "WeChat",
+            image: NSImage(),
+            alternateImage: nil,
+            handler: {}
+        )
+        let airDrop = NSSharingService(
+            title: "AirDrop",
+            image: NSImage(),
+            alternateImage: nil,
+            handler: {}
+        )
+        let filtered = editor.sharingServicePicker(
+            picker,
+            sharingServicesForItems: [],
+            proposedSharingServices: [wechat, englishWechat, airDrop]
+        )
+        check("分享面板移除微信", filtered.map(\.title) == ["AirDrop"],
+              "保留服务=\(filtered.map(\.title))")
     }
 
     private static func invoke(_ item: NSMenuItem) {

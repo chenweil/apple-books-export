@@ -1,6 +1,6 @@
 import AppKit
 
-final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate {
+final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate, NSSharingServicePickerDelegate {
     private static let alternativePreviewSize = NSSize(width: 72, height: 96)
 
     private let book: Book
@@ -137,7 +137,7 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate 
         shareButton.target = self
         shareButton.action = #selector(shareRequested)
         shareButton.isEnabled = false
-        shareButton.toolTip = "打开 macOS 分享面板（AirDrop、微信等可用服务）"
+        shareButton.toolTip = "打开 macOS 分享面板（AirDrop 等可用服务）"
 
         airDropButton.target = self
         airDropButton.action = #selector(airDropRequested)
@@ -330,8 +330,21 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate 
 
     @objc private func shareRequested() {
         guard let result = lastExportResult, !result.files.isEmpty else { return }
-        sharePicker = NSSharingServicePicker(items: result.files)
-        sharePicker?.show(relativeTo: shareButton.bounds, of: shareButton, preferredEdge: .minY)
+        let picker = NSSharingServicePicker(items: result.files)
+        picker.delegate = self
+        sharePicker = picker
+        picker.show(relativeTo: shareButton.bounds, of: shareButton, preferredEdge: .minY)
+    }
+
+    func sharingServicePicker(
+        _ sharingServicePicker: NSSharingServicePicker,
+        sharingServicesForItems items: [Any],
+        proposedSharingServices proposedServices: [NSSharingService]
+    ) -> [NSSharingService] {
+        proposedServices.filter { service in
+            let labels = "\(service.title) \(service.menuItemTitle)".lowercased()
+            return !labels.contains("微信") && !labels.contains("wechat")
+        }
     }
 
     @objc private func airDropRequested() {
