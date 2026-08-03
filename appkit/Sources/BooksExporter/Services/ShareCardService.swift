@@ -44,6 +44,39 @@ public enum ShareCardTheme: String, CaseIterable, Codable {
     }
 }
 
+public enum ShareCardFont: String, CaseIterable, Codable {
+    case system
+    case sourceHanSansSC
+
+    public var displayName: String {
+        switch self {
+        case .system: return "系统默认"
+        case .sourceHanSansSC: return "思源黑体"
+        }
+    }
+
+    fileprivate var resourceName: String? {
+        switch self {
+        case .system: return nil
+        case .sourceHanSansSC: return "SourceHanSansSC-Regular"
+        }
+    }
+
+    fileprivate var resourceExtension: String? {
+        switch self {
+        case .system: return nil
+        case .sourceHanSansSC: return "otf"
+        }
+    }
+
+    fileprivate var postScriptName: String? {
+        switch self {
+        case .system: return nil
+        case .sourceHanSansSC: return "SourceHanSansSC-Regular"
+        }
+    }
+}
+
 public struct ShareCardTemplate: Equatable, Codable {
     public let id: String
     public let theme: ShareCardTheme
@@ -62,19 +95,22 @@ public struct ShareCard: Equatable {
     public let primaryText: String
     public let supplementaryNote: String?
     public let template: ShareCardTemplate
+    public let font: ShareCardFont
 
     public init(
         bookTitle: String,
         author: String?,
         primaryText: String,
         supplementaryNote: String?,
-        template: ShareCardTemplate
+        template: ShareCardTemplate,
+        font: ShareCardFont = .system
     ) {
         self.bookTitle = bookTitle
         self.author = author
         self.primaryText = primaryText
         self.supplementaryNote = supplementaryNote
         self.template = template
+        self.font = font
     }
 
     public var theme: ShareCardTheme {
@@ -138,6 +174,9 @@ public final class ShareCardService {
     public static let canvasSize = CGSize(width: 1200, height: 1600)
     public static let minimumReadableFontSize: CGFloat = 42
 
+    private static let fontRegistrationLock = NSLock()
+    private static var registeredFontResources = Set<String>()
+
     private let fileManager: FileManager
     private let folderRevealer: (URL) -> Void
 
@@ -156,7 +195,8 @@ public final class ShareCardService {
         annotation: Annotation,
         includeNote: Bool = false,
         textOverride: String? = nil,
-        theme: ShareCardTheme = .mistWash
+        theme: ShareCardTheme = .mistWash,
+        font: ShareCardFont = .system
     ) -> ShareCard {
         let highlight = nonEmpty(annotation.contentText)
         let note = nonEmpty(annotation.noteText)
@@ -169,7 +209,8 @@ public final class ShareCardService {
             author: author,
             primaryText: primaryText,
             supplementaryNote: supplementaryNote,
-            template: template(for: theme, variant: 0)
+            template: template(for: theme, variant: 0),
+            font: font
         )
     }
 
@@ -181,7 +222,8 @@ public final class ShareCardService {
                 author: card.author,
                 primaryText: card.primaryText,
                 supplementaryNote: card.supplementaryNote,
-                template: template(for: theme, variant: index + 1)
+                template: template(for: theme, variant: index + 1),
+                font: card.font
             )
         }
     }
@@ -299,7 +341,7 @@ public final class ShareCardService {
         paragraphStyle.alignment = card.template.variant == 2 ? .center : .left
         paragraphStyle.lineBreakMode = .byWordWrapping
         let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: page.fontSize, weight: .regular),
+            .font: font(for: card.font, size: page.fontSize),
             .foregroundColor: NSColor(calibratedWhite: 0.12, alpha: 1),
             .paragraphStyle: paragraphStyle
         ]
@@ -308,7 +350,7 @@ public final class ShareCardService {
 
         if let note = page.supplementaryNote {
             let noteAttributes: [NSAttributedString.Key: Any] = [
-                .font: NSFont.systemFont(ofSize: 38, weight: .regular),
+                .font: font(for: card.font, size: 38),
                 .foregroundColor: NSColor(calibratedWhite: 0.22, alpha: 0.85),
                 .paragraphStyle: paragraphStyle
             ]
@@ -321,7 +363,7 @@ public final class ShareCardService {
         footerParagraphStyle.alignment = .left
         footerParagraphStyle.lineBreakMode = .byCharWrapping
         let footerAttributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 30, weight: .medium),
+            .font: font(for: card.font, size: 30, weight: .medium),
             .foregroundColor: NSColor(calibratedWhite: 0.18, alpha: 0.78),
             .paragraphStyle: footerParagraphStyle
         ]
@@ -375,6 +417,36 @@ public final class ShareCardService {
 #endif
     }
 
+    private func font(
+        for selection: ShareCardFont,
+        size: CGFloat,
+        weight: NSFont.Weight = .regular
+    ) -> NSFont {
+        guard let postScriptName = selection.postScriptName else {
+            return NSFont.systemFont(ofSize: size, weight: weight)
+        }
+
+        register(selection)
+        return NSFont(name: postScriptName, size: size)
+            ?? NSFont.systemFont(ofSize: size, weight: weight)
+    }
+
+    private func register(_ selection: ShareCardFont) {
+        guard let resourceName = selection.resourceName,
+              let resourceExtension = selection.resourceExtension,
+              let url = resourceBundle.url(forResource: resourceName, withExtension: resourceExtension) else {
+            return
+        }
+
+        let key = url.standardizedFileURL.path
+        Self.fontRegistrationLock.lock()
+        defer { Self.fontRegistrationLock.unlock() }
+
+        guard !Self.registeredFontResources.contains(key) else { return }
+        _ = CTFontManagerRegisterFontsForURL(url as CFURL, .process, nil)
+        Self.registeredFontResources.insert(key)
+    }
+
     private func fittingFontSize(for text: String, card: ShareCard) -> CGFloat {
         stride(from: CGFloat(72), through: Self.minimumReadableFontSize, by: -2)
             .first { textFits(text, card: card, fontSize: $0) }
@@ -382,7 +454,9 @@ public final class ShareCardService {
     }
 
     private func textFits(_ text: String, card: ShareCard, fontSize: CGFloat) -> Bool {
-        let framesetter = CTFramesetterCreateWithAttributedString(attributedText(text, fontSize: fontSize))
+        let framesetter = CTFramesetterCreateWithAttributedString(
+            attributedText(text, fontSize: fontSize, font: card.font)
+        )
         let path = CGPath(rect: textRect(for: card), transform: nil)
         let frame = CTFramesetterCreateFrame(
             framesetter,
@@ -395,7 +469,9 @@ public final class ShareCardService {
     }
 
     private func split(text: String, card: ShareCard, fontSize: CGFloat) -> [String] {
-        let framesetter = CTFramesetterCreateWithAttributedString(attributedText(text, fontSize: fontSize))
+        let framesetter = CTFramesetterCreateWithAttributedString(
+            attributedText(text, fontSize: fontSize, font: card.font)
+        )
         let length = text.utf16.count
         var offset = 0
         var segments: [String] = []
@@ -425,14 +501,18 @@ public final class ShareCardService {
         return segments
     }
 
-    private func attributedText(_ text: String, fontSize: CGFloat) -> CFAttributedString {
+    private func attributedText(
+        _ text: String,
+        fontSize: CGFloat,
+        font: ShareCardFont
+    ) -> CFAttributedString {
         let paragraphStyle = NSMutableParagraphStyle()
         paragraphStyle.alignment = .left
         paragraphStyle.lineBreakMode = .byWordWrapping
         return NSAttributedString(
             string: text,
             attributes: [
-                .font: NSFont.systemFont(ofSize: fontSize, weight: .regular),
+                .font: self.font(for: font, size: fontSize),
                 .paragraphStyle: paragraphStyle
             ]
         ) as CFAttributedString

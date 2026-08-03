@@ -38,6 +38,7 @@ enum VerifyLayout {
         checkCardEntry()
         checkShareCardAlternativeLayout()
         checkShareCardActions()
+        checkShareCardFontSelection()
         checkShareServiceFiltering()
         checkClassifier()
         checkBookRowCentering()
@@ -490,6 +491,50 @@ enum VerifyLayout {
         invoke(copyButton)
         check("复制图片传出预览图", copiedImages.count == 1 && copiedImages[0].size == ShareCardService.canvasSize,
               "count=\(copiedImages.count) size=\(copiedImages.first?.size ?? .zero)")
+    }
+
+    private static func checkShareCardFontSelection() {
+        print("\n分享卡片字体")
+        let book = Book(id: "b1", title: "测试书", author: "某人",
+                        totalAnnotations: 1, highlightsCount: 1, notesCount: 0)
+        let editor = ShareCardEditorViewController(book: book, annotation: sample("h0", .highlight))
+        editor.loadView()
+        hosted(editor.view, width: 980, height: 700)
+        editor.view.layoutSubtreeIfNeeded()
+
+        guard let fontPopup = view(named: "share-card-font", in: editor.view) as? NSPopUpButton else {
+            check("字体控件可定位", false, "找不到字体下拉框")
+            return
+        }
+
+        let titles = fontPopup.itemTitles
+        check("字体包含系统默认和思源黑体",
+              titles == ShareCardFont.allCases.map(\.displayName),
+              "字体=\(titles)")
+
+        guard let changeButton = view(titled: "换一换", in: editor.view) as? NSButton else {
+            check("字体切换前候选按钮可定位", false, "找不到换一换按钮")
+            return
+        }
+        invoke(changeButton)
+        let candidatesBeforeFontChange = buttons(in: editor.view).filter {
+            $0.toolTip?.hasPrefix("选择候选卡片") == true
+        }
+        check("字体切换前生成候选卡片", candidatesBeforeFontChange.count == 4,
+              "候选数=\(candidatesBeforeFontChange.count)")
+
+        if let sourceIndex = ShareCardFont.allCases.firstIndex(of: .sourceHanSansSC) {
+            fontPopup.selectItem(at: sourceIndex)
+            invoke(fontPopup)
+            check("选择思源黑体后控件保持选中",
+                  fontPopup.indexOfSelectedItem == sourceIndex,
+                  "selected=\(fontPopup.indexOfSelectedItem)")
+            let candidatesAfterFontChange = buttons(in: editor.view).filter {
+                $0.toolTip?.hasPrefix("选择候选卡片") == true
+            }
+            check("切换字体后清理旧候选卡片", candidatesAfterFontChange.isEmpty,
+                  "候选数=\(candidatesAfterFontChange.count)")
+        }
     }
 
     private static func checkShareServiceFiltering() {

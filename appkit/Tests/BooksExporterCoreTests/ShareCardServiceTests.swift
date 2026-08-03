@@ -52,6 +52,26 @@ final class ShareCardServiceTests: XCTestCase {
         }
     }
 
+    func testBundledSourceHanSansFontRendersAndSurvivesAlternativeCards() throws {
+        let service = ShareCardService()
+        let card = service.makeCard(
+            for: makeBook(author: "A. Reader"),
+            annotation: makeAnnotation(content: "一段需要保留的中文书摘。", note: nil),
+            font: .sourceHanSansSC
+        )
+
+        XCTAssertEqual(card.font, .sourceHanSansSC)
+        XCTAssertEqual(service.pages(for: card).map(\.primaryText).joined(), card.primaryText)
+
+        let image = try service.previewImage(for: card)
+        XCTAssertEqual(image.size, ShareCardService.canvasSize)
+        XCTAssertEqual(NSFont(name: "SourceHanSansSC-Regular", size: 42)?.fontName,
+                       "SourceHanSansSC-Regular")
+
+        let alternatives = service.alternativeCards(for: card)
+        XCTAssertTrue(alternatives.allSatisfy { $0.font == .sourceHanSansSC })
+    }
+
     func testNoteOnlyAnnotationUsesNoteAsPrimaryText() {
         let book = makeBook(author: "")
         let annotation = makeAnnotation(content: nil, note: "A note without a highlighted passage.")

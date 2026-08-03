@@ -75,6 +75,7 @@ appkit/
     ├── Services/              # DatabaseService / BookService / ShareCardService
     │   └── ShareCardService.swift # 生成、分页、PNG 导出的公共 seam
     ├── Resources/share-card-backgrounds/ # 六个本地主题背景
+    ├── Resources/fonts/       # Share Card 字体与对应许可证
     └── Utilities/             # PermissionHelper
 ```
 
@@ -121,6 +122,11 @@ Apple Books 不把「笔记」存成独立对象 —— 笔记就是给高亮加
 | S3 | 完成 | 42pt 最小字号、连续卡片分页、文件命名和打开目录偏好 |
 | S4 | 完成 | 六个主题和按需四个完整 Alternative Cards |
 | S5 | 完成 | 保存轻提示、保存后系统分享和 AppKit library/test target 拆分 |
+| S6 | 完成 | Share Card 支持系统默认/思源黑体切换,预览与导出共用字体 |
+
+Share Card 编辑器当前提供“系统默认”和“思源黑体”两种字体。思源黑体随应用资源打包,
+`appkit/Sources/BooksExporter/Resources/fonts/SourceHanSans-LICENSE.txt` 保留其
+SIL Open Font License 1.1 文本。
 
 ## 架构选择
 
@@ -141,7 +147,7 @@ Apple Books 不把「笔记」存成独立对象 —— 笔记就是给高亮加
 `BooksExporterCore` 是 library target,`BooksExporter` 只保留瘦 executable 入口,
 因此 `Tests/BooksExporterCoreTests` 可以在公共 Share Card seam 上运行 XCTest。
 测试覆盖默认 Highlight、note-only、可选 note、作者缺失、临时文字编辑、PNG
-尺寸与命名、长文分页、目录偏好和四个 Alternative Cards。
+尺寸与命名、长文分页、字体资源渲染、目录偏好和四个 Alternative Cards。
 
 `Scripts/verify-ui.sh` 仍把探针和真实源码一起编译(排除 executable 入口),
 断言分栏约束、内容列宽度、按钮排布、行高、排序可访问性、类型筛选和选中标注后

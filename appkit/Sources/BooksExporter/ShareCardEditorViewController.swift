@@ -15,6 +15,7 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate,
     private let textScrollView = NSScrollView()
     private let noteCheckbox = NSButton(checkboxWithTitle: "添加笔记", target: nil, action: nil)
     private let themePopup = NSPopUpButton(frame: .zero, pullsDown: false)
+    private let fontPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let changeButton = NSButton(title: "换一换", target: nil, action: nil)
     private let alternativeStack = NSStackView()
     private let folderCheckbox = NSButton(checkboxWithTitle: "保存后打开文件夹", target: nil, action: nil)
@@ -94,6 +95,12 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate,
         themePopup.target = self
         themePopup.action = #selector(themeChanged)
 
+        fontPopup.addItems(withTitles: ShareCardFont.allCases.map { $0.displayName })
+        fontPopup.selectItem(at: ShareCardFont.allCases.firstIndex(of: card.font) ?? 0)
+        fontPopup.target = self
+        fontPopup.action = #selector(fontChanged)
+        fontPopup.identifier = NSUserInterfaceItemIdentifier("share-card-font")
+
         changeButton.image = NSImage(
             systemSymbolName: "arrow.triangle.2.circlepath",
             accessibilityDescription: "换一换"
@@ -156,6 +163,12 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate,
         themeRow.alignment = .centerY
         themeRow.spacing = 8
 
+        let fontLabel = NSTextField(labelWithString: "字体")
+        let fontRow = NSStackView(views: [fontLabel, fontPopup])
+        fontRow.orientation = .horizontal
+        fontRow.alignment = .centerY
+        fontRow.spacing = 8
+
         let controlsTitle = NSTextField(labelWithString: "卡片文字")
         controlsTitle.font = .systemFont(ofSize: 17, weight: .semibold)
 
@@ -165,7 +178,7 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate,
         actionRow.spacing = 8
 
         let controls = NSStackView(
-            views: [controlsTitle, textScrollView, noteCheckbox, themeRow, changeButton,
+            views: [controlsTitle, textScrollView, noteCheckbox, themeRow, fontRow, changeButton,
                     alternativeStack, folderCheckbox, statusLabel, actionRow]
         )
         controls.orientation = .vertical
@@ -194,6 +207,7 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate,
             textScrollView.heightAnchor.constraint(equalToConstant: 160),
             textScrollView.widthAnchor.constraint(equalTo: controls.widthAnchor),
             themeRow.widthAnchor.constraint(equalTo: controls.widthAnchor),
+            fontRow.widthAnchor.constraint(equalTo: controls.widthAnchor),
             alternativeStack.widthAnchor.constraint(equalTo: controls.widthAnchor),
             alternativeStack.heightAnchor.constraint(equalToConstant: 112),
             statusLabel.widthAnchor.constraint(equalTo: controls.widthAnchor),
@@ -210,20 +224,22 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate,
     @objc private func themeChanged() {
         guard ShareCardTheme.allCases.indices.contains(themePopup.indexOfSelectedItem) else { return }
         let theme = ShareCardTheme.allCases[themePopup.indexOfSelectedItem]
+        clearAlternatives()
         card = service.makeCard(
             for: book,
             annotation: annotation,
             includeNote: noteCheckbox.state == .on,
             textOverride: textView.string,
-            theme: theme
+            theme: theme,
+            font: card.font
         )
         invalidateExport()
         updatePreview()
     }
 
     @objc private func changeItUp() {
+        clearAlternatives()
         alternativeCards = service.alternativeCards(for: card)
-        alternativeStack.arrangedSubviews.forEach { alternativeStack.removeArrangedSubview($0); $0.removeFromSuperview() }
 
         for (index, alternative) in alternativeCards.enumerated() {
             do {
@@ -259,11 +275,37 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate,
         alternativeStack.isHidden = alternativeCards.isEmpty
     }
 
+    @objc private func fontChanged() {
+        guard ShareCardFont.allCases.indices.contains(fontPopup.indexOfSelectedItem) else { return }
+        let font = ShareCardFont.allCases[fontPopup.indexOfSelectedItem]
+        let template = card.template
+        clearAlternatives()
+        let refreshed = service.makeCard(
+            for: book,
+            annotation: annotation,
+            includeNote: noteCheckbox.state == .on,
+            textOverride: textView.string,
+            theme: template.theme,
+            font: font
+        )
+        card = ShareCard(
+            bookTitle: refreshed.bookTitle,
+            author: refreshed.author,
+            primaryText: refreshed.primaryText,
+            supplementaryNote: refreshed.supplementaryNote,
+            template: template,
+            font: font
+        )
+        invalidateExport()
+        updatePreview()
+    }
+
     @objc private func alternativeSelected(_ sender: NSButton) {
         guard alternativeCards.indices.contains(sender.tag) else { return }
         card = alternativeCards[sender.tag]
         textView.string = card.primaryText
         themePopup.selectItem(at: ShareCardTheme.allCases.firstIndex(of: card.theme) ?? 0)
+        fontPopup.selectItem(at: ShareCardFont.allCases.firstIndex(of: card.font) ?? 0)
         invalidateExport()
         updatePreview()
     }
@@ -369,22 +411,34 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate,
 
     private func updateCardFromEditor() {
         let template = card.template
+        clearAlternatives()
         let refreshed = service.makeCard(
             for: book,
             annotation: annotation,
             includeNote: noteCheckbox.state == .on,
             textOverride: textView.string,
-            theme: template.theme
+            theme: template.theme,
+            font: card.font
         )
         card = ShareCard(
             bookTitle: refreshed.bookTitle,
             author: refreshed.author,
             primaryText: refreshed.primaryText,
             supplementaryNote: refreshed.supplementaryNote,
-            template: template
+            template: template,
+            font: card.font
         )
         invalidateExport()
         updatePreview()
+    }
+
+    private func clearAlternatives() {
+        alternativeCards = []
+        alternativeStack.arrangedSubviews.forEach {
+            alternativeStack.removeArrangedSubview($0)
+            $0.removeFromSuperview()
+        }
+        alternativeStack.isHidden = true
     }
 
     private func invalidateExport() {
