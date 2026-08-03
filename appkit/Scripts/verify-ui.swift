@@ -36,6 +36,7 @@ enum VerifyLayout {
         checkAnnotationFilter()
         checkExportScope()
         checkCardEntry()
+        checkShareCardAlternativeLayout()
         checkClassifier()
         checkBookRowCentering()
 
@@ -404,6 +405,45 @@ enum VerifyLayout {
               "first=\(firstButton.isHidden) second=\(secondButton.isHidden)")
     }
 
+    private static func checkShareCardAlternativeLayout() {
+        print("\n分享卡片候选布局")
+        let book = Book(id: "b1", title: "测试书", author: "某人",
+                        totalAnnotations: 1, highlightsCount: 1, notesCount: 0)
+        let editor = ShareCardEditorViewController(book: book, annotation: sample("h0", .highlight))
+        editor.loadView()
+        hosted(editor.view, width: 980, height: 700)
+        editor.view.layoutSubtreeIfNeeded()
+
+        guard let changeButton = view(titled: "换一换", in: editor.view) as? NSButton else {
+            check("换一换控件可定位", false, "找不到按钮")
+            return
+        }
+        invoke(changeButton)
+        editor.view.layoutSubtreeIfNeeded()
+
+        let candidateButtons = buttons(in: editor.view).filter {
+            $0.toolTip?.hasPrefix("选择候选卡片") == true
+        }
+        check("换一换生成四个候选", candidateButtons.count == 4,
+              "候选数=\(candidateButtons.count)")
+        check("候选区不撑大编辑器", editor.view.bounds.width <= 980.5,
+              "editor=\(editor.view.bounds)")
+        check("候选缩略图不撑大编辑器",
+              candidateButtons.allSatisfy { $0.frame.width <= 120 && $0.frame.height <= 120 },
+              "候选尺寸=\(candidateButtons.map { "\(Int($0.frame.width))x\(Int($0.frame.height))" })")
+
+        guard let closeButton = view(titled: "完成", in: editor.view) as? NSButton,
+              let closeSuperview = closeButton.superview else {
+            check("完成按钮可定位", false, "找不到关闭按钮")
+            return
+        }
+        let closeFrame = closeSuperview.convert(closeButton.frame, to: editor.view)
+        check("完成按钮仍在编辑器内",
+              closeFrame.minX >= -0.5 && closeFrame.maxX <= editor.view.bounds.maxX + 0.5
+                  && closeFrame.minY >= -0.5 && closeFrame.maxY <= editor.view.bounds.maxY + 0.5,
+              "frame=\(closeFrame) editor=\(editor.view.bounds)")
+    }
+
     private static func invoke(_ item: NSMenuItem) {
         guard let action = item.action else { return }
         NSApp.sendAction(action, to: item.target, from: item)
@@ -420,6 +460,19 @@ enum VerifyLayout {
             if let found = self.view(named: identifier, in: subview) { return found }
         }
         return nil
+    }
+
+    private static func view(titled title: String, in view: NSView) -> NSView? {
+        if let control = view as? NSButton, control.title == title { return control }
+        for subview in view.subviews {
+            if let found = self.view(titled: title, in: subview) { return found }
+        }
+        return nil
+    }
+
+    private static func buttons(in view: NSView) -> [NSButton] {
+        let own = view as? NSButton
+        return ([own].compactMap { $0 }) + view.subviews.flatMap { buttons(in: $0) }
     }
 
     private static func firstTableView(in view: NSView) -> NSTableView? {

@@ -1,6 +1,8 @@
 import AppKit
 
 final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate {
+    private static let alternativePreviewSize = NSSize(width: 72, height: 96)
+
     private let book: Book
     private let annotation: Annotation
     private let service = ShareCardService()
@@ -90,7 +92,7 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate 
 
         alternativeStack.orientation = .horizontal
         alternativeStack.alignment = .centerY
-        alternativeStack.distribution = .fillEqually
+        alternativeStack.distribution = .equalSpacing
         alternativeStack.spacing = 8
         alternativeStack.isHidden = true
 
@@ -198,13 +200,30 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate 
 
         for (index, alternative) in alternativeCards.enumerated() {
             do {
+                let previewContainer = NSView()
+                previewContainer.translatesAutoresizingMaskIntoConstraints = false
+                previewContainer.setContentHuggingPriority(.required, for: .horizontal)
+                previewContainer.setContentHuggingPriority(.required, for: .vertical)
+                previewContainer.setContentCompressionResistancePriority(.required, for: .horizontal)
+                previewContainer.setContentCompressionResistancePriority(.required, for: .vertical)
+
                 let button = NSButton(image: try service.previewImage(for: alternative), target: self, action: #selector(alternativeSelected(_:)))
                 button.tag = index
                 button.imageScaling = .scaleProportionallyUpOrDown
                 button.bezelStyle = .regularSquare
                 button.toolTip = "选择候选卡片 \(index + 1)"
                 button.setAccessibilityLabel("候选卡片 \(index + 1)")
-                alternativeStack.addArrangedSubview(button)
+                button.translatesAutoresizingMaskIntoConstraints = false
+                previewContainer.addSubview(button)
+                NSLayoutConstraint.activate([
+                    previewContainer.widthAnchor.constraint(equalToConstant: Self.alternativePreviewSize.width),
+                    previewContainer.heightAnchor.constraint(equalToConstant: Self.alternativePreviewSize.height),
+                    button.leadingAnchor.constraint(equalTo: previewContainer.leadingAnchor),
+                    button.trailingAnchor.constraint(equalTo: previewContainer.trailingAnchor),
+                    button.topAnchor.constraint(equalTo: previewContainer.topAnchor),
+                    button.bottomAnchor.constraint(equalTo: previewContainer.bottomAnchor)
+                ])
+                alternativeStack.addArrangedSubview(previewContainer)
             } catch {
                 statusLabel.stringValue = "无法生成候选卡片"
                 return
