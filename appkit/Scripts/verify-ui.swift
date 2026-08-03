@@ -35,6 +35,7 @@ enum VerifyLayout {
         checkSortAccessibility()
         checkAnnotationFilter()
         checkExportScope()
+        checkCardEntry()
         checkClassifier()
         checkBookRowCentering()
 
@@ -358,6 +359,51 @@ enum VerifyLayout {
         check("未筛选点按钮送出全部 5 条", delivered?.count == 5, "\(delivered?.count ?? -1) 条")
     }
 
+    private static func checkCardEntry() {
+        print("\n选中标注后显示生成卡片入口")
+        let book = Book(id: "b1", title: "测试书", author: "某人",
+                        totalAnnotations: 2, highlightsCount: 1, notesCount: 1)
+        let annotations = [
+            sample("h0", .highlight),
+            sample("n0", .note)
+        ]
+        let detail = BookDetailView()
+        hosted(detail, width: 779, height: 700)
+        detail.show(book: book)
+        detail.setAnnotations(annotations)
+
+        guard let table = firstTableView(in: detail) else {
+            check("标注表格可定位", false, "找不到 NSTableView")
+            return
+        }
+        table.layoutSubtreeIfNeeded()
+
+        guard let firstCell = table.view(atColumn: 0, row: 0, makeIfNecessary: true),
+              let secondCell = table.view(atColumn: 0, row: 1, makeIfNecessary: true),
+              let firstButton = view(named: "share-card-entry", in: firstCell) as? NSButton,
+              let secondButton = view(named: "share-card-entry", in: secondCell) as? NSButton else {
+            check("标注行含生成卡片入口", false, "找不到入口按钮")
+            return
+        }
+
+        check("未选中时入口隐藏", firstButton.isHidden && secondButton.isHidden,
+              "first=\(firstButton.isHidden) second=\(secondButton.isHidden)")
+
+        var requested: Annotation?
+        detail.onCardRequested = { requested = $0 }
+        table.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+        detail.tableViewSelectionDidChange(Notification(name: NSTableView.selectionDidChangeNotification))
+        check("选中第一行显示入口", !firstButton.isHidden && secondButton.isHidden,
+              "first=\(firstButton.isHidden) second=\(secondButton.isHidden)")
+        invoke(firstButton)
+        check("入口传出第一条标注", requested?.id == "h0", "id=\(requested?.id ?? "nil")")
+
+        table.selectRowIndexes(IndexSet(integer: 1), byExtendingSelection: false)
+        detail.tableViewSelectionDidChange(Notification(name: NSTableView.selectionDidChangeNotification))
+        check("切换后只显示第二行入口", firstButton.isHidden && !secondButton.isHidden,
+              "first=\(firstButton.isHidden) second=\(secondButton.isHidden)")
+    }
+
     private static func invoke(_ item: NSMenuItem) {
         guard let action = item.action else { return }
         NSApp.sendAction(action, to: item.target, from: item)
@@ -372,6 +418,14 @@ enum VerifyLayout {
         if view.identifier?.rawValue == identifier { return view }
         for subview in view.subviews {
             if let found = self.view(named: identifier, in: subview) { return found }
+        }
+        return nil
+    }
+
+    private static func firstTableView(in view: NSView) -> NSTableView? {
+        if let table = view as? NSTableView { return table }
+        for subview in view.subviews {
+            if let found = firstTableView(in: subview) { return found }
         }
         return nil
     }

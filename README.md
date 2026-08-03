@@ -1,6 +1,6 @@
 # Apple Books Exporter — AppKit GUI(实验)
 
-AppKit 版本的 Apple Books 笔记导出工具,把高亮和笔记导出为 Markdown 文件。
+AppKit 版本的 Apple Books 笔记导出工具,把高亮和笔记导出为 Markdown 文件,也支持把单条标注生成可保存和分享的 Share Card。
 
 > **状态**: 实验性研究项目,可能归档。当前聚焦 AppKit GUI 栈。
 
@@ -15,6 +15,7 @@ AppKit 版本的 Apple Books 笔记导出工具,把高亮和笔记导出为 Mark
 ```bash
 cd appkit
 swift build               # 编译
+swift test                # ShareCardService 公共 seam 测试
 swift run BooksExporter   # 运行(会自动激活窗口)
 ./Scripts/verify-ui.sh    # UI 回归验证
 ```
@@ -54,20 +55,26 @@ appkit/
 ├── Scripts/
 │   ├── verify-ui.sh           # 布局与可访问性回归验证
 │   └── verify-ui.swift        # 探针,与真实源码一起编译
-└── Sources/BooksExporter/
-    ├── main.swift             # 入口
+├── Tests/BooksExporterCoreTests/ # 公共 Share Card 行为测试
+├── Sources/BooksExporterApp/
+│   └── main.swift             # 瘦 executable 入口
+└── Sources/BooksExporter/     # BooksExporterCore library
+    ├── AppEntry.swift         # AppKit 启动入口
     ├── AppDelegate.swift      # 窗口与主菜单装配
     ├── MainMenu.swift         # 主菜单(⌘C/⌘V/⌘Q 等靠它派发)
     ├── MainViewController.swift        # 分栏容器
     ├── BookListView(Controller).swift  # 左栏:书单
     ├── BookDetailView(Controller).swift# 右栏:笔记详情
     ├── AnnotationCellView.swift        # 笔记行(自适应高度)
+    ├── ShareCardEditorViewController.swift # Share Card 编辑器
     ├── AnnotationClassifier.swift      # 标注归类规则(唯一来源)
     ├── AnnotationFilter.swift          # 类型筛选(纯函数)
     ├── BookListSorter.swift            # 排序(纯函数)
     ├── BookColumn.swift                # 列标识
     ├── Models/                # Book / Annotation / AnnotationType
-    ├── Services/              # DatabaseService / BookService
+    ├── Services/              # DatabaseService / BookService / ShareCardService
+    │   └── ShareCardService.swift # 生成、分页、PNG 导出的公共 seam
+    ├── Resources/share-card-backgrounds/ # 六个本地主题背景
     └── Utilities/             # PermissionHelper
 ```
 
@@ -109,7 +116,11 @@ Apple Books 不把「笔记」存成独立对象 —— 笔记就是给高亮加
 | M6c | 完成 | 详情页按类型筛选笔记(全部 / 高亮 / 笔记) |
 | M6d | 完成 | 导出与复制区分「全书」和「当前筛选」 |
 | M6e | 完成 | 标注按内容归类,丢弃空壳,移除书签类目 |
-| M7 | 未来 | 其他 UI 调整;拆分 SPM 包以支持 XCTest |
+| S1 | 完成 | Share Card 选中态入口、默认卡片和 1200×1600 PNG 导出 |
+| S2 | 完成 | 笔记-only 内容、可选 supplementary note、作者归因和 card-only 编辑 |
+| S3 | 完成 | 42pt 最小字号、连续卡片分页、文件命名和打开目录偏好 |
+| S4 | 完成 | 六个主题和按需四个完整 Alternative Cards |
+| S5 | 完成 | 保存轻提示、保存后系统分享和 AppKit library/test target 拆分 |
 
 ## 架构选择
 
@@ -122,16 +133,19 @@ Apple Books 不把「笔记」存成独立对象 —— 笔记就是给高亮加
 风格选择 **P1 纯代码 Programmatic**:不依赖 Storyboard / XIB,所有 UI 用 Swift 代码构建。
 
 排序、筛选、归类等逻辑抽成纯函数(`BookListSorter` / `AnnotationFilter` /
-`AnnotationClassifier`),可以脱离 UI 直接断言。
+`AnnotationClassifier`),可以脱离 UI 直接断言。Share Cards 通过
+`ShareCardService` 暴露生成和导出 seam,视图层不直接处理分页、命名或绘图。
 
 ## 测试现状
 
-包目前是单一 `executableTarget`,`main.swift` 用顶层代码,无法承载 XCTest 宿主 ——
-要上真正的单元测试需要先拆成 library + 瘦 executable。
+`BooksExporterCore` 是 library target,`BooksExporter` 只保留瘦 executable 入口,
+因此 `Tests/BooksExporterCoreTests` 可以在公共 Share Card seam 上运行 XCTest。
+测试覆盖默认 Highlight、note-only、可选 note、作者缺失、临时文字编辑、PNG
+尺寸与命名、长文分页、目录偏好和四个 Alternative Cards。
 
-在此之前用 `Scripts/verify-ui.sh` 兜底:它把探针和真实源码一起编译(排除 `main.swift`),
-断言的是实现本身而非重建的副本,覆盖分栏约束、内容列宽度、按钮排布、行高、
-排序可访问性和类型筛选。**这不是 XCTest,覆盖率无从度量。**
+`Scripts/verify-ui.sh` 仍把探针和真实源码一起编译(排除 executable 入口),
+断言分栏约束、内容列宽度、按钮排布、行高、排序可访问性、类型筛选和选中标注后
+才显示 Card Entry。它是 UI 回归探针,不是 XCTest。
 
 ## 跟其他分支的关系
 

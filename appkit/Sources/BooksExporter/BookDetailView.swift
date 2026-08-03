@@ -17,6 +17,7 @@ final class BookDetailView: NSView, NSTableViewDataSource, NSTableViewDelegate {
 
     var onExportRequested: (([Annotation]) -> Void)?
     var onCopyRequested: (([Annotation]) -> Void)?
+    var onCardRequested: ((Annotation) -> Void)?
 
     private var book: Book?
     private var allAnnotations: [Annotation] = []
@@ -28,6 +29,7 @@ final class BookDetailView: NSView, NSTableViewDataSource, NSTableViewDelegate {
             tableView.reloadData()
             statusLabel.stringValue = statusText()
             updateActionButtons()
+            updateCardEntry()
         }
     }
 
@@ -135,6 +137,7 @@ final class BookDetailView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         self.book = book
         titleLabel.stringValue = book.title
         authorLabel.stringValue = "作者：\(book.author)"
+        authorLabel.isHidden = book.author.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
 
         // 换书重置筛选,否则新书会沿用上一本的筛选却没有任何提示。
         filter = .all
@@ -142,6 +145,7 @@ final class BookDetailView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         updateFilterTitles(for: book)
 
         allAnnotations = []
+        tableView.deselectAll(nil)
         annotations = []
         statusLabel.stringValue = "正在读取笔记…"
     }
@@ -222,6 +226,8 @@ final class BookDetailView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         tableView.headerView = nil
         tableView.delegate = self
         tableView.dataSource = self
+        tableView.allowsEmptySelection = true
+        tableView.allowsMultipleSelection = false
         tableView.gridStyleMask = .solidHorizontalGridLineMask
         tableView.gridColor = .separatorColor
         tableView.usesAutomaticRowHeights = true
@@ -309,6 +315,35 @@ final class BookDetailView: NSView, NSTableViewDataSource, NSTableViewDelegate {
             ?? AnnotationCellView(frame: .zero)
         cell.updateLayoutWidth(tableColumn?.width ?? tableView.bounds.width)
         cell.configure(with: annotations[row])
+        configureCardEntry(on: cell, row: row)
         return cell
+    }
+
+    func tableViewSelectionDidChange(_ notification: Notification) {
+        updateCardEntry()
+    }
+
+    private func updateCardEntry() {
+        let selectedRow = tableView.selectedRow
+        for row in annotations.indices {
+            guard let cell = tableView.view(atColumn: 0, row: row, makeIfNecessary: false) as? AnnotationCellView else {
+                continue
+            }
+            configureCardEntry(on: cell, row: row, selectedRow: selectedRow)
+        }
+        guard !annotations.isEmpty else { return }
+        tableView.noteHeightOfRows(withIndexesChanged: IndexSet(integersIn: annotations.indices))
+    }
+
+    private func configureCardEntry(
+        on cell: AnnotationCellView,
+        row: Int,
+        selectedRow: Int? = nil
+    ) {
+        let isSelected = row == (selectedRow ?? tableView.selectedRow)
+        let annotation = annotations[row]
+        cell.setCardEntryVisible(isSelected) { [weak self] in
+            self?.onCardRequested?(annotation)
+        }
     }
 }

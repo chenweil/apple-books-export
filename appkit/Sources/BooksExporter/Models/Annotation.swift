@@ -1,19 +1,37 @@
 import Foundation
 
-struct Annotation: Identifiable, Codable, Hashable {
-    let id: String
-    let type: AnnotationType
-    let chapterTitle: String
-    let locationInfo: String
-    let contentText: String?
-    let noteText: String?
-    let createdAt: Date
+public struct Annotation: Identifiable, Codable, Hashable {
+    public let id: String
+    public let type: AnnotationType
+    public let chapterTitle: String
+    public let locationInfo: String
+    public let contentText: String?
+    public let noteText: String?
+    public let createdAt: Date
+
+    public init(
+        id: String,
+        type: AnnotationType,
+        chapterTitle: String,
+        locationInfo: String,
+        contentText: String?,
+        noteText: String?,
+        createdAt: Date
+    ) {
+        self.id = id
+        self.type = type
+        self.chapterTitle = chapterTitle
+        self.locationInfo = locationInfo
+        self.contentText = contentText
+        self.noteText = noteText
+        self.createdAt = createdAt
+    }
     
-    var hasNote: Bool {
+    public var hasNote: Bool {
         return noteText != nil && !noteText!.isEmpty
     }
 
-    var displayLocation: String {
+    public var displayLocation: String {
         if !chapterTitle.isEmpty {
             return chapterTitle
         }

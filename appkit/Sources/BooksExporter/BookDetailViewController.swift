@@ -21,6 +21,9 @@ final class BookDetailViewController: NSViewController {
         detailView.onCopyRequested = { [weak self] annotations in
             self?.copySelectedBook(annotations)
         }
+        detailView.onCardRequested = { [weak self] annotation in
+            self?.openShareCardEditor(for: annotation)
+        }
         view = detailView
     }
 
@@ -100,6 +103,12 @@ final class BookDetailViewController: NSViewController {
             guard !Task.isCancelled else { return }
             showAlert(message: "已复制", details: "已复制 \(annotations.count) 条 Markdown 到剪贴板")
         }
+    }
+
+    private func openShareCardEditor(for annotation: Annotation) {
+        guard let book = selectedBook else { return }
+        let editor = ShareCardEditorViewController(book: book, annotation: annotation)
+        presentAsSheet(editor)
     }
 
     private func showAlert(message: String, details: String) {

@@ -14,11 +14,16 @@ DIST_DIR="${DIST_DIR:-$REPO_DIR/dist}"
 
 BIN_DIR="$(swift build -c "$CONFIG" --show-bin-path)"
 BIN_PATH="$BIN_DIR/BooksExporter"
-if [[ ! -x "$BIN_PATH" ]]; then
+RESOURCE_BUNDLE="$BIN_DIR/BooksExporter_BooksExporterCore.bundle"
+if [[ ! -x "$BIN_PATH" || ! -d "$RESOURCE_BUNDLE" ]]; then
     swift build -c "$CONFIG"
 fi
 if [[ ! -x "$BIN_PATH" ]]; then
     echo "error: executable not found: $BIN_PATH" >&2
+    exit 1
+fi
+if [[ ! -d "$RESOURCE_BUNDLE" ]]; then
+    echo "error: Share Card resource bundle not found: $RESOURCE_BUNDLE" >&2
     exit 1
 fi
 
@@ -28,6 +33,7 @@ trap 'rm -rf "$STAGING_DIR"' EXIT
 APP_DIR="$STAGING_DIR/$APP_NAME"
 mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
 cp "$BIN_PATH" "$APP_DIR/Contents/MacOS/BooksExporter"
+cp -R "$RESOURCE_BUNDLE" "$APP_DIR/Contents/"
 cp "$APPKIT_DIR/Resources/Info.plist" "$APP_DIR/Contents/Info.plist"
 cp "$APPKIT_DIR/Resources/AppIcon.icns" "$APP_DIR/Contents/Resources/AppIcon.icns"
 

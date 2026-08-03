@@ -13,16 +13,33 @@ let package = Package(
         .macOS(.v14)
     ],
     targets: [
-        .executableTarget(
-            name: "BooksExporter",
+        .target(
+            name: "BooksExporterCore",
             path: "Sources/BooksExporter",
             exclude: [
-                "BooksExporter-Bridging-Header.h"
+                "main.swift"
+            ],
+            resources: [
+                .process("Resources")
             ],
             linkerSettings: [
                 .linkedFramework("AppKit"),
                 .linkedFramework("Foundation")
             ]
+        ),
+        .executableTarget(
+            name: "BooksExporter",
+            dependencies: ["BooksExporterCore"],
+            path: "Sources/BooksExporterApp",
+            linkerSettings: [
+                .linkedFramework("AppKit"),
+                .linkedFramework("Foundation")
+            ]
+        ),
+        .testTarget(
+            name: "BooksExporterCoreTests",
+            dependencies: ["BooksExporterCore"],
+            path: "Tests/BooksExporterCoreTests"
         )
     ]
 )

@@ -120,7 +120,7 @@ class DatabaseService {
 
             if sqlite3_step(bookStatement) == SQLITE_ROW {
                 let title = sqlite3_column_text(bookStatement, 1).map { String(cString: $0) } ?? "未知书名"
-                let author = sqlite3_column_text(bookStatement, 2).map { String(cString: $0) } ?? "未知作者"
+                let author = sqlite3_column_text(bookStatement, 2).map { String(cString: $0) } ?? ""
                 let count = countsByAssetId[assetId]!
 
                 books.append(Book(

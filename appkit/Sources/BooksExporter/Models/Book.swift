@@ -1,14 +1,30 @@
 import Foundation
 
-struct Book: Identifiable, Codable, Hashable {
-    let id: String              // ADLR 或 ASIN
-    let title: String
-    let author: String
-    let totalAnnotations: Int
-    let highlightsCount: Int
-    let notesCount: Int
+public struct Book: Identifiable, Codable, Hashable {
+    public let id: String              // ADLR 或 ASIN
+    public let title: String
+    public let author: String
+    public let totalAnnotations: Int
+    public let highlightsCount: Int
+    public let notesCount: Int
 
-    var displayTotalCount: String {
+    public init(
+        id: String,
+        title: String,
+        author: String,
+        totalAnnotations: Int,
+        highlightsCount: Int,
+        notesCount: Int
+    ) {
+        self.id = id
+        self.title = title
+        self.author = author
+        self.totalAnnotations = totalAnnotations
+        self.highlightsCount = highlightsCount
+        self.notesCount = notesCount
+    }
+
+    public var displayTotalCount: String {
         if totalAnnotations > 0 {
             return "\(totalAnnotations)条笔记"
         } else {
@@ -16,7 +32,7 @@ struct Book: Identifiable, Codable, Hashable {
         }
     }
 
-    func count(of type: AnnotationType) -> Int {
+    public func count(of type: AnnotationType) -> Int {
         switch type {
         case .highlight: return highlightsCount
         case .note: return notesCount

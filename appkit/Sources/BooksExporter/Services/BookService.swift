@@ -1,6 +1,5 @@
 import Foundation
 
-@Observable
 class BookService {
     private let databaseService = DatabaseService()
     
