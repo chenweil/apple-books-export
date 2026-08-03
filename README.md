@@ -21,6 +21,31 @@ swift run BooksExporter   # 运行(会自动激活窗口)
 
 或用 Xcode 打开 `appkit/Package.swift` 后按 Run。
 
+## 打包 unsigned DMG
+
+当前项目没有 Developer ID 签名和 notarization。可以先生成本机安装用的 unsigned DMG：
+
+```bash
+cd appkit
+chmod +x Scripts/package-dmg.sh
+./Scripts/package-dmg.sh
+```
+
+产物位于仓库根目录的 `dist/Books-Exporter-0.1.0-unsigned.dmg`。也可以覆盖版本号：
+
+```bash
+APP_VERSION=0.1.1 BUILD_VERSION=2 ./Scripts/package-dmg.sh
+```
+
+安装时将 DMG 中的 `Books Exporter.app` 拖到 `/Applications`。首次打开如果被 Gatekeeper 拦截，优先在 Finder 中右键应用并选择“打开”；必要时可执行：
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/Books Exporter.app"
+open "/Applications/Books Exporter.app"
+```
+
+应用读取 Apple Books 数据仍需要在“系统设置 → 隐私与安全性 → 完全磁盘访问权限”中添加安装后的 `Books Exporter.app`。
+
 ## 项目结构
 
 ```
