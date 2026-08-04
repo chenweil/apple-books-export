@@ -163,6 +163,8 @@ public enum ShareCardVerticalAlignment: String, CaseIterable, Codable {
 }
 
 public struct ShareCardTypography: Equatable, Codable {
+    public static let minimumReadableFontSize: CGFloat = 42
+
     public let font: ShareCardFont
     public let sizeMode: ShareCardFontSizeMode
     public let fontSize: CGFloat
@@ -178,12 +180,39 @@ public struct ShareCardTypography: Equatable, Codable {
     ) {
         self.font = font
         self.sizeMode = sizeMode
-        self.fontSize = fontSize
+        self.fontSize = max(
+            fontSize.isFinite ? fontSize : Self.minimumReadableFontSize,
+            Self.minimumReadableFontSize
+        )
         self.horizontalAlignment = horizontalAlignment
         self.verticalAlignment = verticalAlignment
     }
 
     public static let `default` = ShareCardTypography()
+}
+
+public struct ShareCardColor: Equatable, Codable {
+    public let red: CGFloat
+    public let green: CGFloat
+    public let blue: CGFloat
+    public let alpha: CGFloat
+
+    public init(red: CGFloat, green: CGFloat, blue: CGFloat, alpha: CGFloat = 1) {
+        self.red = red
+        self.green = green
+        self.blue = blue
+        self.alpha = alpha
+    }
+
+    fileprivate var nsColor: NSColor {
+        NSColor(calibratedRed: red, green: green, blue: blue, alpha: alpha)
+    }
+
+    fileprivate func withAlpha(_ alpha: CGFloat) -> ShareCardColor {
+        ShareCardColor(red: red, green: green, blue: blue, alpha: alpha)
+    }
+
+    public static let nearBlack = ShareCardColor(red: 0.12, green: 0.12, blue: 0.12)
 }
 
 public struct ShareCardTemplate: Equatable, Codable {
@@ -193,6 +222,9 @@ public struct ShareCardTemplate: Equatable, Codable {
     public let textSafeArea: CGRect
     public let noteArea: CGRect
     public let attributionArea: CGRect
+    public let primaryTextColor: ShareCardColor
+    public let supplementaryNoteColor: ShareCardColor
+    public let attributionColor: ShareCardColor
 
     public init(
         id: String,
@@ -200,7 +232,10 @@ public struct ShareCardTemplate: Equatable, Codable {
         variant: Int,
         textSafeArea: CGRect = CGRect(x: 130, y: 500, width: 940, height: 800),
         noteArea: CGRect = CGRect(x: 130, y: 300, width: 940, height: 130),
-        attributionArea: CGRect = CGRect(x: 130, y: 90, width: 940, height: 180)
+        attributionArea: CGRect = CGRect(x: 130, y: 90, width: 940, height: 180),
+        primaryTextColor: ShareCardColor = .nearBlack,
+        supplementaryNoteColor: ShareCardColor? = nil,
+        attributionColor: ShareCardColor = ShareCardColor(red: 0.18, green: 0.18, blue: 0.18, alpha: 0.78)
     ) {
         self.id = id
         self.theme = theme
@@ -208,6 +243,9 @@ public struct ShareCardTemplate: Equatable, Codable {
         self.textSafeArea = textSafeArea
         self.noteArea = noteArea
         self.attributionArea = attributionArea
+        self.primaryTextColor = primaryTextColor
+        self.supplementaryNoteColor = supplementaryNoteColor ?? primaryTextColor
+        self.attributionColor = attributionColor
     }
 }
 
@@ -333,7 +371,7 @@ public enum ShareCardExportError: LocalizedError {
 /// Public generation-and-export seam for AppKit Share Cards.
 public final class ShareCardService {
     public static let canvasSize = CGSize(width: 1200, height: 1600)
-    public static let minimumReadableFontSize: CGFloat = 42
+    public static let minimumReadableFontSize = ShareCardTypography.minimumReadableFontSize
     public static let supplementaryNoteFontSize: CGFloat = 38
 
     private static let fontRegistrationLock = NSLock()
@@ -414,14 +452,34 @@ public final class ShareCardService {
 
         let fontSize = fittingFontSize(for: text, card: card)
         let segments = split(text: text, card: card, fontSize: fontSize)
-        return segments.enumerated().map { index, segment in
-            let supplementaryNote = index == segments.count - 1 ? card.supplementaryNote : nil
+        var pageContents: [(primaryText: String, supplementaryNote: String?)] = segments.map {
+            (primaryText: $0, supplementaryNote: nil)
+        }
+        if let note = card.supplementaryNote, !note.isEmpty {
+            let noteSegments = split(
+                text: note,
+                card: card,
+                fontSize: Self.supplementaryNoteFontSize,
+                area: card.template.noteArea
+            )
+            if let firstNoteSegment = noteSegments.first {
+                pageContents[pageContents.count - 1].supplementaryNote = firstNoteSegment
+                for noteSegment in noteSegments.dropFirst() {
+                    pageContents.append((primaryText: "", supplementaryNote: noteSegment))
+                }
+            }
+        }
+
+        return pageContents.enumerated().map { index, segment in
+            let supplementaryNote = segment.supplementaryNote
             return ShareCardPage(
                 index: index,
-                primaryText: segment,
+                primaryText: segment.primaryText,
                 supplementaryNote: supplementaryNote,
                 fontSize: fontSize,
-                primaryTextFrame: primaryTextFrame(for: segment, card: card, fontSize: fontSize),
+                primaryTextFrame: segment.primaryText.isEmpty
+                    ? .zero
+                    : primaryTextFrame(for: segment.primaryText, card: card, fontSize: fontSize),
                 supplementaryNoteFrame: supplementaryNote.map {
                     textFrame(for: $0, in: card.template.noteArea, card: card, fontSize: Self.supplementaryNoteFontSize)
                 },
@@ -529,7 +587,7 @@ public final class ShareCardService {
         paragraphStyle.lineBreakMode = .byWordWrapping
         let attributes: [NSAttributedString.Key: Any] = [
             .font: font(for: card.font, size: page.fontSize),
-            .foregroundColor: NSColor(calibratedWhite: 0.12, alpha: 1),
+            .foregroundColor: card.template.primaryTextColor.nsColor,
             .paragraphStyle: paragraphStyle
         ]
         NSAttributedString(string: page.primaryText, attributes: attributes)
@@ -538,7 +596,7 @@ public final class ShareCardService {
         if let note = page.supplementaryNote {
             let noteAttributes: [NSAttributedString.Key: Any] = [
                 .font: font(for: card.font, size: page.supplementaryNoteFontSize),
-                .foregroundColor: NSColor(calibratedWhite: 0.22, alpha: 0.85),
+                .foregroundColor: card.template.supplementaryNoteColor.nsColor,
                 .paragraphStyle: paragraphStyle
             ]
             NSAttributedString(string: note, attributes: noteAttributes)
@@ -551,7 +609,7 @@ public final class ShareCardService {
         footerParagraphStyle.lineBreakMode = .byCharWrapping
         let footerAttributes: [NSAttributedString.Key: Any] = [
             .font: font(for: card.font, size: 30, weight: .medium),
-            .foregroundColor: NSColor(calibratedWhite: 0.18, alpha: 0.78),
+            .foregroundColor: card.template.attributionColor.nsColor,
             .paragraphStyle: footerParagraphStyle
         ]
         NSAttributedString(string: card.attributionText, attributes: footerAttributes)
@@ -605,8 +663,21 @@ public final class ShareCardService {
             id: "\(theme.rawValue)-\(variant)",
             theme: theme,
             variant: variant,
-            textSafeArea: textSafeArea
+            textSafeArea: textSafeArea,
+            primaryTextColor: primaryTextColor(for: theme),
+            attributionColor: primaryTextColor(for: theme).withAlpha(0.78)
         )
+    }
+
+    private func primaryTextColor(for theme: ShareCardTheme) -> ShareCardColor {
+        switch theme {
+        case .mistWash: return .nearBlack
+        case .sageLeaf: return ShareCardColor(red: 0.10, green: 0.20, blue: 0.12)
+        case .blushArcs: return ShareCardColor(red: 0.26, green: 0.10, blue: 0.12)
+        case .sandContours: return ShareCardColor(red: 0.22, green: 0.15, blue: 0.07)
+        case .lavenderStars: return ShareCardColor(red: 0.15, green: 0.10, blue: 0.25)
+        case .stoneTextile: return ShareCardColor(red: 0.10, green: 0.10, blue: 0.10)
+        }
     }
 
     private var resourceBundle: Bundle {
@@ -672,16 +743,22 @@ public final class ShareCardService {
         return visible.location + visible.length >= text.utf16.count
     }
 
-    private func split(text: String, card: ShareCard, fontSize: CGFloat) -> [String] {
+    private func split(
+        text: String,
+        card: ShareCard,
+        fontSize: CGFloat,
+        area: CGRect? = nil
+    ) -> [String] {
         let framesetter = CTFramesetterCreateWithAttributedString(
             attributedText(text, fontSize: fontSize, font: card.font)
         )
         let length = text.utf16.count
+        let textArea = area ?? card.template.textSafeArea
         var offset = 0
         var segments: [String] = []
 
         while offset < length {
-            let path = CGPath(rect: card.template.textSafeArea, transform: nil)
+            let path = CGPath(rect: textArea, transform: nil)
             let frame = CTFramesetterCreateFrame(
                 framesetter,
                 CFRange(location: offset, length: 0),

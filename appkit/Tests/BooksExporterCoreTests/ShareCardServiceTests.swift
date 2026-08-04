@@ -64,6 +64,9 @@ final class ShareCardServiceTests: XCTestCase {
         XCTAssertEqual(card.typography.horizontalAlignment, .left)
         XCTAssertEqual(card.typography.verticalAlignment, .center)
         XCTAssertEqual(card.font, card.typography.font)
+
+        let unreadableFixedSize = ShareCardTypography(sizeMode: .fixed, fontSize: 12)
+        XCTAssertEqual(unreadableFixedSize.fontSize, ShareCardTypography.minimumReadableFontSize)
     }
 
     func testFixedTypographyKeepsReadableSizeAndPaginatesMixedLanguageWithoutTruncation() throws {
@@ -150,6 +153,24 @@ final class ShareCardServiceTests: XCTestCase {
         XCTAssertFalse(page.primaryTextFrame.intersects(noteFrame))
         XCTAssertFalse(noteFrame.intersects(page.attributionFrame))
         XCTAssertEqual(page.supplementaryNoteFontSize, 38)
+        XCTAssertEqual(card.template.primaryTextColor, card.template.supplementaryNoteColor)
+    }
+
+    func testLongSupplementaryNotePaginatesWithoutTruncation() {
+        let note = String(repeating: "这是一段必须完整保留的补充笔记。 ", count: 80)
+        let card = ShareCardService().makeCard(
+            for: makeBook(author: "A. Reader"),
+            annotation: makeAnnotation(content: "A highlighted passage.", note: note),
+            includeNote: true
+        )
+
+        let pages = ShareCardService().pages(for: card)
+
+        XCTAssertEqual(pages.compactMap(\.supplementaryNote).joined(), note)
+        XCTAssertGreaterThan(pages.count, 1)
+        XCTAssertTrue(pages.compactMap(\.supplementaryNoteFrame).allSatisfy {
+            card.template.noteArea.contains($0)
+        })
     }
 
     func testBundledFontsRenderAndSurviveAlternativeCards() throws {

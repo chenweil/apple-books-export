@@ -41,7 +41,6 @@ enum VerifyLayout {
         checkShareCardActions()
         checkShareCardFontSelection()
         checkShareCardTypographyAndPages()
-        checkShareServiceFiltering()
         checkClassifier()
         checkBookRowCentering()
 
@@ -605,6 +604,7 @@ enum VerifyLayout {
                   as? NSSegmentedControl,
               let vertical = view(named: "share-card-vertical-alignment", in: editor.view)
                   as? NSSegmentedControl,
+              let copyMenu = view(named: "share-card-copy-menu", in: editor.view) as? NSPopUpButton,
               let pageLabel = view(named: "share-card-page-label", in: editor.view) as? NSTextField else {
             check("排版与页码控件可定位", false, "缺少字号、对齐或页码控件")
             return
@@ -614,6 +614,8 @@ enum VerifyLayout {
               "模式=\(sizeMode.itemTitles)")
         check("固定字号选项可用", fontSize.itemTitles.contains("64"),
               "字号=\(fontSize.itemTitles)")
+        check("复制菜单提供全部页面", copyMenu.itemTitles == ["复制全部页面"],
+              "菜单=\(copyMenu.itemTitles)")
 
         sizeMode.selectItem(at: 1)
         invoke(sizeMode)
@@ -646,40 +648,10 @@ enum VerifyLayout {
             invoke(copyButton)
             check("多页复制默认只传出当前页", copiedImages.count == 1,
                   "图片数=\(copiedImages.count)")
+            invoke(copyMenu)
+            check("复制菜单传出全部页面", copiedImages.count == pageButtons.count,
+                  "图片数=\(copiedImages.count)")
         }
-    }
-
-    private static func checkShareServiceFiltering() {
-        print("\n分享服务过滤")
-        let book = Book(id: "b1", title: "测试书", author: "某人",
-                        totalAnnotations: 1, highlightsCount: 1, notesCount: 0)
-        let editor = ShareCardEditorViewController(book: book, annotation: sample("h0", .highlight))
-        let picker = NSSharingServicePicker(items: [])
-        let wechat = NSSharingService(
-            title: "微信",
-            image: NSImage(),
-            alternateImage: nil,
-            handler: {}
-        )
-        let englishWechat = NSSharingService(
-            title: "WeChat",
-            image: NSImage(),
-            alternateImage: nil,
-            handler: {}
-        )
-        let airDrop = NSSharingService(
-            title: "AirDrop",
-            image: NSImage(),
-            alternateImage: nil,
-            handler: {}
-        )
-        let filtered = editor.sharingServicePicker(
-            picker,
-            sharingServicesForItems: [],
-            proposedSharingServices: [wechat, englishWechat, airDrop]
-        )
-        check("分享面板移除微信", filtered.map(\.title) == ["AirDrop"],
-              "保留服务=\(filtered.map(\.title))")
     }
 
     private static func invoke(_ item: NSMenuItem) {

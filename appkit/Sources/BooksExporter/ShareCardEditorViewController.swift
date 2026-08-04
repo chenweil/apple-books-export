@@ -1,6 +1,6 @@
 import AppKit
 
-final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate, NSSharingServicePickerDelegate {
+final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate {
     private static let alternativePreviewSize = NSSize(width: 72, height: 96)
     private static let previewSize = NSSize(width: 360, height: 480)
     private static let thumbnailSize = NSSize(width: 72, height: 96)
@@ -12,7 +12,6 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate,
     private var alternativeCards: [ShareCard] = []
     private var renderedPages: [ShareCardPage] = []
     private var selectedPageIndex = 0
-    private var sharePicker: NSSharingServicePicker?
 
     private let previewImageView = NSImageView()
     private let pageLabel = NSTextField(labelWithString: "")
@@ -31,8 +30,8 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate,
     private let alternativeStack = NSStackView()
     private let folderCheckbox = NSButton(checkboxWithTitle: "保存后打开文件夹", target: nil, action: nil)
     private let copyButton = NSButton(title: "复制图片", target: nil, action: nil)
+    private let copyMenuButton = NSPopUpButton(frame: .zero, pullsDown: false)
     private let saveButton = NSButton(title: "保存 PNG", target: nil, action: nil)
-    private let shareButton = NSButton(title: "分享", target: nil, action: nil)
     private let airDropButton = NSButton(title: "AirDrop", target: nil, action: nil)
     private let closeButton = NSButton(title: "完成", target: nil, action: nil)
     private let statusLabel = NSTextField(labelWithString: "")
@@ -185,6 +184,13 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate,
         copyButton.action = #selector(copyRequested)
         copyButton.isEnabled = false
 
+        copyMenuButton.addItem(withTitle: "复制全部页面")
+        copyMenuButton.target = self
+        copyMenuButton.action = #selector(copyAllRequested)
+        copyMenuButton.identifier = NSUserInterfaceItemIdentifier("share-card-copy-menu")
+        copyMenuButton.toolTip = "复制全部页面"
+        copyMenuButton.isEnabled = false
+
         saveButton.image = NSImage(
             systemSymbolName: "square.and.arrow.down",
             accessibilityDescription: "保存 PNG"
@@ -194,20 +200,15 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate,
         saveButton.target = self
         saveButton.action = #selector(saveRequested)
 
-        shareButton.image = NSImage(
+        airDropButton.image = NSImage(
             systemSymbolName: "square.and.arrow.up",
-            accessibilityDescription: "分享"
+            accessibilityDescription: "AirDrop"
         )
-        shareButton.imagePosition = .imageLeading
-        shareButton.target = self
-        shareButton.action = #selector(shareRequested)
-        shareButton.isEnabled = false
-        shareButton.toolTip = "打开 macOS 分享面板（AirDrop 等可用服务）"
-
+        airDropButton.imagePosition = .imageLeading
         airDropButton.target = self
         airDropButton.action = #selector(airDropRequested)
-        airDropButton.isHidden = true
         airDropButton.isEnabled = false
+        airDropButton.toolTip = "通过 AirDrop 发送当前页"
 
         closeButton.target = self
         closeButton.action = #selector(closeRequested)
@@ -248,7 +249,7 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate,
         let controlsTitle = NSTextField(labelWithString: "卡片文字")
         controlsTitle.font = .systemFont(ofSize: 17, weight: .semibold)
 
-        let actionRow = NSStackView(views: [copyButton, saveButton, shareButton, airDropButton, closeButton])
+        let actionRow = NSStackView(views: [copyButton, copyMenuButton, saveButton, airDropButton, closeButton])
         actionRow.orientation = .horizontal
         actionRow.alignment = .centerY
         actionRow.spacing = 8
@@ -370,43 +371,21 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate,
         guard ShareCardFont.allCases.indices.contains(fontPopup.indexOfSelectedItem) else { return }
         let font = ShareCardFont.allCases[fontPopup.indexOfSelectedItem]
         clearAlternatives()
-        updateTypography(
-            ShareCardTypography(
-                font: font,
-                sizeMode: card.typography.sizeMode,
-                fontSize: card.typography.fontSize,
-                horizontalAlignment: card.typography.horizontalAlignment,
-                verticalAlignment: card.typography.verticalAlignment
-            )
-        )
+        updateTypography(updatedTypography(font: font))
     }
 
     @objc private func sizeModeChanged() {
         guard ShareCardFontSizeMode.allCases.indices.contains(sizeModePopup.indexOfSelectedItem) else { return }
         clearAlternatives()
-        updateTypography(
-            ShareCardTypography(
-                font: card.typography.font,
-                sizeMode: ShareCardFontSizeMode.allCases[sizeModePopup.indexOfSelectedItem],
-                fontSize: card.typography.fontSize,
-                horizontalAlignment: card.typography.horizontalAlignment,
-                verticalAlignment: card.typography.verticalAlignment
-            )
-        )
+        updateTypography(updatedTypography(
+            sizeMode: ShareCardFontSizeMode.allCases[sizeModePopup.indexOfSelectedItem]
+        ))
     }
 
     @objc private func fontSizeChanged() {
         guard let fontSize = Double(fontSizePopup.titleOfSelectedItem ?? "") else { return }
         clearAlternatives()
-        updateTypography(
-            ShareCardTypography(
-                font: card.typography.font,
-                sizeMode: card.typography.sizeMode,
-                fontSize: CGFloat(fontSize),
-                horizontalAlignment: card.typography.horizontalAlignment,
-                verticalAlignment: card.typography.verticalAlignment
-            )
-        )
+        updateTypography(updatedTypography(fontSize: CGFloat(fontSize)))
     }
 
     @objc private func horizontalAlignmentChanged() {
@@ -414,15 +393,9 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate,
             return
         }
         clearAlternatives()
-        updateTypography(
-            ShareCardTypography(
-                font: card.typography.font,
-                sizeMode: card.typography.sizeMode,
-                fontSize: card.typography.fontSize,
-                horizontalAlignment: ShareCardHorizontalAlignment.allCases[horizontalAlignmentControl.selectedSegment],
-                verticalAlignment: card.typography.verticalAlignment
-            )
-        )
+        updateTypography(updatedTypography(
+            horizontalAlignment: ShareCardHorizontalAlignment.allCases[horizontalAlignmentControl.selectedSegment]
+        ))
     }
 
     @objc private func verticalAlignmentChanged() {
@@ -430,15 +403,9 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate,
             return
         }
         clearAlternatives()
-        updateTypography(
-            ShareCardTypography(
-                font: card.typography.font,
-                sizeMode: card.typography.sizeMode,
-                fontSize: card.typography.fontSize,
-                horizontalAlignment: card.typography.horizontalAlignment,
-                verticalAlignment: ShareCardVerticalAlignment.allCases[verticalAlignmentControl.selectedSegment]
-            )
-        )
+        updateTypography(updatedTypography(
+            verticalAlignment: ShareCardVerticalAlignment.allCases[verticalAlignmentControl.selectedSegment]
+        ))
     }
 
     @objc private func alternativeSelected(_ sender: NSButton) {
@@ -486,11 +453,7 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate,
         do {
             let result = try service.export(card, to: directoryURL)
             lastExportResult = result
-            shareButton.isEnabled = !result.files.isEmpty
-            let canAirDrop = NSSharingService(named: .sendViaAirDrop)?
-                .canPerform(withItems: result.files) ?? false
-            airDropButton.isHidden = !canAirDrop
-            airDropButton.isEnabled = canAirDrop
+            updateAirDropAvailability()
             let count = result.files.count
             statusLabel.stringValue = count == 1 ? "已保存" : "已保存 \(count) 张卡片"
         } catch {
@@ -517,33 +480,38 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate,
         }
     }
 
-    @objc private func shareRequested() {
-        guard let result = lastExportResult, !result.files.isEmpty else { return }
-        let picker = NSSharingServicePicker(items: result.files)
-        picker.delegate = self
-        sharePicker = picker
-        picker.show(relativeTo: shareButton.bounds, of: shareButton, preferredEdge: .minY)
-    }
-
-    func sharingServicePicker(
-        _ sharingServicePicker: NSSharingServicePicker,
-        sharingServicesForItems items: [Any],
-        proposedSharingServices proposedServices: [NSSharingService]
-    ) -> [NSSharingService] {
-        proposedServices.filter { service in
-            let labels = "\(service.title) \(service.menuItemTitle)".lowercased()
-            return !labels.contains("微信") && !labels.contains("wechat")
+    @objc private func copyAllRequested() {
+        do {
+            guard !renderedPages.isEmpty else {
+                statusLabel.stringValue = "复制失败"
+                return
+            }
+            let images = try renderedPages.indices.map {
+                try service.previewImage(for: card, pageIndex: $0)
+            }
+            guard copyHandler(images) else {
+                statusLabel.stringValue = "复制失败"
+                return
+            }
+            statusLabel.stringValue = "已复制 \(images.count) 张图片"
+        } catch {
+            statusLabel.stringValue = "复制失败：\(error.localizedDescription)"
         }
     }
 
     @objc private func airDropRequested() {
-        guard let result = lastExportResult, !result.files.isEmpty,
-              let airDrop = NSSharingService(named: .sendViaAirDrop),
-              airDrop.canPerform(withItems: result.files) else {
+        guard let result = lastExportResult,
+              result.files.indices.contains(selectedPageIndex),
+              let airDrop = NSSharingService(named: .sendViaAirDrop) else {
             statusLabel.stringValue = "AirDrop 当前不可用"
             return
         }
-        airDrop.perform(withItems: result.files)
+        let file = result.files[selectedPageIndex]
+        guard airDrop.canPerform(withItems: [file]) else {
+            statusLabel.stringValue = "AirDrop 当前不可用"
+            return
+        }
+        airDrop.perform(withItems: [file])
     }
 
     @objc private func closeRequested() {
@@ -577,6 +545,23 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate,
         )
         invalidateExport()
         updatePreview()
+    }
+
+    private func updatedTypography(
+        font: ShareCardFont? = nil,
+        sizeMode: ShareCardFontSizeMode? = nil,
+        fontSize: CGFloat? = nil,
+        horizontalAlignment: ShareCardHorizontalAlignment? = nil,
+        verticalAlignment: ShareCardVerticalAlignment? = nil
+    ) -> ShareCardTypography {
+        let current = card.typography
+        return ShareCardTypography(
+            font: font ?? current.font,
+            sizeMode: sizeMode ?? current.sizeMode,
+            fontSize: fontSize ?? current.fontSize,
+            horizontalAlignment: horizontalAlignment ?? current.horizontalAlignment,
+            verticalAlignment: verticalAlignment ?? current.verticalAlignment
+        )
     }
 
     private func updateTypography(_ typography: ShareCardTypography) {
@@ -615,9 +600,8 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate,
 
     private func invalidateExport() {
         lastExportResult = nil
-        shareButton.isEnabled = false
-        airDropButton.isHidden = true
         airDropButton.isEnabled = false
+        copyMenuButton.isEnabled = false
         statusLabel.stringValue = ""
     }
 
@@ -625,6 +609,16 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate,
         guard renderedPages.indices.contains(sender.tag) else { return }
         selectedPageIndex = sender.tag
         updateSelectedPagePreview()
+    }
+
+    private func updateAirDropAvailability() {
+        guard let result = lastExportResult,
+              result.files.indices.contains(selectedPageIndex),
+              let airDrop = NSSharingService(named: .sendViaAirDrop) else {
+            airDropButton.isEnabled = false
+            return
+        }
+        airDropButton.isEnabled = airDrop.canPerform(withItems: [result.files[selectedPageIndex]])
     }
 
     private func updatePreview() {
@@ -685,6 +679,8 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate,
         do {
             previewImageView.image = try service.previewImage(for: card, pageIndex: selectedPageIndex)
             copyButton.isEnabled = true
+            copyMenuButton.isEnabled = renderedPages.count > 1
+            updateAirDropAvailability()
             pageLabel.stringValue = "第 \(selectedPageIndex + 1) / \(renderedPages.count) 页"
             for (index, view) in thumbnailStack.arrangedSubviews.enumerated() {
                 (view as? NSButton)?.state = index == selectedPageIndex ? .on : .off
