@@ -11,16 +11,26 @@ source license.
 | --- | --- | --- |
 | `SourceHanSansSC-Regular.otf` | `SourceHanSansSC-Regular` | Adobe Source Han Sans; SIL Open Font License 1.1. The license text is in `SourceHanSans-LICENSE.txt`. |
 | `SourceHanSerifSC-Regular.otf` | `SourceHanSerifSC-Regular` | [Adobe Source Han Serif](https://github.com/adobe-fonts/source-han-serif); SIL Open Font License 1.1. The license text is in `SourceHanSerif-LICENSE.txt`. |
-| `Genkai-Mincho.ttf` | `Genkaimincho` | [Genkai Mincho site](https://ffont.jp/genkaimincho/) and [BOOTH release](https://booth.pm/ja/items/1028548); the release states SIL Open Font License 1.1. The generic license text is in `OFL-1.1.txt`. |
 | `SlideYouran-Regular.ttf` | `slideyouran-Regular` | [Original release page](https://mp.weixin.qq.com/s/Q1lAIre4yJ-Zlf2CD82EPA). The publisher describes this font as free for commercial use across channels. |
 | `Slidefu-Regular.ttf` | `Slidefu-Regular` | [Original release page](https://mp.weixin.qq.com/s/iWn8SWH5ymBKmsGiHe8Yfw). The publisher describes this font as free for commercial use across channels. |
 | `ZcoolWenYiTi.ttf` | `zcoolwenyiti` | [Official ZCOOL asset page](https://www.zcool.com.cn/assets/ZNzg1Ng%3D%3D), which states free authorization for public use including commercial use. |
 | `PangMenZhengDao-Cu6.0-Regular.ttf` | `PangMenZhengDao-Cu6.0` | [Original release page](https://mp.weixin.qq.com/s/LZ_PMNc-3uX-Atmri4OLGQ). The release is listed as free for commercial use without authorization. |
+| `HuiwenMingChaoGBK.ttf` | `Huiwen-MinchoGBK-Regular` | User-provided Huiwen Series file; see `HUIWEN-NOTICE.txt`. The supplied statement permits use in print, display, publishing, film/TV, and embedded software/documents/devices, and permits forwarding, copying, and derivative versions. |
+| `HuiwenFangSong.ttf` | `HuiwenFangsong-Regular` | User-provided Huiwen Series file; see `HUIWEN-NOTICE.txt`. |
+| `HuiwenZhengKai.ttf` | `HuiwenZhengkai-Regular` | User-provided Huiwen Series file; see `HUIWEN-NOTICE.txt`. |
+| `HuiwenGangHei.ttf` | `HuiwenHKHei-Regular` | User-provided Huiwen Series file; see `HUIWEN-NOTICE.txt`. |
 
-The four non-OFL files above are bundled based on the publisher statements
-linked above. Those statements are not replaced by this note or by the
-aggregator that helped locate the files. Do not sell the font files separately,
-modify the fonts, or claim a broader license than the original source grants.
+The four publisher-statement fonts above are bundled based on the publisher
+statements linked above. Those statements are not replaced by this note or by
+the aggregator that helped locate the files. Do not sell those font files
+separately, modify them, or claim a broader license than the original source
+grants.
+
+The four Huiwen fonts are bundled based on the user-provided statement
+transcribed in `HUIWEN-NOTICE.txt`. That statement forbids selling the fonts
+separately or as part of a resource package for profit, while allowing
+forwarding, copying, modification, and derivative versions. It does not grant
+any rights beyond the statement supplied with these files.
 
 ## Not bundled pending authorization
 

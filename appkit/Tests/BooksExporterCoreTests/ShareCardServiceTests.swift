@@ -1,4 +1,5 @@
 import AppKit
+import CoreText
 import XCTest
 @testable import BooksExporterCore
 
@@ -56,14 +57,20 @@ final class ShareCardServiceTests: XCTestCase {
         let service = ShareCardService()
         let bundledFonts: [(ShareCardFont, String)] = [
             (.sourceHanSansSC, "SourceHanSansSC-Regular"),
-            (.genkaiMincho, "Genkaimincho"),
             (.slideYouran, "slideyouran-Regular"),
             (.slideFu, "Slidefu-Regular"),
             (.sourceHanSerifSC, "SourceHanSerifSC-Regular"),
             (.zcoolWenYiTi, "zcoolwenyiti"),
-            (.pangMenZhengDao, "PangMenZhengDao-Cu6.0")
+            (.pangMenZhengDao, "PangMenZhengDao-Cu6.0"),
+            (.huiwenMingChaoGBK, "Huiwen-MinchoGBK-Regular"),
+            (.huiwenFangSong, "HuiwenFangsong-Regular"),
+            (.huiwenZhengKai, "HuiwenZhengkai-Regular"),
+            (.huiwenGangHei, "HuiwenHKHei-Regular")
         ]
         XCTAssertEqual(bundledFonts.map(\.0), ShareCardFont.allCases.filter { $0 != .system })
+
+        let representativeText = "纳瓦尔宝典（硅谷投资人纳瓦尔十年人生智慧，教你如何获得财富与幸福。新时代创业者必读）我看重纳瓦尔，是因为他：对近乎一切都持怀疑态度；从第一性原理出发进行思考；可以对人对事进行有效测试；从不自我欺骗；不时调整自己的观点和看法；经常开怀大笑；有大局观；眼光长远；不把自己太当回事。"
+        let characters = Array(representativeText.utf16)
 
         for (font, postScriptName) in bundledFonts {
             let card = service.makeCard(
@@ -77,9 +84,22 @@ final class ShareCardServiceTests: XCTestCase {
 
             let image = try service.previewImage(for: card)
             XCTAssertEqual(image.size, ShareCardService.canvasSize)
-            XCTAssertEqual(NSFont(name: postScriptName, size: 42)?.fontName,
-                           postScriptName,
-                           "字体未注册: \(font.rawValue)")
+            let registeredFont = try XCTUnwrap(NSFont(name: postScriptName, size: 42),
+                                               "字体未注册: \(font.rawValue)")
+            XCTAssertEqual(registeredFont.fontName, postScriptName)
+
+            var glyphs = [CGGlyph](repeating: 0, count: characters.count)
+            let rendersRepresentativeText = characters.withUnsafeBufferPointer { characterBuffer in
+                glyphs.withUnsafeMutableBufferPointer { glyphBuffer in
+                    CTFontGetGlyphsForCharacters(
+                        registeredFont as CTFont,
+                        characterBuffer.baseAddress!,
+                        glyphBuffer.baseAddress!,
+                        characters.count
+                    )
+                }
+            }
+            XCTAssertTrue(rendersRepresentativeText, "字体缺少 Share Card 长文本中的字形: \(font.rawValue)")
 
             let alternatives = service.alternativeCards(for: card)
             XCTAssertTrue(alternatives.allSatisfy { $0.font == font })

@@ -1,9 +1,0 @@
-Genkai Mincho / 源界明朝
-
-The original release page states that this font follows the SIL Open Font
-License 1.1 and permits personal and commercial use:
-https://booth.pm/ja/items/1028548
-
-The font file is bundled unmodified for Share Card rendering. The generic
-license text is included in OFL-1.1.txt. The author asks users to credit the
-font and release page when practical.
