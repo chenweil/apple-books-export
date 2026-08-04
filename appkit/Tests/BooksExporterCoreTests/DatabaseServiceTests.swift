@@ -4,6 +4,46 @@ import XCTest
 @testable import BooksExporterCore
 
 final class DatabaseServiceTests: XCTestCase {
+    func testConcurrentReadsSerializeSharedConnections() throws {
+        let rootURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("books-exporter-concurrent-database-" + UUID().uuidString)
+        let bkLibraryURL = rootURL.appendingPathComponent("BKLibrary", isDirectory: true)
+        let aeAnnotationURL = rootURL.appendingPathComponent("AEAnnotation", isDirectory: true)
+        try FileManager.default.createDirectory(at: bkLibraryURL, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: aeAnnotationURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: rootURL) }
+
+        let bkLibraryPath = bkLibraryURL.appendingPathComponent("BKLibrary.sqlite").path
+        let aeAnnotationPath = aeAnnotationURL.appendingPathComponent("AEAnnotation.sqlite").path
+        try createBookDatabase(at: bkLibraryPath)
+        try createAnnotationDatabase(at: aeAnnotationPath)
+
+        let service = DatabaseService(
+            bkLibraryPath: bkLibraryPath,
+            aeAnnotationPath: aeAnnotationPath
+        )
+        let failureLock = NSLock()
+        var failures: [String] = []
+
+        DispatchQueue.concurrentPerform(iterations: 32) { index in
+            do {
+                let books = try service.getBooks()
+                guard books.first?.totalAnnotations == 1 else {
+                    failureLock.lock()
+                    failures.append("iteration \(index): unexpected books=\(books)")
+                    failureLock.unlock()
+                    return
+                }
+            } catch {
+                failureLock.lock()
+                failures.append("iteration \(index): \(error)")
+                failureLock.unlock()
+            }
+        }
+
+        XCTAssertTrue(failures.isEmpty, failures.joined(separator: "\n"))
+    }
+
     func testReadsActiveAnnotationsCommittedToWAL() throws {
         let rootURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("books-exporter-database-" + UUID().uuidString)

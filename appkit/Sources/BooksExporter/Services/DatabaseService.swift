@@ -5,6 +5,7 @@ class DatabaseService {
     private var bkLibraryDB: OpaquePointer?
     private var aeAnnotationDB: OpaquePointer?
     private let sqliteTransient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+    private let databaseLock = NSLock()
     
     private var bkLibraryPath: String?
     private var aeAnnotationPath: String?
@@ -61,6 +62,9 @@ class DatabaseService {
     }
     
     func getBooks() throws -> [Book] {
+        databaseLock.lock()
+        defer { databaseLock.unlock() }
+
         try open()
         defer { close() }
 
@@ -142,6 +146,9 @@ class DatabaseService {
     }
     
     func getAnnotations(for bookId: String) throws -> [Annotation] {
+        databaseLock.lock()
+        defer { databaseLock.unlock() }
+
         try open()
         defer { close() }
         
