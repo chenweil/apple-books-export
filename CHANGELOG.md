@@ -10,6 +10,11 @@
 - 为共享数据库连接增加串行访问保护，并加入并发读取回归测试。
 - 默认 unsigned DMG 版本更新为 `Books-Exporter-0.1.7-unsigned.dmg`。
 
+### 发布
+
+- 发布 `Books-Exporter-0.1.7-unsigned.dmg`，应用版本为 `0.1.7`、构建号为 `8`。
+- DMG 未进行 Developer ID 签名或 notarization，仅适合本机安装验证；安装和权限说明见 README。
+
 ## v0.1.6 - 2026-08-04
 
 ### 修复

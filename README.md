@@ -7,6 +7,9 @@ AppKit 版本的 Apple Books 笔记导出工具,把高亮和笔记导出为 Mark
 当前 AppKit 版本: `v0.1.7` (`build 8`, unsigned)。应用重新激活时会重新读取 Apple Books 数据，也可以在“设置…”中配置低频自动刷新，变更记录见
 [`CHANGELOG.md`](CHANGELOG.md)。
 
+本版本可从 [GitHub Release v0.1.7](https://github.com/chenweil/apple-books-export/releases/tag/v0.1.7)
+下载 `Books-Exporter-0.1.7-unsigned.dmg`。该 DMG 未签名、未 notarization，仅适合本机安装验证。
+
 ## 系统要求
 
 - macOS 14.0+
@@ -18,7 +21,7 @@ AppKit 版本的 Apple Books 笔记导出工具,把高亮和笔记导出为 Mark
 ```bash
 cd appkit
 swift build               # 编译
-swift test                # Share Card、数据库 WAL 与设置偏好回归测试
+swift test                # Share Card、数据库并发/WAL 与设置偏好回归测试
 swift run BooksExporter   # 运行(会自动激活窗口)
 ./Scripts/verify-ui.sh    # UI 回归验证
 ```
@@ -155,7 +158,7 @@ Share Card 编辑器当前提供“系统默认”、思源黑体、思源宋体
 因此 `Tests/BooksExporterCoreTests` 可以在公共 Share Card seam、数据库服务和设置偏好边界上运行 XCTest。
 测试覆盖默认 Highlight、note-only、可选 note、作者缺失、临时文字编辑、PNG
 尺寸与命名、长文分页、字体资源渲染、目录偏好、四个 Alternative Cards,以及
-Apple Books WAL 中最新标注的读取和刷新间隔偏好持久化。
+Apple Books WAL 中最新标注的读取、共享数据库连接并发读取串行化和刷新间隔偏好持久化。
 
 `Scripts/verify-ui.sh` 仍把探针和真实源码一起编译(排除 executable 入口),
 断言分栏约束、内容列宽度、按钮排布、行高、排序可访问性、类型筛选和选中标注后
