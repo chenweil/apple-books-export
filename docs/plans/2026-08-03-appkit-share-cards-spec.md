@@ -1,3 +1,7 @@
+> 本文记录 Share Card 初始实现范围。后续编辑器迭代以
+> [`2026-08-05-appkit-share-card-editor-iteration.md`](2026-08-05-appkit-share-card-editor-iteration.md)
+> 和 ADR 0003 为准；初始六主题、系统分享和单页预览描述不覆盖后续已确认决策。
+
 ## Problem Statement
 
 Readers can browse Apple Books Annotations and export Markdown, but cannot turn a meaningful Highlight or note into a polished image for saving or sharing. Existing card work belongs to another product version and must not determine the current AppKit experience. A reader should get a readable, attractive Share Card with almost no design decisions.

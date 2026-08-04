@@ -1,3 +1,7 @@
+> 本文记录 Share Card 初始需求。后续编辑器迭代以
+> [`2026-08-05-appkit-share-card-editor-iteration.md`](2026-08-05-appkit-share-card-editor-iteration.md)
+> 和 ADR 0003 为准。
+
 # 分享卡片需求
 
 ## 目标
