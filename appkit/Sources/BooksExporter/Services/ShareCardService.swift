@@ -328,7 +328,10 @@ public struct ShareCardPage: Equatable {
         self.index = index
         self.primaryText = primaryText
         self.supplementaryNote = supplementaryNote
-        self.fontSize = fontSize
+        self.fontSize = max(
+            fontSize.isFinite ? fontSize : ShareCardTypography.minimumReadableFontSize,
+            ShareCardTypography.minimumReadableFontSize
+        )
         self.primaryTextFrame = primaryTextFrame
         self.supplementaryNoteFrame = supplementaryNoteFrame
         self.supplementaryNoteFontSize = supplementaryNoteFontSize

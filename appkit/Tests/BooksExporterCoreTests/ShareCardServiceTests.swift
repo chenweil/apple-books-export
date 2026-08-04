@@ -67,6 +67,8 @@ final class ShareCardServiceTests: XCTestCase {
 
         let unreadableFixedSize = ShareCardTypography(sizeMode: .fixed, fontSize: 12)
         XCTAssertEqual(unreadableFixedSize.fontSize, ShareCardTypography.minimumReadableFontSize)
+        let manualPage = ShareCardPage(index: 0, primaryText: "text", supplementaryNote: nil, fontSize: 12)
+        XCTAssertEqual(manualPage.fontSize, ShareCardTypography.minimumReadableFontSize)
     }
 
     func testFixedTypographyKeepsReadableSizeAndPaginatesMixedLanguageWithoutTruncation() throws {
