@@ -31,12 +31,21 @@ enum MainMenu {
         )
         hideOthers.keyEquivalentModifierMask = [.command, .option]
 
+        let settings = NSMenuItem(
+            title: "设置…",
+            action: #selector(AppDelegate.showSettings(_:)),
+            keyEquivalent: ","
+        )
+        settings.keyEquivalentModifierMask = [.command]
+        settings.target = NSApp.delegate
+
         return [
             NSMenuItem(
                 title: "关于 \(appName)",
                 action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
                 keyEquivalent: ""
             ),
+            settings,
             .separator(),
             NSMenuItem(title: "隐藏 \(appName)", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h"),
             hideOthers,

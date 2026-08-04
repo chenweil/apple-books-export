@@ -29,6 +29,7 @@ enum VerifyLayout {
         NSApplication.shared.setActivationPolicy(.accessory)
 
         checkMainMenu()
+        checkSettings()
         checkSplitView()
         checkDetailLayout()
         checkAnnotationRowHeight()
@@ -59,6 +60,39 @@ enum VerifyLayout {
 
         let quit = menu.items.first?.submenu?.items.first { $0.keyEquivalent == "q" }
         check("⌘Q 退出", quit?.action == #selector(NSApplication.terminate(_:)), "\(quit?.title ?? "缺失")")
+
+        let settings = menu.items.first?.submenu?.items.first { $0.title == "设置…" }
+        check("设置入口 ⌘,", settings?.action == #selector(AppDelegate.showSettings(_:))
+                  && settings?.keyEquivalent == ","
+                  && settings?.keyEquivalentModifierMask == [.command],
+              "\(settings?.title ?? "缺失")")
+    }
+
+    private static func checkSettings() {
+        print("\n设置页")
+        let defaults = UserDefaults(suiteName: "books-exporter-verify-settings")!
+        defaults.removePersistentDomain(forName: "books-exporter-verify-settings")
+        let settings = AppSettingsStore(
+            defaults: defaults,
+            notificationCenter: NotificationCenter()
+        )
+        let controller = SettingsViewController(settingsStore: settings)
+        controller.loadView()
+        guard let popup = view(named: "settings.refresh-interval", in: controller.view) as? NSPopUpButton else {
+            check("设置页有自动刷新控件", false, "找不到刷新间隔下拉菜单")
+            return
+        }
+
+        check("默认每 5 分钟刷新", settings.refreshInterval == .fiveMinutes,
+              settings.refreshInterval.displayName)
+        check("刷新间隔包含关闭/1/5/15/30/60 分钟",
+              popup.itemTitles == RefreshInterval.allCases.map(\.displayName),
+              "\(popup.itemTitles)")
+
+        popup.selectItem(withTag: RefreshInterval.fifteenMinutes.rawValue)
+        invoke(popup)
+        check("修改刷新间隔立即持久化", settings.refreshInterval == .fifteenMinutes,
+              settings.refreshInterval.displayName)
     }
 
     private static func checkSplitView() {

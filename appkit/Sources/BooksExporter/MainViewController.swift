@@ -15,10 +15,16 @@ final class MainViewController: NSViewController, NSSplitViewDelegate {
     private let bookDetailViewController = BookDetailViewController()
     private var didSetInitialPosition = false
     private var activationObserver: NSObjectProtocol?
+    private var settingsObserver: NSObjectProtocol?
+    private var refreshTimer: Timer?
 
     deinit {
+        refreshTimer?.invalidate()
         if let activationObserver {
             NotificationCenter.default.removeObserver(activationObserver)
+        }
+        if let settingsObserver {
+            NotificationCenter.default.removeObserver(settingsObserver)
         }
     }
 
@@ -68,6 +74,14 @@ final class MainViewController: NSViewController, NSSplitViewDelegate {
         bookListViewController.onExportAllRequested = { [weak self] books in
             self?.exportAllBooks(books)
         }
+        settingsObserver = NotificationCenter.default.addObserver(
+            forName: AppSettingsStore.didChangeNotification,
+            object: AppSettingsStore.shared,
+            queue: .main
+        ) { [weak self] _ in
+            self?.configureRefreshTimer()
+            self?.bookListViewController.reload()
+        }
         activationObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didBecomeActiveNotification,
             object: nil,
@@ -75,6 +89,23 @@ final class MainViewController: NSViewController, NSSplitViewDelegate {
         ) { [weak self] _ in
             self?.bookListViewController.reload()
         }
+        configureRefreshTimer()
+    }
+
+    private func configureRefreshTimer() {
+        refreshTimer?.invalidate()
+        refreshTimer = nil
+
+        guard let interval = AppSettingsStore.shared.refreshInterval.timeInterval else {
+            return
+        }
+
+        let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
+            guard NSApp.isActive else { return }
+            self?.bookListViewController.reload()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        refreshTimer = timer
     }
 
     private func exportAllBooks(_ books: [Book]) {
