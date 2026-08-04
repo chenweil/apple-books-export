@@ -6,8 +6,8 @@ APPKIT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 REPO_DIR="$(cd "$APPKIT_DIR/.." && pwd)"
 
 CONFIG="${CONFIG:-release}"
-APP_VERSION="${APP_VERSION:-0.1.5}"
-BUILD_VERSION="${BUILD_VERSION:-6}"
+APP_VERSION="${APP_VERSION:-0.1.6}"
+BUILD_VERSION="${BUILD_VERSION:-7}"
 APP_NAME="Books Exporter.app"
 DMG_NAME="Books-Exporter-${APP_VERSION}-unsigned.dmg"
 DIST_DIR="${DIST_DIR:-$REPO_DIR/dist}"
@@ -15,9 +15,7 @@ DIST_DIR="${DIST_DIR:-$REPO_DIR/dist}"
 BIN_DIR="$(swift build -c "$CONFIG" --show-bin-path)"
 BIN_PATH="$BIN_DIR/BooksExporter"
 RESOURCE_BUNDLE="$BIN_DIR/BooksExporter_BooksExporterCore.bundle"
-if [[ ! -x "$BIN_PATH" || ! -d "$RESOURCE_BUNDLE" ]]; then
-    swift build -c "$CONFIG"
-fi
+swift build -c "$CONFIG"
 if [[ ! -x "$BIN_PATH" ]]; then
     echo "error: executable not found: $BIN_PATH" >&2
     exit 1
