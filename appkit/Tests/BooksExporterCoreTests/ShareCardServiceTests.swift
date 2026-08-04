@@ -53,6 +53,105 @@ final class ShareCardServiceTests: XCTestCase {
         }
     }
 
+    func testDefaultCardUsesAutomaticTypographyWithReadableAlignmentDefaults() {
+        let card = ShareCardService().makeCard(
+            for: makeBook(author: "A. Reader"),
+            annotation: makeAnnotation(content: "A short passage.", note: nil)
+        )
+
+        XCTAssertEqual(card.typography.font, .system)
+        XCTAssertEqual(card.typography.sizeMode, .automatic)
+        XCTAssertEqual(card.typography.horizontalAlignment, .left)
+        XCTAssertEqual(card.typography.verticalAlignment, .center)
+        XCTAssertEqual(card.font, card.typography.font)
+    }
+
+    func testFixedTypographyKeepsReadableSizeAndPaginatesMixedLanguageWithoutTruncation() throws {
+        let text = String(repeating: "中英文 mixed passage，必须完整保留。 ", count: 220)
+        let typography = ShareCardTypography(
+            font: .sourceHanSansSC,
+            sizeMode: .fixed,
+            fontSize: 64,
+            horizontalAlignment: .center,
+            verticalAlignment: .bottom
+        )
+        let service = ShareCardService()
+        let card = service.makeCard(
+            for: makeBook(author: "A. Reader"),
+            annotation: makeAnnotation(content: text, note: nil),
+            typography: typography
+        )
+
+        let pages = service.pages(for: card)
+
+        XCTAssertGreaterThan(pages.count, 1)
+        XCTAssertTrue(pages.allSatisfy { $0.fontSize == 64 })
+        XCTAssertEqual(pages.map(\.primaryText).joined(), text)
+        XCTAssertTrue(pages.allSatisfy { page in
+            card.template.textSafeArea.contains(page.primaryTextFrame)
+        })
+
+        let preview = try service.previewImage(for: card, pageIndex: pages.count - 1)
+        XCTAssertEqual(preview.size, ShareCardService.canvasSize)
+    }
+
+    func testTypographyAlignmentChangesRenderedOutputAndVerticalFrame() throws {
+        let service = ShareCardService()
+        let baseArguments = (
+            book: makeBook(author: "A. Reader"),
+            annotation: makeAnnotation(content: "Alignment check", note: nil)
+        )
+        let topLeft = ShareCardTypography(
+            font: .system,
+            sizeMode: .fixed,
+            fontSize: 64,
+            horizontalAlignment: .left,
+            verticalAlignment: .top
+        )
+        let bottomRight = ShareCardTypography(
+            font: .system,
+            sizeMode: .fixed,
+            fontSize: 64,
+            horizontalAlignment: .right,
+            verticalAlignment: .bottom
+        )
+
+        let topCard = service.makeCard(
+            for: baseArguments.book,
+            annotation: baseArguments.annotation,
+            typography: topLeft
+        )
+        let bottomCard = service.makeCard(
+            for: baseArguments.book,
+            annotation: baseArguments.annotation,
+            typography: bottomRight
+        )
+        let topPage = try XCTUnwrap(service.pages(for: topCard).first)
+        let bottomPage = try XCTUnwrap(service.pages(for: bottomCard).first)
+        let topImage = try service.previewImage(for: topCard)
+        let bottomImage = try service.previewImage(for: bottomCard)
+
+        XCTAssertEqual(topPage.primaryTextFrame.maxY, topCard.template.textSafeArea.maxY, accuracy: 1)
+        XCTAssertEqual(bottomPage.primaryTextFrame.minY, bottomCard.template.textSafeArea.minY, accuracy: 1)
+        XCTAssertNotEqual(topImage.tiffRepresentation, bottomImage.tiffRepresentation)
+    }
+
+    func testPageLayoutKeepsSupplementaryNoteAndAttributionSeparatedFromPrimaryText() throws {
+        let service = ShareCardService()
+        let card = service.makeCard(
+            for: makeBook(author: "A. Reader"),
+            annotation: makeAnnotation(content: "A highlighted passage.", note: "A smaller supplementary note."),
+            includeNote: true
+        )
+
+        let page = try XCTUnwrap(service.pages(for: card).first)
+        let noteFrame = try XCTUnwrap(page.supplementaryNoteFrame)
+
+        XCTAssertFalse(page.primaryTextFrame.intersects(noteFrame))
+        XCTAssertFalse(noteFrame.intersects(page.attributionFrame))
+        XCTAssertEqual(page.supplementaryNoteFontSize, 38)
+    }
+
     func testBundledFontsRenderAndSurviveAlternativeCards() throws {
         let service = ShareCardService()
         let bundledFonts: [(ShareCardFont, String)] = [
@@ -174,6 +273,11 @@ final class ShareCardServiceTests: XCTestCase {
         XCTAssertEqual(result.files.count, pages.count)
         XCTAssertTrue(result.files.allSatisfy { FileManager.default.fileExists(atPath: $0.path) })
         XCTAssertNotEqual(result.files.first?.lastPathComponent, result.files.last?.lastPathComponent)
+        for file in result.files {
+            let bitmap = try XCTUnwrap(NSBitmapImageRep(data: Data(contentsOf: file)))
+            XCTAssertEqual(bitmap.pixelsWide, 1200)
+            XCTAssertEqual(bitmap.pixelsHigh, 1600)
+        }
     }
 
     func testLongAttributionWrapsAcrossFooterLines() throws {
@@ -267,6 +371,24 @@ final class ShareCardServiceTests: XCTestCase {
         XCTAssertTrue(alternatives.allSatisfy { $0.primaryText == card.primaryText })
         XCTAssertTrue(alternatives.allSatisfy { $0.attributionText == card.attributionText })
         XCTAssertEqual(Set(alternatives.map { $0.theme }).count, 4)
+    }
+
+    func testAlternativeTemplatesPreserveAllTypographyChoices() {
+        let typography = ShareCardTypography(
+            font: .sourceHanSerifSC,
+            sizeMode: .fixed,
+            fontSize: 64,
+            horizontalAlignment: .right,
+            verticalAlignment: .top
+        )
+        let service = ShareCardService()
+        let card = service.makeCard(
+            for: makeBook(author: "A. Reader"),
+            annotation: makeAnnotation(content: "A short passage.", note: nil),
+            typography: typography
+        )
+
+        XCTAssertTrue(service.alternativeCards(for: card).allSatisfy { $0.typography == typography })
     }
 
     private func makeTemporaryDirectory() throws -> URL {

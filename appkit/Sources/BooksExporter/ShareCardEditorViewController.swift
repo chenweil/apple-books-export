@@ -2,20 +2,31 @@ import AppKit
 
 final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate, NSSharingServicePickerDelegate {
     private static let alternativePreviewSize = NSSize(width: 72, height: 96)
+    private static let previewSize = NSSize(width: 360, height: 480)
+    private static let thumbnailSize = NSSize(width: 72, height: 96)
 
     private let book: Book
     private let annotation: Annotation
     private let service = ShareCardService()
     private var card: ShareCard
     private var alternativeCards: [ShareCard] = []
+    private var renderedPages: [ShareCardPage] = []
+    private var selectedPageIndex = 0
     private var sharePicker: NSSharingServicePicker?
 
     private let previewImageView = NSImageView()
+    private let pageLabel = NSTextField(labelWithString: "")
+    private let thumbnailScrollView = NSScrollView()
+    private let thumbnailStack = NSStackView()
     private let textView = NSTextView()
     private let textScrollView = NSScrollView()
     private let noteCheckbox = NSButton(checkboxWithTitle: "添加笔记", target: nil, action: nil)
     private let themePopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let fontPopup = NSPopUpButton(frame: .zero, pullsDown: false)
+    private let sizeModePopup = NSPopUpButton(frame: .zero, pullsDown: false)
+    private let fontSizePopup = NSPopUpButton(frame: .zero, pullsDown: false)
+    private let horizontalAlignmentControl = NSSegmentedControl()
+    private let verticalAlignmentControl = NSSegmentedControl()
     private let changeButton = NSButton(title: "换一换", target: nil, action: nil)
     private let alternativeStack = NSStackView()
     private let folderCheckbox = NSButton(checkboxWithTitle: "保存后打开文件夹", target: nil, action: nil)
@@ -55,6 +66,7 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate,
         noteCheckbox.isEnabled = !(annotation.noteText?.isEmpty ?? true)
         noteCheckbox.state = .off
         folderCheckbox.state = ShareCardPreferences.openExportFolder ? .on : .off
+        syncTypographyControls()
         updatePreview()
     }
 
@@ -68,6 +80,22 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate,
         previewImageView.wantsLayer = true
         previewImageView.layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
         previewImageView.setAccessibilityLabel("分享卡片预览")
+
+        pageLabel.alignment = .center
+        pageLabel.textColor = .secondaryLabelColor
+        pageLabel.setAccessibilityLabel("当前卡片页码")
+        pageLabel.identifier = NSUserInterfaceItemIdentifier("share-card-page-label")
+
+        thumbnailScrollView.translatesAutoresizingMaskIntoConstraints = false
+        thumbnailScrollView.documentView = thumbnailStack
+        thumbnailScrollView.hasHorizontalScroller = true
+        thumbnailScrollView.hasVerticalScroller = false
+        thumbnailScrollView.borderType = .bezelBorder
+        thumbnailScrollView.drawsBackground = true
+        thumbnailStack.orientation = .horizontal
+        thumbnailStack.alignment = .centerY
+        thumbnailStack.spacing = 8
+        thumbnailStack.translatesAutoresizingMaskIntoConstraints = false
 
         textView.isRichText = false
         textView.isEditable = true
@@ -100,6 +128,36 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate,
         fontPopup.target = self
         fontPopup.action = #selector(fontChanged)
         fontPopup.identifier = NSUserInterfaceItemIdentifier("share-card-font")
+
+        sizeModePopup.addItems(withTitles: ShareCardFontSizeMode.allCases.map { $0.displayName })
+        sizeModePopup.target = self
+        sizeModePopup.action = #selector(sizeModeChanged)
+        sizeModePopup.identifier = NSUserInterfaceItemIdentifier("share-card-size-mode")
+
+        fontSizePopup.addItems(withTitles: [42, 48, 56, 64, 72].map(String.init))
+        fontSizePopup.target = self
+        fontSizePopup.action = #selector(fontSizeChanged)
+        fontSizePopup.identifier = NSUserInterfaceItemIdentifier("share-card-font-size")
+
+        horizontalAlignmentControl.segmentCount = ShareCardHorizontalAlignment.allCases.count
+        ShareCardHorizontalAlignment.allCases.enumerated().forEach { index, alignment in
+            horizontalAlignmentControl.setLabel(alignment.displayName, forSegment: index)
+        }
+        horizontalAlignmentControl.trackingMode = .selectOne
+        horizontalAlignmentControl.target = self
+        horizontalAlignmentControl.action = #selector(horizontalAlignmentChanged)
+        horizontalAlignmentControl.identifier = NSUserInterfaceItemIdentifier("share-card-horizontal-alignment")
+        horizontalAlignmentControl.setAccessibilityLabel("正文水平对齐")
+
+        verticalAlignmentControl.segmentCount = ShareCardVerticalAlignment.allCases.count
+        ShareCardVerticalAlignment.allCases.enumerated().forEach { index, alignment in
+            verticalAlignmentControl.setLabel(alignment.displayName, forSegment: index)
+        }
+        verticalAlignmentControl.trackingMode = .selectOne
+        verticalAlignmentControl.target = self
+        verticalAlignmentControl.action = #selector(verticalAlignmentChanged)
+        verticalAlignmentControl.identifier = NSUserInterfaceItemIdentifier("share-card-vertical-alignment")
+        verticalAlignmentControl.setAccessibilityLabel("正文垂直对齐")
 
         changeButton.image = NSImage(
             systemSymbolName: "arrow.triangle.2.circlepath",
@@ -169,6 +227,24 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate,
         fontRow.alignment = .centerY
         fontRow.spacing = 8
 
+        let sizeModeLabel = NSTextField(labelWithString: "字号")
+        let sizeRow = NSStackView(views: [sizeModeLabel, sizeModePopup, fontSizePopup])
+        sizeRow.orientation = .horizontal
+        sizeRow.alignment = .centerY
+        sizeRow.spacing = 8
+
+        let horizontalLabel = NSTextField(labelWithString: "水平")
+        let horizontalRow = NSStackView(views: [horizontalLabel, horizontalAlignmentControl])
+        horizontalRow.orientation = .horizontal
+        horizontalRow.alignment = .centerY
+        horizontalRow.spacing = 8
+
+        let verticalLabel = NSTextField(labelWithString: "垂直")
+        let verticalRow = NSStackView(views: [verticalLabel, verticalAlignmentControl])
+        verticalRow.orientation = .horizontal
+        verticalRow.alignment = .centerY
+        verticalRow.spacing = 8
+
         let controlsTitle = NSTextField(labelWithString: "卡片文字")
         controlsTitle.font = .systemFont(ofSize: 17, weight: .semibold)
 
@@ -179,14 +255,21 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate,
 
         let controls = NSStackView(
             views: [controlsTitle, textScrollView, noteCheckbox, themeRow, fontRow, changeButton,
-                    alternativeStack, folderCheckbox, statusLabel, actionRow]
+                    sizeRow, horizontalRow, verticalRow, alternativeStack, folderCheckbox,
+                    statusLabel, actionRow]
         )
         controls.orientation = .vertical
         controls.alignment = .leading
         controls.spacing = 12
         controls.translatesAutoresizingMaskIntoConstraints = false
 
-        let content = NSStackView(views: [previewImageView, controls])
+        let previewColumn = NSStackView(views: [previewImageView, pageLabel, thumbnailScrollView])
+        previewColumn.orientation = .vertical
+        previewColumn.alignment = .centerX
+        previewColumn.spacing = 8
+        previewColumn.translatesAutoresizingMaskIntoConstraints = false
+
+        let content = NSStackView(views: [previewColumn, controls])
         content.orientation = .horizontal
         content.alignment = .top
         content.spacing = 24
@@ -199,17 +282,25 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate,
             content.topAnchor.constraint(equalTo: root.topAnchor, constant: 24),
             content.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -24),
 
-            previewImageView.widthAnchor.constraint(equalToConstant: 420),
+            previewColumn.widthAnchor.constraint(equalToConstant: Self.previewSize.width),
+            previewImageView.widthAnchor.constraint(equalToConstant: Self.previewSize.width),
             previewImageView.heightAnchor.constraint(equalTo: previewImageView.widthAnchor, multiplier: 4.0 / 3.0),
-            previewImageView.heightAnchor.constraint(lessThanOrEqualTo: content.heightAnchor),
+            previewImageView.heightAnchor.constraint(equalToConstant: Self.previewSize.height),
+            pageLabel.widthAnchor.constraint(equalToConstant: Self.previewSize.width),
+            thumbnailScrollView.widthAnchor.constraint(equalToConstant: Self.previewSize.width),
+            thumbnailScrollView.heightAnchor.constraint(equalToConstant: 112),
+            thumbnailStack.heightAnchor.constraint(equalToConstant: 104),
 
-            controls.widthAnchor.constraint(greaterThanOrEqualToConstant: 360),
-            textScrollView.heightAnchor.constraint(equalToConstant: 160),
+            controls.widthAnchor.constraint(greaterThanOrEqualToConstant: 400),
+            textScrollView.heightAnchor.constraint(equalToConstant: 140),
             textScrollView.widthAnchor.constraint(equalTo: controls.widthAnchor),
             themeRow.widthAnchor.constraint(equalTo: controls.widthAnchor),
             fontRow.widthAnchor.constraint(equalTo: controls.widthAnchor),
+            sizeRow.widthAnchor.constraint(equalTo: controls.widthAnchor),
+            horizontalRow.widthAnchor.constraint(equalTo: controls.widthAnchor),
+            verticalRow.widthAnchor.constraint(equalTo: controls.widthAnchor),
             alternativeStack.widthAnchor.constraint(equalTo: controls.widthAnchor),
-            alternativeStack.heightAnchor.constraint(equalToConstant: 112),
+            alternativeStack.heightAnchor.constraint(equalToConstant: 104),
             statusLabel.widthAnchor.constraint(equalTo: controls.widthAnchor),
             actionRow.widthAnchor.constraint(equalTo: controls.widthAnchor)
         ])
@@ -231,7 +322,7 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate,
             includeNote: noteCheckbox.state == .on,
             textOverride: textView.string,
             theme: theme,
-            font: card.font
+            typography: card.typography
         )
         invalidateExport()
         updatePreview()
@@ -278,26 +369,76 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate,
     @objc private func fontChanged() {
         guard ShareCardFont.allCases.indices.contains(fontPopup.indexOfSelectedItem) else { return }
         let font = ShareCardFont.allCases[fontPopup.indexOfSelectedItem]
-        let template = card.template
         clearAlternatives()
-        let refreshed = service.makeCard(
-            for: book,
-            annotation: annotation,
-            includeNote: noteCheckbox.state == .on,
-            textOverride: textView.string,
-            theme: template.theme,
-            font: font
+        updateTypography(
+            ShareCardTypography(
+                font: font,
+                sizeMode: card.typography.sizeMode,
+                fontSize: card.typography.fontSize,
+                horizontalAlignment: card.typography.horizontalAlignment,
+                verticalAlignment: card.typography.verticalAlignment
+            )
         )
-        card = ShareCard(
-            bookTitle: refreshed.bookTitle,
-            author: refreshed.author,
-            primaryText: refreshed.primaryText,
-            supplementaryNote: refreshed.supplementaryNote,
-            template: template,
-            font: font
+    }
+
+    @objc private func sizeModeChanged() {
+        guard ShareCardFontSizeMode.allCases.indices.contains(sizeModePopup.indexOfSelectedItem) else { return }
+        clearAlternatives()
+        updateTypography(
+            ShareCardTypography(
+                font: card.typography.font,
+                sizeMode: ShareCardFontSizeMode.allCases[sizeModePopup.indexOfSelectedItem],
+                fontSize: card.typography.fontSize,
+                horizontalAlignment: card.typography.horizontalAlignment,
+                verticalAlignment: card.typography.verticalAlignment
+            )
         )
-        invalidateExport()
-        updatePreview()
+    }
+
+    @objc private func fontSizeChanged() {
+        guard let fontSize = Double(fontSizePopup.titleOfSelectedItem ?? "") else { return }
+        clearAlternatives()
+        updateTypography(
+            ShareCardTypography(
+                font: card.typography.font,
+                sizeMode: card.typography.sizeMode,
+                fontSize: CGFloat(fontSize),
+                horizontalAlignment: card.typography.horizontalAlignment,
+                verticalAlignment: card.typography.verticalAlignment
+            )
+        )
+    }
+
+    @objc private func horizontalAlignmentChanged() {
+        guard ShareCardHorizontalAlignment.allCases.indices.contains(horizontalAlignmentControl.selectedSegment) else {
+            return
+        }
+        clearAlternatives()
+        updateTypography(
+            ShareCardTypography(
+                font: card.typography.font,
+                sizeMode: card.typography.sizeMode,
+                fontSize: card.typography.fontSize,
+                horizontalAlignment: ShareCardHorizontalAlignment.allCases[horizontalAlignmentControl.selectedSegment],
+                verticalAlignment: card.typography.verticalAlignment
+            )
+        )
+    }
+
+    @objc private func verticalAlignmentChanged() {
+        guard ShareCardVerticalAlignment.allCases.indices.contains(verticalAlignmentControl.selectedSegment) else {
+            return
+        }
+        clearAlternatives()
+        updateTypography(
+            ShareCardTypography(
+                font: card.typography.font,
+                sizeMode: card.typography.sizeMode,
+                fontSize: card.typography.fontSize,
+                horizontalAlignment: card.typography.horizontalAlignment,
+                verticalAlignment: ShareCardVerticalAlignment.allCases[verticalAlignmentControl.selectedSegment]
+            )
+        )
     }
 
     @objc private func alternativeSelected(_ sender: NSButton) {
@@ -306,6 +447,7 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate,
         textView.string = card.primaryText
         themePopup.selectItem(at: ShareCardTheme.allCases.firstIndex(of: card.theme) ?? 0)
         fontPopup.selectItem(at: ShareCardFont.allCases.firstIndex(of: card.font) ?? 0)
+        syncTypographyControls()
         invalidateExport()
         updatePreview()
     }
@@ -358,13 +500,18 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate,
 
     @objc private func copyRequested() {
         do {
-            let pages = service.pages(for: card)
-            let images = try pages.indices.map { try service.previewImage(for: card, pageIndex: $0) }
-            guard !images.isEmpty, copyHandler(images) else {
+            guard renderedPages.indices.contains(selectedPageIndex) else {
                 statusLabel.stringValue = "复制失败"
                 return
             }
-            statusLabel.stringValue = images.count == 1 ? "已复制图片" : "已复制 \(images.count) 张图片"
+            let image = try service.previewImage(for: card, pageIndex: selectedPageIndex)
+            guard copyHandler([image]) else {
+                statusLabel.stringValue = "复制失败"
+                return
+            }
+            statusLabel.stringValue = renderedPages.count == 1
+                ? "已复制图片"
+                : "已复制第 \(selectedPageIndex + 1) 页"
         } catch {
             statusLabel.stringValue = "复制失败：\(error.localizedDescription)"
         }
@@ -418,7 +565,7 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate,
             includeNote: noteCheckbox.state == .on,
             textOverride: textView.string,
             theme: template.theme,
-            font: card.font
+            typography: card.typography
         )
         card = ShareCard(
             bookTitle: refreshed.bookTitle,
@@ -426,10 +573,35 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate,
             primaryText: refreshed.primaryText,
             supplementaryNote: refreshed.supplementaryNote,
             template: template,
-            font: card.font
+            typography: card.typography
         )
         invalidateExport()
         updatePreview()
+    }
+
+    private func updateTypography(_ typography: ShareCardTypography) {
+        card = ShareCard(
+            bookTitle: card.bookTitle,
+            author: card.author,
+            primaryText: card.primaryText,
+            supplementaryNote: card.supplementaryNote,
+            template: card.template,
+            typography: typography
+        )
+        syncTypographyControls()
+        invalidateExport()
+        updatePreview()
+    }
+
+    private func syncTypographyControls() {
+        sizeModePopup.selectItem(at: ShareCardFontSizeMode.allCases.firstIndex(of: card.typography.sizeMode) ?? 0)
+        let fontSizeIndex = [42, 48, 56, 64, 72].firstIndex { CGFloat($0) == card.typography.fontSize } ?? 2
+        fontSizePopup.selectItem(at: fontSizeIndex)
+        fontSizePopup.isEnabled = card.typography.sizeMode == .fixed
+        horizontalAlignmentControl.selectedSegment =
+            ShareCardHorizontalAlignment.allCases.firstIndex(of: card.typography.horizontalAlignment) ?? 0
+        verticalAlignmentControl.selectedSegment =
+            ShareCardVerticalAlignment.allCases.firstIndex(of: card.typography.verticalAlignment) ?? 1
     }
 
     private func clearAlternatives() {
@@ -449,10 +621,74 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate,
         statusLabel.stringValue = ""
     }
 
+    @objc private func pageSelected(_ sender: NSButton) {
+        guard renderedPages.indices.contains(sender.tag) else { return }
+        selectedPageIndex = sender.tag
+        updateSelectedPagePreview()
+    }
+
     private func updatePreview() {
+        renderedPages = service.pages(for: card)
+        if renderedPages.isEmpty {
+            selectedPageIndex = 0
+            thumbnailStack.arrangedSubviews.forEach {
+                thumbnailStack.removeArrangedSubview($0)
+                $0.removeFromSuperview()
+            }
+            pageLabel.stringValue = ""
+            previewImageView.image = nil
+            copyButton.isEnabled = false
+            statusLabel.stringValue = "请输入卡片文字"
+            return
+        }
+
+        selectedPageIndex = min(selectedPageIndex, renderedPages.count - 1)
+        pageLabel.stringValue = "第 \(selectedPageIndex + 1) / \(renderedPages.count) 页"
+        reloadThumbnails()
+        updateSelectedPagePreview()
+    }
+
+    private func reloadThumbnails() {
+        thumbnailStack.arrangedSubviews.forEach {
+            thumbnailStack.removeArrangedSubview($0)
+            $0.removeFromSuperview()
+        }
+
         do {
-            previewImageView.image = try service.previewImage(for: card)
+            for (index, _) in renderedPages.enumerated() {
+                let button = NSButton(
+                    image: try service.previewImage(for: card, pageIndex: index),
+                    target: self,
+                    action: #selector(pageSelected(_:))
+                )
+                button.tag = index
+                button.setButtonType(.toggle)
+                button.state = index == selectedPageIndex ? .on : .off
+                button.imageScaling = .scaleProportionallyUpOrDown
+                button.bezelStyle = .regularSquare
+                button.toolTip = "查看第 \(index + 1) 页"
+                button.setAccessibilityLabel("第 \(index + 1) 页")
+                button.identifier = NSUserInterfaceItemIdentifier("share-card-page-\(index)")
+                button.translatesAutoresizingMaskIntoConstraints = false
+                thumbnailStack.addArrangedSubview(button)
+                NSLayoutConstraint.activate([
+                    button.widthAnchor.constraint(equalToConstant: Self.thumbnailSize.width),
+                    button.heightAnchor.constraint(equalToConstant: Self.thumbnailSize.height)
+                ])
+            }
+        } catch {
+            statusLabel.stringValue = "无法生成页面预览"
+        }
+    }
+
+    private func updateSelectedPagePreview() {
+        do {
+            previewImageView.image = try service.previewImage(for: card, pageIndex: selectedPageIndex)
             copyButton.isEnabled = true
+            pageLabel.stringValue = "第 \(selectedPageIndex + 1) / \(renderedPages.count) 页"
+            for (index, view) in thumbnailStack.arrangedSubviews.enumerated() {
+                (view as? NSButton)?.state = index == selectedPageIndex ? .on : .off
+            }
             if statusLabel.stringValue.hasPrefix("无法") || statusLabel.stringValue.hasPrefix("保存失败") {
                 statusLabel.stringValue = ""
             }

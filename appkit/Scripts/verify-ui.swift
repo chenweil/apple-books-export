@@ -40,6 +40,7 @@ enum VerifyLayout {
         checkShareCardAlternativeLayout()
         checkShareCardActions()
         checkShareCardFontSelection()
+        checkShareCardTypographyAndPages()
         checkShareServiceFiltering()
         checkClassifier()
         checkBookRowCentering()
@@ -568,6 +569,83 @@ enum VerifyLayout {
             }
             check("切换字体后清理旧候选卡片", candidatesAfterFontChange.isEmpty,
                   "候选数=\(candidatesAfterFontChange.count)")
+        }
+    }
+
+    private static func checkShareCardTypographyAndPages() {
+        print("\n分享卡片排版与多页")
+        let book = Book(id: "b1", title: "测试书", author: "某人",
+                        totalAnnotations: 1, highlightsCount: 1, notesCount: 0)
+        let longText = String(repeating: "中英文 mixed passage，必须完整保留。 ", count: 220)
+        let annotation = Annotation(
+            id: "long-1",
+            type: .highlight,
+            chapterTitle: "第一章",
+            locationInfo: "",
+            contentText: longText,
+            noteText: nil,
+            createdAt: Date(timeIntervalSinceReferenceDate: 0)
+        )
+        var copiedImages: [NSImage] = []
+        let editor = ShareCardEditorViewController(
+            book: book,
+            annotation: annotation,
+            copyHandler: { images in
+                copiedImages = images
+                return true
+            }
+        )
+        editor.loadView()
+        hosted(editor.view, width: 980, height: 700)
+        editor.view.layoutSubtreeIfNeeded()
+
+        guard let sizeMode = view(named: "share-card-size-mode", in: editor.view) as? NSPopUpButton,
+              let fontSize = view(named: "share-card-font-size", in: editor.view) as? NSPopUpButton,
+              let horizontal = view(named: "share-card-horizontal-alignment", in: editor.view)
+                  as? NSSegmentedControl,
+              let vertical = view(named: "share-card-vertical-alignment", in: editor.view)
+                  as? NSSegmentedControl,
+              let pageLabel = view(named: "share-card-page-label", in: editor.view) as? NSTextField else {
+            check("排版与页码控件可定位", false, "缺少字号、对齐或页码控件")
+            return
+        }
+
+        check("字号模式包含自动和固定", sizeMode.itemTitles == ["自动字号", "固定字号"],
+              "模式=\(sizeMode.itemTitles)")
+        check("固定字号选项可用", fontSize.itemTitles.contains("64"),
+              "字号=\(fontSize.itemTitles)")
+
+        sizeMode.selectItem(at: 1)
+        invoke(sizeMode)
+        fontSize.selectItem(withTitle: "64")
+        invoke(fontSize)
+        horizontal.selectedSegment = 1
+        invoke(horizontal)
+        vertical.selectedSegment = 2
+        invoke(vertical)
+        editor.view.layoutSubtreeIfNeeded()
+
+        let pageButtons = buttons(in: editor.view).filter {
+            $0.identifier?.rawValue.hasPrefix("share-card-page-") == true
+        }
+        check("固定字号长文生成多页缩略图", pageButtons.count > 1,
+              "页数=\(pageButtons.count)")
+        check("页码状态可见", pageLabel.stringValue == "第 1 / \(pageButtons.count) 页",
+              "页码=\(pageLabel.stringValue)")
+        check("缩略图带保持在窗口内", pageButtons.allSatisfy { $0.frame.width <= 120 && $0.frame.height <= 120 },
+              "缩略图高度=\(pageButtons.map { Int($0.frame.height) })")
+
+        if pageButtons.count > 1 {
+            invoke(pageButtons[1])
+            check("点击缩略图切换当前页", pageLabel.stringValue == "第 2 / \(pageButtons.count) 页",
+                  "页码=\(pageLabel.stringValue)")
+            guard let copyButton = view(titled: "复制图片", in: editor.view) as? NSButton else {
+                check("多页复制入口可定位", false, "找不到复制按钮")
+                return
+            }
+            invoke(copyButton)
+            check("多页复制默认只传出当前页", copiedImages.count == 1,
+                  "图片数=\(copiedImages.count)")
         }
     }
 
