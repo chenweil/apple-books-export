@@ -1,0 +1,9 @@
+LXGW WenKai / 霞鹜文楷
+
+Source: https://github.com/lxgw/LxgwWenKai
+Bundled file: fonts/TTF/LXGWWenKai-Regular.ttf
+Source revision checked: ed634e2291ff8adcffbab553d6c26cc95a0e4a0c (2026-08-04)
+
+This app redistributes the unmodified font together with the complete SIL Open Font License 1.1 text in LXGW-OFL-1.1.txt. The upstream project permits personal and commercial use, embedding in software or apps, redistribution with software, and modification under the OFL 1.1 terms.
+
+The upstream reserved font names are: 霞鹜 (霞鶩), 落霞孤鹜 (落霞孤鶩), and LXGW. A modified or derivative font must follow the upstream naming restrictions unless the author provides written permission.

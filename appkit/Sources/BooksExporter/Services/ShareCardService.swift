@@ -56,6 +56,7 @@ public enum ShareCardFont: String, CaseIterable, Codable {
     case huiwenFangSong
     case huiwenZhengKai
     case huiwenGangHei
+    case lxgwWenKai
 
     public var displayName: String {
         switch self {
@@ -70,6 +71,7 @@ public enum ShareCardFont: String, CaseIterable, Codable {
         case .huiwenFangSong: return "汇文仿宋"
         case .huiwenZhengKai: return "汇文正楷"
         case .huiwenGangHei: return "汇文港黑"
+        case .lxgwWenKai: return "霞鹜文楷"
         }
     }
 
@@ -86,6 +88,7 @@ public enum ShareCardFont: String, CaseIterable, Codable {
         case .huiwenFangSong: return "HuiwenFangSong"
         case .huiwenZhengKai: return "HuiwenZhengKai"
         case .huiwenGangHei: return "HuiwenGangHei"
+        case .lxgwWenKai: return "LXGWWenKai-Regular"
         }
     }
 
@@ -94,7 +97,8 @@ public enum ShareCardFont: String, CaseIterable, Codable {
         case .system: return nil
         case .sourceHanSansSC: return "otf"
         case .slideYouran, .slideFu, .zcoolWenYiTi, .pangMenZhengDao,
-             .huiwenMingChaoGBK, .huiwenFangSong, .huiwenZhengKai, .huiwenGangHei:
+             .huiwenMingChaoGBK, .huiwenFangSong, .huiwenZhengKai, .huiwenGangHei,
+             .lxgwWenKai:
             return "ttf"
         case .sourceHanSerifSC: return "otf"
         }
@@ -113,6 +117,7 @@ public enum ShareCardFont: String, CaseIterable, Codable {
         case .huiwenFangSong: return "HuiwenFangsong-Regular"
         case .huiwenZhengKai: return "HuiwenZhengkai-Regular"
         case .huiwenGangHei: return "HuiwenHKHei-Regular"
+        case .lxgwWenKai: return "LXGWWenKai-Regular"
         }
     }
 }

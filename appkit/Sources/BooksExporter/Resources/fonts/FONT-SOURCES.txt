@@ -19,6 +19,7 @@ source license.
 | `HuiwenFangSong.ttf` | `HuiwenFangsong-Regular` | User-provided Huiwen Series file; see `HUIWEN-NOTICE.txt`. |
 | `HuiwenZhengKai.ttf` | `HuiwenZhengkai-Regular` | User-provided Huiwen Series file; see `HUIWEN-NOTICE.txt`. |
 | `HuiwenGangHei.ttf` | `HuiwenHKHei-Regular` | User-provided Huiwen Series file; see `HUIWEN-NOTICE.txt`. |
+| `LXGWWenKai-Regular.ttf` | `LXGWWenKai-Regular` | [LXGW WenKai](https://github.com/lxgw/LxgwWenKai), from `fonts/TTF`; SIL Open Font License 1.1. The full license is in `LXGW-OFL-1.1.txt`; reserved-name details are in `LXGW-NOTICE.txt`. |
 
 The four publisher-statement fonts above are bundled based on the publisher
 statements linked above. Those statements are not replaced by this note or by
@@ -31,6 +32,10 @@ transcribed in `HUIWEN-NOTICE.txt`. That statement forbids selling the fonts
 separately or as part of a resource package for profit, while allowing
 forwarding, copying, modification, and derivative versions. It does not grant
 any rights beyond the statement supplied with these files.
+
+The LXGW WenKai font is bundled unmodified with the complete OFL 1.1 text and
+the upstream reserved-name notice. Any modified or derivative font must follow
+the OFL 1.1 terms and the upstream naming restrictions.
 
 ## Not bundled pending authorization
 

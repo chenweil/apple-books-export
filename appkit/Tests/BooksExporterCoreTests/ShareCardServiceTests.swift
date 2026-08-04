@@ -65,7 +65,8 @@ final class ShareCardServiceTests: XCTestCase {
             (.huiwenMingChaoGBK, "Huiwen-MinchoGBK-Regular"),
             (.huiwenFangSong, "HuiwenFangsong-Regular"),
             (.huiwenZhengKai, "HuiwenZhengkai-Regular"),
-            (.huiwenGangHei, "HuiwenHKHei-Regular")
+            (.huiwenGangHei, "HuiwenHKHei-Regular"),
+            (.lxgwWenKai, "LXGWWenKai-Regular")
         ]
         XCTAssertEqual(bundledFonts.map(\.0), ShareCardFont.allCases.filter { $0 != .system })
 
