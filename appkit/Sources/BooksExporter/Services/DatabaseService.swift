@@ -9,8 +9,9 @@ class DatabaseService {
     private var bkLibraryPath: String?
     private var aeAnnotationPath: String?
     
-    init() {
-        // Defer path resolution and throwing to first use
+    init(bkLibraryPath: String? = nil, aeAnnotationPath: String? = nil) {
+        self.bkLibraryPath = bkLibraryPath
+        self.aeAnnotationPath = aeAnnotationPath
     }
     
     func open() throws {
@@ -18,12 +19,14 @@ class DatabaseService {
             try resolveDatabasePaths()
         }
 
-        let bkURI = "file:\(bkLibraryPath!)?immutable=1"
+        // Apple Books writes recent changes to a WAL. Read-only mode keeps WAL visibility
+        // while preventing this exporter from modifying the source databases.
+        let bkURI = "file:\(bkLibraryPath!)?mode=ro"
         if sqlite3_open_v2(bkURI, &bkLibraryDB, SQLITE_OPEN_READONLY | SQLITE_OPEN_URI, nil) != SQLITE_OK {
             throw DatabaseError.openFailed("BKLibrary: \(String(cString: sqlite3_errmsg(bkLibraryDB)))")
         }
 
-        let aeURI = "file:\(aeAnnotationPath!)?immutable=1"
+        let aeURI = "file:\(aeAnnotationPath!)?mode=ro"
         if sqlite3_open_v2(aeURI, &aeAnnotationDB, SQLITE_OPEN_READONLY | SQLITE_OPEN_URI, nil) != SQLITE_OK {
             throw DatabaseError.openFailed("AEAnnotation: \(String(cString: sqlite3_errmsg(aeAnnotationDB)))")
         }

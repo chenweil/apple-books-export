@@ -5,9 +5,15 @@ final class BookListViewController: NSViewController {
     private let bookListView = BookListView()
     private var hasLoadedBooks = false
     private var hasShownPermissionAlert = false
+    private var loadTask: Task<Void, Never>?
 
     var onBookSelected: ((Book) -> Void)?
     var onExportAllRequested: (([Book]) -> Void)?
+    var onBooksLoaded: (([Book]) -> Void)?
+
+    deinit {
+        loadTask?.cancel()
+    }
 
     override func loadView() {
         view = bookListView
@@ -25,18 +31,25 @@ final class BookListViewController: NSViewController {
         }
 
         guard !hasLoadedBooks else { return }
+        reload()
+    }
+
+    func reload() {
         hasLoadedBooks = true
         loadBooks()
     }
 
     private func loadBooks() {
+        loadTask?.cancel()
         bookListView.setLoading(true)
         let window = view.window
 
-        Task { @MainActor [weak self] in
+        loadTask = Task { @MainActor [weak self] in
             guard let self else { return }
             let books = await bookService.listBooks()
+            guard !Task.isCancelled else { return }
             bookListView.setBooks(books)
+            onBooksLoaded?(books)
             bookListView.setLoading(false)
             if let error = bookService.currentError {
                 let retry: Bool
@@ -49,8 +62,7 @@ final class BookListViewController: NSViewController {
                     retry = false
                 }
                 if retry {
-                    hasLoadedBooks = false
-                    loadBooks()
+                    reload()
                 } else {
                     bookListView.setError(error)
                 }

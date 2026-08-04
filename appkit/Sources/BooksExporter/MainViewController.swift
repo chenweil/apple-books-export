@@ -14,6 +14,13 @@ final class MainViewController: NSViewController, NSSplitViewDelegate {
     private let bookListViewController = BookListViewController()
     private let bookDetailViewController = BookDetailViewController()
     private var didSetInitialPosition = false
+    private var activationObserver: NSObjectProtocol?
+
+    deinit {
+        if let activationObserver {
+            NotificationCenter.default.removeObserver(activationObserver)
+        }
+    }
 
     override func loadView() {
         splitView.isVertical = true
@@ -55,8 +62,18 @@ final class MainViewController: NSViewController, NSSplitViewDelegate {
         bookListViewController.onBookSelected = { [weak self] book in
             self?.bookDetailViewController.show(book: book)
         }
+        bookListViewController.onBooksLoaded = { [weak self] books in
+            self?.bookDetailViewController.refresh(using: books)
+        }
         bookListViewController.onExportAllRequested = { [weak self] books in
             self?.exportAllBooks(books)
+        }
+        activationObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.bookListViewController.reload()
         }
     }
 

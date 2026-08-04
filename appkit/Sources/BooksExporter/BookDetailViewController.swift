@@ -43,6 +43,14 @@ final class BookDetailViewController: NSViewController {
         }
     }
 
+    func refresh(using books: [Book]) {
+        guard let selectedBook,
+              let refreshedBook = books.first(where: { $0.id == selectedBook.id }) else {
+            return
+        }
+        show(book: refreshedBook)
+    }
+
     private func chooseExportDirectory(for annotations: [Annotation]) {
         guard let window = view.window, !annotations.isEmpty else { return }
 

@@ -4,7 +4,7 @@ AppKit 版本的 Apple Books 笔记导出工具,把高亮和笔记导出为 Mark
 
 > **状态**: 实验性研究项目,可能归档。当前聚焦 AppKit GUI 栈。
 
-当前 AppKit 版本: `v0.1.3` (`build 4`, unsigned)。变更记录见
+当前 AppKit 版本: `v0.1.4` (`build 5`, unsigned)。应用重新激活时会重新读取 Apple Books 数据，变更记录见
 [`CHANGELOG.md`](CHANGELOG.md)。
 
 ## 系统要求
@@ -18,7 +18,7 @@ AppKit 版本的 Apple Books 笔记导出工具,把高亮和笔记导出为 Mark
 ```bash
 cd appkit
 swift build               # 编译
-swift test                # ShareCardService 公共 seam 测试
+swift test                # Share Card 与数据库 WAL 回归测试
 swift run BooksExporter   # 运行(会自动激活窗口)
 ./Scripts/verify-ui.sh    # UI 回归验证
 ```
@@ -35,10 +35,10 @@ chmod +x Scripts/package-dmg.sh
 ./Scripts/package-dmg.sh
 ```
 
-产物位于仓库根目录的 `dist/Books-Exporter-0.1.3-unsigned.dmg`。也可以覆盖版本号：
+产物位于仓库根目录的 `dist/Books-Exporter-0.1.4-unsigned.dmg`。也可以覆盖版本号：
 
 ```bash
-APP_VERSION=0.1.4 BUILD_VERSION=5 ./Scripts/package-dmg.sh
+APP_VERSION=0.1.5 BUILD_VERSION=6 ./Scripts/package-dmg.sh
 ```
 
 安装时将 DMG 中的 `Books Exporter.app` 拖到 `/Applications`。首次打开如果被 Gatekeeper 拦截，优先在 Finder 中右键应用并选择“打开”；必要时可执行：
@@ -115,6 +115,7 @@ Apple Books 不把「笔记」存成独立对象 —— 笔记就是给高亮加
 | M5f | 完成 | 加载中状态会禁用搜索、表格和导出按钮 |
 | M5g | 完成 | 表头排序偏好持久化到 UserDefaults |
 | M5h | 完成 | 表头三态排序循环(升序 → 降序 → 无排序) |
+| M5i | 完成 | 应用重新激活时重新读取 Apple Books 数据,同步当前选中书的标注 |
 | M6a | 完成 | 界面评审:补主菜单、分栏最小宽度、笔记不再被截断、内容列宽度上限生效 |
 | M6b | 完成 | 排序状态对 VoiceOver 可读(AXSortDirection + 变更播报) |
 | M6c | 完成 | 详情页按类型筛选笔记(全部 / 高亮 / 笔记) |
@@ -148,9 +149,10 @@ Share Card 编辑器当前提供“系统默认”、思源黑体、思源宋体
 ## 测试现状
 
 `BooksExporterCore` 是 library target,`BooksExporter` 只保留瘦 executable 入口,
-因此 `Tests/BooksExporterCoreTests` 可以在公共 Share Card seam 上运行 XCTest。
+因此 `Tests/BooksExporterCoreTests` 可以在公共 Share Card seam 和数据库服务测试上运行 XCTest。
 测试覆盖默认 Highlight、note-only、可选 note、作者缺失、临时文字编辑、PNG
-尺寸与命名、长文分页、字体资源渲染、目录偏好和四个 Alternative Cards。
+尺寸与命名、长文分页、字体资源渲染、目录偏好、四个 Alternative Cards,以及
+Apple Books WAL 中最新标注的读取。
 
 `Scripts/verify-ui.sh` 仍把探针和真实源码一起编译(排除 executable 入口),
 断言分栏约束、内容列宽度、按钮排布、行高、排序可访问性、类型筛选和选中标注后
