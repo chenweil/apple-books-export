@@ -259,7 +259,7 @@ public struct ShareCardTemplate: Equatable, Codable {
         attributionArea: CGRect = CGRect(x: 130, y: 90, width: 940, height: 180),
         primaryTextColor: ShareCardColor = .nearBlack,
         supplementaryNoteColor: ShareCardColor? = nil,
-        attributionColor: ShareCardColor = ShareCardColor(red: 0.18, green: 0.18, blue: 0.18, alpha: 0.78)
+        attributionColor: ShareCardColor = ShareCardColor(red: 0.18, green: 0.18, blue: 0.18)
     ) {
         self.id = id
         self.theme = theme
@@ -504,8 +504,8 @@ public final class ShareCardService {
         alternativeCursorLock.unlock()
 
         var candidateThemes: [ShareCardTheme] = []
-        var offset = 0
-        while candidateThemes.count < min(4, themes.count - 1) && offset < themes.count * 2 {
+        var offset = 1
+        while candidateThemes.count < min(4, themes.count - 1) && offset < themes.count {
             let theme = themes[(cursor + offset) % themes.count]
             if theme != card.theme {
                 candidateThemes.append(theme)
@@ -938,9 +938,9 @@ public final class ShareCardService {
             )
         case .collagePaper:
             regions = (
-                CGRect(x: 180, y: 500, width: 840, height: 780),
+                CGRect(x: 260, y: 650, width: 680, height: 450),
                 CGRect(x: 180, y: 300, width: 840, height: 130),
-                CGRect(x: 180, y: 90, width: 840, height: 180)
+                CGRect(x: 180, y: 450, width: 840, height: 180)
             )
         }
         let primaryTextColor = primaryTextColor(for: theme)
@@ -951,7 +951,7 @@ public final class ShareCardService {
             noteArea: regions.noteArea,
             attributionArea: regions.attributionArea,
             primaryTextColor: primaryTextColor,
-            attributionColor: primaryTextColor.withAlpha(0.78)
+            attributionColor: primaryTextColor
         )
     }
 
@@ -965,7 +965,7 @@ public final class ShareCardService {
         case .stoneTextile: return ShareCardColor(red: 0.10, green: 0.10, blue: 0.10)
         case .vintagePaper: return ShareCardColor(red: 0.22, green: 0.12, blue: 0.06)
         case .pinkBlueWash: return ShareCardColor(red: 0.06, green: 0.20, blue: 0.22)
-        case .softStone: return ShareCardColor(red: 0.16, green: 0.12, blue: 0.10)
+        case .softStone: return ShareCardColor(red: 0.08, green: 0.08, blue: 0.08)
         case .linePaper: return ShareCardColor(red: 0.12, green: 0.12, blue: 0.12)
         case .ruledNote: return ShareCardColor(red: 0.08, green: 0.15, blue: 0.22)
         case .collagePaper: return ShareCardColor(red: 0.22, green: 0.12, blue: 0.07)

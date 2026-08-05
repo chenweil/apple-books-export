@@ -596,9 +596,12 @@ final class ShareCardServiceTests: XCTestCase {
                     luminanceValues.isEmpty,
                     "主题\(region.name)安全区没有可采样像素: \(theme.rawValue)"
                 )
-                let p90 = luminanceValues.sorted()[Int(Double(luminanceValues.count - 1) * 0.9)]
-                let textLuminance = relativeLuminance(region.color)
-                let contrast = (max(p90, textLuminance) + 0.05) / (min(p90, textLuminance) + 0.05)
+                let contrast = minimumContrast(
+                    in: background,
+                    area: region.area,
+                    foreground: region.color,
+                    sampleStride: 1
+                )
                 XCTAssertGreaterThanOrEqual(
                     contrast,
                     4.5,
@@ -672,9 +675,9 @@ final class ShareCardServiceTests: XCTestCase {
         let afterSelection = service.alternativeCards(for: firstCards[0]).map(\.theme)
 
         XCTAssertEqual(first, [.sageLeaf, .blushArcs, .sandContours, .lavenderStars])
-        XCTAssertEqual(second, [.lavenderStars, .stoneTextile, .vintagePaper, .pinkBlueWash])
+        XCTAssertEqual(second, [.stoneTextile, .vintagePaper, .pinkBlueWash, .softStone])
         XCTAssertFalse(first.contains(card.theme))
-        XCTAssertEqual(afterSelection, [.softStone, .linePaper, .ruledNote, .collagePaper])
+        XCTAssertEqual(afterSelection, [.linePaper, .ruledNote, .collagePaper, .mistWash])
     }
 
     func testAlternativeTemplatesPreserveAllTypographyChoices() {
@@ -719,6 +722,49 @@ final class ShareCardServiceTests: XCTestCase {
             }
         }
         return values
+    }
+
+    private func minimumContrast(
+        in image: NSImage,
+        area: CGRect,
+        foreground: ShareCardColor,
+        sampleStride: Int
+    ) -> CGFloat {
+        guard let bitmap = image.representations.compactMap({ $0 as? NSBitmapImageRep }).first else {
+            return 0
+        }
+        let xStart = max(0, Int(CGFloat(bitmap.pixelsWide) * area.minX / ShareCardService.canvasSize.width))
+        let xEnd = min(bitmap.pixelsWide, Int(CGFloat(bitmap.pixelsWide) * area.maxX / ShareCardService.canvasSize.width))
+        let yStart = max(0, Int(CGFloat(bitmap.pixelsHigh) * area.minY / ShareCardService.canvasSize.height))
+        let yEnd = min(bitmap.pixelsHigh, Int(CGFloat(bitmap.pixelsHigh) * area.maxY / ShareCardService.canvasSize.height))
+
+        var minimum = CGFloat.greatestFiniteMagnitude
+        for y in stride(from: yStart, to: yEnd, by: sampleStride) {
+            for x in stride(from: xStart, to: xEnd, by: sampleStride) {
+                guard let background = bitmap.colorAt(x: x, y: y),
+                      let rgb = background.usingColorSpace(.sRGB) else {
+                    continue
+                }
+                var red: CGFloat = 0
+                var green: CGFloat = 0
+                var blue: CGFloat = 0
+                var alpha: CGFloat = 0
+                rgb.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
+                let foregroundRed = foreground.red * foreground.alpha + red * (1 - foreground.alpha)
+                let foregroundGreen = foreground.green * foreground.alpha + green * (1 - foreground.alpha)
+                let foregroundBlue = foreground.blue * foreground.alpha + blue * (1 - foreground.alpha)
+                let foregroundLuminance = relativeLuminance(
+                    red: foregroundRed,
+                    green: foregroundGreen,
+                    blue: foregroundBlue
+                )
+                let backgroundLuminance = relativeLuminance(red: red, green: green, blue: blue)
+                let contrast = (max(foregroundLuminance, backgroundLuminance) + 0.05)
+                    / (min(foregroundLuminance, backgroundLuminance) + 0.05)
+                minimum = min(minimum, contrast)
+            }
+        }
+        return minimum == .greatestFiniteMagnitude ? 0 : minimum
     }
 
     private func relativeLuminance(_ color: ShareCardColor) -> CGFloat {

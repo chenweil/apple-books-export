@@ -63,6 +63,7 @@ The Share Card action is contextual. It appears beside an Annotation only after 
 ## Background Generation
 
 The card editor opens with a default template preview. The theme panel shows all twelve bundled backgrounds as bounded thumbnails. A Card Template is an atomic background-plus-palette choice. “Change it up” rotates through the canonical twelve-template order with a persistent cursor, shows the next four templates after the cursor while skipping the current template, and advances the cursor by four modulo twelve after each request. Selecting a candidate does not reset the cursor or user typography.
+The six backgrounds added for this iteration have per-asset provenance, production constraints, hashes, palette colors, and safe-area records in `docs/assets/share-card-backgrounds/SOURCES.md`.
 
 ## Background Style
 
