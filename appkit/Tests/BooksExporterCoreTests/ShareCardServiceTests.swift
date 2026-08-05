@@ -581,16 +581,81 @@ final class ShareCardServiceTests: XCTestCase {
             let image = try service.previewImage(for: themedCard)
             XCTAssertEqual(image.size, ShareCardService.canvasSize)
 
-            let luminances = luminances(
-                in: background,
-                area: template.textSafeArea,
-                sampleStride: 12
+            let regions = [
+                (name: "正文", area: template.textSafeArea, color: template.primaryTextColor),
+                (name: "笔记", area: template.noteArea, color: template.supplementaryNoteColor),
+                (name: "署名", area: template.attributionArea, color: template.attributionColor)
+            ]
+            for region in regions {
+                let luminanceValues = luminances(
+                    in: background,
+                    area: region.area,
+                    sampleStride: 12
+                )
+                XCTAssertFalse(
+                    luminanceValues.isEmpty,
+                    "主题\(region.name)安全区没有可采样像素: \(theme.rawValue)"
+                )
+                let p90 = luminanceValues.sorted()[Int(Double(luminanceValues.count - 1) * 0.9)]
+                let textLuminance = relativeLuminance(region.color)
+                let contrast = (max(p90, textLuminance) + 0.05) / (min(p90, textLuminance) + 0.05)
+                XCTAssertGreaterThanOrEqual(
+                    contrast,
+                    4.5,
+                    "主题\(region.name)文字对比度不足: \(theme.rawValue), \(contrast)"
+                )
+            }
+        }
+    }
+
+    func testEveryTemplateProtectsAllRegionsForLongMixedContent() throws {
+        let service = ShareCardService()
+        let canvas = CGRect(origin: .zero, size: ShareCardService.canvasSize)
+        let primaryText = String(repeating: "中文 English 123，模板安全区必须保持完整。 ", count: 90)
+        let noteText = String(repeating: "笔记内容也必须完整保留。 ", count: 24)
+        let typography = ShareCardTypography(
+            sizeMode: .fixed,
+            fontSize: 48,
+            horizontalAlignment: .left,
+            verticalAlignment: .center
+        )
+
+        for theme in ShareCardTheme.allCases {
+            let template = service.template(for: theme)
+            XCTAssertTrue(canvas.contains(template.textSafeArea), "正文安全区越界: \(theme.rawValue)")
+            XCTAssertTrue(canvas.contains(template.noteArea), "笔记安全区越界: \(theme.rawValue)")
+            XCTAssertTrue(canvas.contains(template.attributionArea), "署名安全区越界: \(theme.rawValue)")
+            XCTAssertFalse(template.textSafeArea.intersects(template.noteArea), "正文和笔记区域重叠: \(theme.rawValue)")
+            XCTAssertFalse(template.textSafeArea.intersects(template.attributionArea), "正文和署名区域重叠: \(theme.rawValue)")
+            XCTAssertFalse(template.noteArea.intersects(template.attributionArea), "笔记和署名区域重叠: \(theme.rawValue)")
+
+            let card = service.makeCard(
+                for: makeBook(author: "A. Reader"),
+                annotation: makeAnnotation(content: primaryText, note: noteText),
+                includeNote: true,
+                theme: theme,
+                typography: typography
             )
-            XCTAssertFalse(luminances.isEmpty, "主题安全区没有可采样像素: \(theme.rawValue)")
-            let p90 = luminances.sorted()[Int(Double(luminances.count - 1) * 0.9)]
-            let textLuminance = relativeLuminance(template.primaryTextColor)
-            let contrast = (max(p90, textLuminance) + 0.05) / (min(p90, textLuminance) + 0.05)
-            XCTAssertGreaterThanOrEqual(contrast, 4.5, "主题文字对比度不足: \(theme.rawValue), \(contrast)")
+            let pages = service.pages(for: card)
+
+            XCTAssertGreaterThan(pages.count, 1, "长内容没有分页: \(theme.rawValue)")
+            XCTAssertEqual(pages.map(\.primaryText).joined(), primaryText, "正文被截断: \(theme.rawValue)")
+            XCTAssertEqual(pages.compactMap(\.supplementaryNote).joined(), noteText, "笔记被截断: \(theme.rawValue)")
+            XCTAssertTrue(pages.allSatisfy { page in
+                let primaryIsSafe = page.primaryText.isEmpty || template.textSafeArea.contains(page.primaryTextFrame)
+                let noteIsSafe = page.supplementaryNoteFrame.map { frame in
+                    let area = page.primaryText.isEmpty ? template.textSafeArea : template.noteArea
+                    return area.contains(frame) && !frame.intersects(template.attributionArea)
+                } ?? true
+                return primaryIsSafe && noteIsSafe && template.attributionArea.contains(page.attributionFrame)
+            }, "文字超出模板安全区: \(theme.rawValue)")
+
+            let renderedPages = try service.render(for: card)
+            XCTAssertEqual(renderedPages.count, pages.count, "渲染页数不一致: \(theme.rawValue)")
+            XCTAssertTrue(
+                renderedPages.allSatisfy { $0.image.size == ShareCardService.canvasSize },
+                "渲染画布尺寸不一致: \(theme.rawValue)"
+            )
         }
     }
 

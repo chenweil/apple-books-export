@@ -610,11 +610,67 @@ enum VerifyLayout {
                       && $0.minY >= -0.5 && $0.maxY <= editor.view.bounds.maxY + 0.5
               },
               "范围=\(themeFrames)")
+        let themeScrollViews = scrollViews(in: editor.view).filter { scrollView in
+            guard let documentView = scrollView.documentView else { return false }
+            return scrollView.hasVerticalScroller
+                && !scrollView.hasHorizontalScroller
+                && buttons(in: documentView).count == ShareCardTheme.allCases.count
+        }
+        if let themeScrollView = themeScrollViews.first {
+            let scrollFrame = frame(of: themeScrollView, in: editor.view)
+            let documentHeight = themeScrollView.documentView?.bounds.height ?? 0
+            let viewportHeight = themeScrollView.contentView.bounds.height
+            check("主题面板有内部滚动且边界固定",
+                  scrollFrame.height <= 126.5 && documentHeight > viewportHeight,
+                  "面板=\(scrollFrame), 内容高=\(documentHeight), 视口高=\(viewportHeight)")
+        } else {
+            check("主题面板有内部滚动且边界固定", false, "找不到主题滚动面板")
+        }
         check("主题网格有唯一选中态", themeButtons.filter { $0.state == .on }.count == 1,
               "选中数=\(themeButtons.filter { $0.state == .on }.count)")
 
+        let fontPopup = view(named: "share-card-font", in: editor.view) as? NSPopUpButton
+        let sizeModePopup = view(named: "share-card-size-mode", in: editor.view) as? NSPopUpButton
+        let fontSizePopup = view(named: "share-card-font-size", in: editor.view) as? NSPopUpButton
+        let horizontalAlignment = view(named: "share-card-horizontal-alignment", in: editor.view)
+            as? NSSegmentedControl
+        let verticalAlignment = view(named: "share-card-vertical-alignment", in: editor.view)
+            as? NSSegmentedControl
+        if let fontPopup, let sizeModePopup, let fontSizePopup,
+           let horizontalAlignment, let verticalAlignment {
+            fontPopup.selectItem(at: min(1, fontPopup.numberOfItems - 1))
+            invoke(fontPopup)
+            sizeModePopup.selectItem(at: 1)
+            invoke(sizeModePopup)
+            fontSizePopup.selectItem(withTitle: "64")
+            invoke(fontSizePopup)
+            horizontalAlignment.selectedSegment = 2
+            invoke(horizontalAlignment)
+            verticalAlignment.selectedSegment = 0
+            invoke(verticalAlignment)
+
+            let typographyState = (
+                font: fontPopup.indexOfSelectedItem,
+                sizeMode: sizeModePopup.indexOfSelectedItem,
+                fontSize: fontSizePopup.indexOfSelectedItem,
+                horizontal: horizontalAlignment.selectedSegment,
+                vertical: verticalAlignment.selectedSegment
+            )
+            if let lastTheme = themeButtons.last {
+                invoke(lastTheme)
+                check("切换主题后保留排版状态",
+                      fontPopup.indexOfSelectedItem == typographyState.font
+                          && sizeModePopup.indexOfSelectedItem == typographyState.sizeMode
+                      && fontSizePopup.indexOfSelectedItem == typographyState.fontSize
+                      && horizontalAlignment.selectedSegment == typographyState.horizontal
+                      && verticalAlignment.selectedSegment == typographyState.vertical,
+                      "切换前后排版状态保持一致")
+            }
+        } else {
+            check("切换主题后保留排版状态", false, "找不到排版控件")
+        }
+
         if let lastTheme = themeButtons.last {
-            invoke(lastTheme)
             check("选择主题后保持唯一选中态",
                   themeButtons.filter { $0.state == .on }.count == 1 && lastTheme.state == .on,
                   "选中数=\(themeButtons.filter { $0.state == .on }.count)")
@@ -742,6 +798,11 @@ enum VerifyLayout {
     private static func buttons(in view: NSView) -> [NSButton] {
         let own = view as? NSButton
         return ([own].compactMap { $0 }) + view.subviews.flatMap { buttons(in: $0) }
+    }
+
+    private static func scrollViews(in view: NSView) -> [NSScrollView] {
+        let own = view as? NSScrollView
+        return ([own].compactMap { $0 }) + view.subviews.flatMap { scrollViews(in: $0) }
     }
 
     private static func frame(of view: NSView, in ancestor: NSView) -> NSRect {
