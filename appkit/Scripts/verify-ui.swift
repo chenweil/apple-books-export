@@ -529,6 +529,8 @@ enum VerifyLayout {
         invoke(copyButton)
         check("复制图片传出预览图", copiedImages.count == 1 && copiedImages[0].size == ShareCardService.canvasSize,
               "count=\(copiedImages.count) size=\(copiedImages.first?.size ?? .zero)")
+        check("泛用分享面板入口已移除", view(titled: "分享", in: editor.view) == nil,
+              "未发现通用分享按钮")
 
         guard let airDropButton = view(titled: "AirDrop", in: editor.view) as? NSButton else {
             check("AirDrop 控件可定位", false, "找不到 AirDrop 按钮")
@@ -792,11 +794,25 @@ enum VerifyLayout {
                 return
             }
             invoke(copyButton)
+            let copiedCurrentPageData = copiedImages.first?.tiffRepresentation
             check("多页复制默认只传出当前页", copiedImages.count == 1,
                   "图片数=\(copiedImages.count)")
             invoke(copyMenu)
+            let copiedAllPageData = copiedImages.compactMap(\.tiffRepresentation)
+            let selectedPageIsPreserved: Bool
+            if copiedAllPageData.count == pageButtons.count,
+               let copiedCurrentPageData {
+                selectedPageIsPreserved = copiedAllPageData[1] == copiedCurrentPageData
+            } else {
+                selectedPageIsPreserved = false
+            }
+            let allPagesContainDistinctContent = copiedAllPageData.count > 1
+                && copiedAllPageData[0] != copiedAllPageData[1]
             check("复制菜单传出全部页面", copiedImages.count == pageButtons.count,
                   "图片数=\(copiedImages.count)")
+            check("当前页与全部页面复制内容范围明确",
+                  selectedPageIsPreserved && allPagesContainDistinctContent,
+                  "选中页位于全部页第 2 项=\(selectedPageIsPreserved), 全部页首两项不同=\(allPagesContainDistinctContent)")
 
             if let textView = firstTextView(in: editor.view) {
                 textView.string = "改成短文本"

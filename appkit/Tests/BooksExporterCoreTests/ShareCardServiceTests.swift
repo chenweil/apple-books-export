@@ -457,7 +457,7 @@ final class ShareCardServiceTests: XCTestCase {
         )
     }
 
-    func testRenderedPageExportUsesEverySuppliedPageForMultiPageOutput() throws {
+    func testCurrentPageTemporaryPNGAndAllPageExportPreservePageScopeAndOrder() throws {
         let service = ShareCardService()
         let card = service.makeCard(
             for: makeBook(author: "A. Reader"),
@@ -485,6 +485,10 @@ final class ShareCardServiceTests: XCTestCase {
         )
         XCTAssertEqual(export.pageCount, suppliedPages.count)
         XCTAssertEqual(export.files.count, suppliedPages.count)
+        XCTAssertEqual(
+            export.files.map(\.lastPathComponent),
+            ["The Quiet Book - A. Reader 1.png", "The Quiet Book - A. Reader 2.png"]
+        )
 
         for (index, fileURL) in export.files.enumerated() {
             let bitmap = try XCTUnwrap(NSBitmapImageRep(data: Data(contentsOf: fileURL)))
@@ -509,6 +513,10 @@ final class ShareCardServiceTests: XCTestCase {
                 pageCount: suppliedPages.count
             )
             defer { try? FileManager.default.removeItem(at: temporaryURL.deletingLastPathComponent()) }
+            XCTAssertEqual(
+                temporaryURL.lastPathComponent,
+                "The Quiet Book - A. Reader \(index + 1).png"
+            )
             let bitmap = try XCTUnwrap(NSBitmapImageRep(data: Data(contentsOf: temporaryURL)))
             let centerColor = try XCTUnwrap(
                 bitmap.colorAt(x: bitmap.pixelsWide / 2, y: bitmap.pixelsHigh / 2)
