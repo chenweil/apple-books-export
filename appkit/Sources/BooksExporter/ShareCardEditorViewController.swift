@@ -7,15 +7,16 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate 
     private static let themeThumbnailSize = NSSize(width: 64, height: 86)
     private static let minimumContentSize = NSSize(width: 940, height: 720)
     private static let maximumContentSize = NSSize(width: 1280, height: 960)
+    private static let textChangeDebounceInterval: TimeInterval = 0.2
 
     private let book: Book
     private let annotation: Annotation
     private let service = ShareCardService()
     private var card: ShareCard
     private var alternativeCards: [ShareCard] = []
-    private var renderedPages: [ShareCardPage] = []
-    private var renderedPageImages: [NSImage] = []
+    private var renderedPageResults: [ShareCardRenderedPage] = []
     private var selectedPageIndex = 0
+    private var textChangeTimer: Timer?
 
     private let previewImageView = NSImageView()
     private let pageLabel = NSTextField(labelWithString: "")
@@ -64,6 +65,10 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate 
         fatalError("不支持从 Interface Builder 加载")
     }
 
+    deinit {
+        textChangeTimer?.invalidate()
+    }
+
     override func viewDidAppear() {
         super.viewDidAppear()
         guard let window = view.window else { return }
@@ -93,6 +98,7 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate 
         previewImageView.wantsLayer = true
         previewImageView.layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
         previewImageView.setAccessibilityLabel("分享卡片预览")
+        previewImageView.identifier = NSUserInterfaceItemIdentifier("share-card-preview")
 
         pageLabel.alignment = .center
         pageLabel.textColor = .secondaryLabelColor
@@ -220,6 +226,7 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate 
         saveButton.keyEquivalent = "\r"
         saveButton.target = self
         saveButton.action = #selector(saveRequested)
+        saveButton.isEnabled = false
 
         airDropButton.image = NSImage(
             systemSymbolName: "square.and.arrow.up",
@@ -335,11 +342,12 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate 
     }
 
     @objc private func noteChanged() {
-        updateCardFromEditor()
+        updateCardFromEditor(debouncePreview: false)
     }
 
     @objc private func themeSelected(_ sender: NSButton) {
         guard ShareCardTheme.allCases.indices.contains(sender.tag) else { return }
+        cancelPendingPreviewUpdate()
         let theme = ShareCardTheme.allCases[sender.tag]
         clearAlternatives()
         card = service.makeCard(
@@ -436,6 +444,7 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate 
 
     @objc private func alternativeSelected(_ sender: NSButton) {
         guard alternativeCards.indices.contains(sender.tag) else { return }
+        cancelPendingPreviewUpdate()
         card = alternativeCards[sender.tag]
         textView.string = card.primaryText
         syncThemeSelection()
@@ -455,6 +464,10 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate 
     @objc private func saveRequested() {
         guard !card.primaryText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             statusLabel.stringValue = "请输入卡片文字"
+            return
+        }
+        guard !renderedPageResults.isEmpty else {
+            statusLabel.stringValue = "预览正在更新"
             return
         }
         guard let window = view.window else { return }
@@ -477,7 +490,7 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate 
         defer { saveButton.isEnabled = true }
 
         do {
-            let result = try service.export(card, pages: renderedPages, to: directoryURL)
+            let result = try service.export(card, renderedPages: renderedPageResults, to: directoryURL)
             let count = result.files.count
             statusLabel.stringValue = count == 1 ? "已保存" : "已保存 \(count) 张卡片"
         } catch {
@@ -486,27 +499,26 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate 
     }
 
     @objc private func copyRequested() {
-        guard renderedPages.indices.contains(selectedPageIndex),
-              renderedPageImages.indices.contains(selectedPageIndex) else {
+        guard renderedPageResults.indices.contains(selectedPageIndex) else {
             statusLabel.stringValue = "复制失败"
             return
         }
-        let image = renderedPageImages[selectedPageIndex]
+        let image = renderedPageResults[selectedPageIndex].image
         guard copyHandler([image]) else {
             statusLabel.stringValue = "复制失败"
             return
         }
-        statusLabel.stringValue = renderedPages.count == 1
+        statusLabel.stringValue = renderedPageResults.count == 1
             ? "已复制图片"
             : "已复制第 \(selectedPageIndex + 1) 页"
     }
 
     @objc private func copyAllRequested() {
-        guard !renderedPages.isEmpty, renderedPageImages.count == renderedPages.count else {
+        guard !renderedPageResults.isEmpty else {
             statusLabel.stringValue = "复制失败"
             return
         }
-        let images = renderedPageImages
+        let images = renderedPageResults.map(\.image)
         guard copyHandler(images) else {
             statusLabel.stringValue = "复制失败"
             return
@@ -515,7 +527,7 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate 
     }
 
     @objc private func airDropRequested() {
-        guard renderedPages.indices.contains(selectedPageIndex),
+        guard renderedPageResults.indices.contains(selectedPageIndex),
               let airDrop = NSSharingService(named: .sendViaAirDrop) else {
             statusLabel.stringValue = "AirDrop 当前不可用"
             return
@@ -523,8 +535,8 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate 
         do {
             let file = try service.temporaryPNGURL(
                 for: card,
-                page: renderedPages[selectedPageIndex],
-                pageCount: renderedPages.count
+                renderedPage: renderedPageResults[selectedPageIndex],
+                pageCount: renderedPageResults.count
             )
             guard airDrop.canPerform(withItems: [file]) else {
                 statusLabel.stringValue = "AirDrop 当前不可用"
@@ -541,10 +553,10 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate 
     }
 
     func textDidChange(_ notification: Notification) {
-        updateCardFromEditor()
+        updateCardFromEditor(debouncePreview: true)
     }
 
-    private func updateCardFromEditor() {
+    private func updateCardFromEditor(debouncePreview: Bool) {
         let template = card.template
         clearAlternatives()
         let refreshed = service.makeCard(
@@ -564,7 +576,12 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate 
             typography: card.typography
         )
         invalidateExport()
-        updatePreview()
+        if debouncePreview {
+            schedulePreviewUpdate()
+        } else {
+            cancelPendingPreviewUpdate()
+            updatePreview()
+        }
     }
 
     private func updatedTypography(
@@ -585,6 +602,7 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate 
     }
 
     private func updateTypography(_ typography: ShareCardTypography) {
+        cancelPendingPreviewUpdate()
         card = ShareCard(
             bookTitle: card.bookTitle,
             author: card.author,
@@ -690,36 +708,43 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate 
     }
 
     private func invalidateExport() {
+        renderedPageResults = []
+        thumbnailStack.arrangedSubviews.forEach {
+            thumbnailStack.removeArrangedSubview($0)
+            $0.removeFromSuperview()
+        }
+        pageLabel.stringValue = ""
+        previewImageView.image = nil
+        copyButton.isEnabled = false
         copyMenuButton.isEnabled = false
+        saveButton.isEnabled = false
+        airDropButton.isEnabled = false
         statusLabel.stringValue = ""
     }
 
     @objc private func pageSelected(_ sender: NSButton) {
-        guard renderedPages.indices.contains(sender.tag) else { return }
+        guard renderedPageResults.indices.contains(sender.tag) else { return }
         selectedPageIndex = sender.tag
         updateSelectedPagePreview()
     }
 
     private func updateAirDropAvailability() {
-        guard renderedPageImages.indices.contains(selectedPageIndex),
+        guard renderedPageResults.indices.contains(selectedPageIndex),
               let airDrop = NSSharingService(named: .sendViaAirDrop) else {
             airDropButton.isEnabled = false
             return
         }
-        airDropButton.isEnabled = airDrop.canPerform(withItems: [renderedPageImages[selectedPageIndex]])
+        airDropButton.isEnabled = airDrop.canPerform(withItems: [renderedPageResults[selectedPageIndex].image])
     }
 
     private func updatePreview() {
         do {
-            let rendered = try service.render(for: card)
-            renderedPages = rendered.map(\.page)
-            renderedPageImages = rendered.map(\.image)
+            renderedPageResults = try service.render(for: card)
         } catch {
-            renderedPages = []
-            renderedPageImages = []
+            renderedPageResults = []
             statusLabel.stringValue = "无法生成页面预览"
         }
-        if renderedPages.isEmpty {
+        if renderedPageResults.isEmpty {
             selectedPageIndex = 0
             thumbnailStack.arrangedSubviews.forEach {
                 thumbnailStack.removeArrangedSubview($0)
@@ -728,14 +753,17 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate 
             pageLabel.stringValue = ""
             previewImageView.image = nil
             copyButton.isEnabled = false
+            copyMenuButton.isEnabled = false
+            saveButton.isEnabled = false
+            airDropButton.isEnabled = false
             if card.primaryText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 statusLabel.stringValue = "请输入卡片文字"
             }
             return
         }
 
-        selectedPageIndex = min(selectedPageIndex, renderedPages.count - 1)
-        pageLabel.stringValue = "第 \(selectedPageIndex + 1) / \(renderedPages.count) 页"
+        selectedPageIndex = min(selectedPageIndex, renderedPageResults.count - 1)
+        pageLabel.stringValue = "第 \(selectedPageIndex + 1) / \(renderedPageResults.count) 页"
         reloadThumbnails()
         updateSelectedPagePreview()
     }
@@ -746,13 +774,13 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate 
             $0.removeFromSuperview()
         }
 
-        guard renderedPageImages.count == renderedPages.count else {
+        guard !renderedPageResults.isEmpty else {
             statusLabel.stringValue = "无法生成页面预览"
             return
         }
-        for (index, _) in renderedPages.enumerated() {
+        for (index, renderedPage) in renderedPageResults.enumerated() {
             let button = NSButton(
-                image: renderedPageImages[index],
+                image: thumbnailImage(from: renderedPage.image),
                 target: self,
                 action: #selector(pageSelected(_:))
             )
@@ -773,16 +801,52 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate 
         }
     }
 
+    private func thumbnailImage(from image: NSImage) -> NSImage {
+        guard let bitmap = NSBitmapImageRep(
+            bitmapDataPlanes: nil,
+            pixelsWide: Int(Self.thumbnailSize.width),
+            pixelsHigh: Int(Self.thumbnailSize.height),
+            bitsPerSample: 8,
+            samplesPerPixel: 4,
+            hasAlpha: true,
+            isPlanar: false,
+            colorSpaceName: .deviceRGB,
+            bitmapFormat: [],
+            bytesPerRow: 0,
+            bitsPerPixel: 0
+        ), let graphicsContext = NSGraphicsContext(bitmapImageRep: bitmap) else {
+            return NSImage(size: Self.thumbnailSize)
+        }
+
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = graphicsContext
+        graphicsContext.imageInterpolation = .high
+        NSColor.clear.setFill()
+        NSRect(origin: .zero, size: Self.thumbnailSize).fill()
+        image.draw(
+            in: NSRect(origin: .zero, size: Self.thumbnailSize),
+            from: NSRect(origin: .zero, size: image.size),
+            operation: .copy,
+            fraction: 1
+        )
+        NSGraphicsContext.restoreGraphicsState()
+
+        let thumbnail = NSImage(size: Self.thumbnailSize)
+        thumbnail.addRepresentation(bitmap)
+        return thumbnail
+    }
+
     private func updateSelectedPagePreview() {
         do {
-            guard renderedPageImages.indices.contains(selectedPageIndex) else {
+            guard renderedPageResults.indices.contains(selectedPageIndex) else {
                 throw ShareCardExportError.emptyCardText
             }
-            previewImageView.image = renderedPageImages[selectedPageIndex]
+            previewImageView.image = renderedPageResults[selectedPageIndex].image
             copyButton.isEnabled = true
-            copyMenuButton.isEnabled = renderedPages.count > 1
+            copyMenuButton.isEnabled = renderedPageResults.count > 1
+            saveButton.isEnabled = true
             updateAirDropAvailability()
-            pageLabel.stringValue = "第 \(selectedPageIndex + 1) / \(renderedPages.count) 页"
+            pageLabel.stringValue = "第 \(selectedPageIndex + 1) / \(renderedPageResults.count) 页"
             for (index, view) in thumbnailStack.arrangedSubviews.enumerated() {
                 (view as? NSButton)?.state = index == selectedPageIndex ? .on : .off
             }
@@ -792,7 +856,31 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate 
         } catch {
             previewImageView.image = nil
             copyButton.isEnabled = false
-            statusLabel.stringValue = "请输入卡片文字"
+            copyMenuButton.isEnabled = false
+            saveButton.isEnabled = false
+            airDropButton.isEnabled = false
+            statusLabel.stringValue = card.primaryText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? "请输入卡片文字"
+                : "无法生成页面预览"
         }
+    }
+
+    private func schedulePreviewUpdate() {
+        textChangeTimer?.invalidate()
+        let timer = Timer(
+            timeInterval: Self.textChangeDebounceInterval,
+            repeats: false
+        ) { [weak self] _ in
+            guard let self else { return }
+            self.textChangeTimer = nil
+            self.updatePreview()
+        }
+        textChangeTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    private func cancelPendingPreviewUpdate() {
+        textChangeTimer?.invalidate()
+        textChangeTimer = nil
     }
 }

@@ -393,6 +393,136 @@ final class ShareCardServiceTests: XCTestCase {
         XCTAssertEqual(export.files.count, renderedPages.count)
     }
 
+    func testRenderedPageExportUsesSuppliedRenderedImage() throws {
+        let service = ShareCardService()
+        let card = service.makeCard(
+            for: makeBook(author: "A. Reader"),
+            annotation: makeAnnotation(content: "Rendered image contract", note: nil)
+        )
+        let renderedPage = try XCTUnwrap(service.render(for: card).first)
+        let suppliedImage = NSImage(size: ShareCardService.canvasSize)
+        suppliedImage.lockFocus()
+        NSColor.systemPink.setFill()
+        NSRect(origin: .zero, size: ShareCardService.canvasSize).fill()
+        suppliedImage.unlockFocus()
+
+        let suppliedPage = ShareCardRenderedPage(page: renderedPage.page, image: suppliedImage)
+        let directoryURL = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let temporaryURL = try service.temporaryPNGURL(
+            for: card,
+            renderedPage: suppliedPage,
+            pageCount: 1
+        )
+        defer { try? FileManager.default.removeItem(at: temporaryURL.deletingLastPathComponent()) }
+
+        let result = try service.export(
+            card,
+            renderedPages: [suppliedPage],
+            to: directoryURL
+        )
+        let data = try Data(contentsOf: try XCTUnwrap(result.files.first))
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(data: data))
+        let centerColor = try XCTUnwrap(bitmap.colorAt(x: bitmap.pixelsWide / 2, y: bitmap.pixelsHigh / 2))
+
+        XCTAssertEqual(result.pageCount, 1)
+        XCTAssertEqual(bitmap.pixelsWide, 1200)
+        XCTAssertEqual(bitmap.pixelsHigh, 1600)
+        XCTAssertGreaterThan(centerColor.redComponent, 0.8)
+        XCTAssertLessThan(centerColor.greenComponent, 0.4)
+
+        let temporaryData = try Data(contentsOf: temporaryURL)
+        let temporaryBitmap = try XCTUnwrap(NSBitmapImageRep(data: temporaryData))
+        let temporaryCenterColor = try XCTUnwrap(
+            temporaryBitmap.colorAt(
+                x: temporaryBitmap.pixelsWide / 2,
+                y: temporaryBitmap.pixelsHigh / 2
+            )
+        )
+        XCTAssertEqual(temporaryBitmap.pixelsWide, 1200)
+        XCTAssertEqual(temporaryBitmap.pixelsHigh, 1600)
+        XCTAssertGreaterThan(temporaryCenterColor.redComponent, 0.8)
+        XCTAssertLessThan(temporaryCenterColor.greenComponent, 0.4)
+
+        let emptyCard = service.makeCard(
+            for: makeBook(author: "A. Reader"),
+            annotation: makeAnnotation(content: nil, note: nil)
+        )
+        XCTAssertThrowsError(
+            try service.temporaryPNGURL(
+                for: emptyCard,
+                renderedPage: suppliedPage,
+                pageCount: 1
+            )
+        )
+    }
+
+    func testRenderedPageExportUsesEverySuppliedPageForMultiPageOutput() throws {
+        let service = ShareCardService()
+        let card = service.makeCard(
+            for: makeBook(author: "A. Reader"),
+            annotation: makeAnnotation(
+                content: String(repeating: "A complete multi-page passage. ", count: 180),
+                note: nil
+            )
+        )
+        let renderedPages = try service.render(for: card)
+        XCTAssertGreaterThanOrEqual(renderedPages.count, 2)
+
+        let suppliedPages = Array(renderedPages.prefix(2)).enumerated().map { index, renderedPage in
+            ShareCardRenderedPage(
+                page: renderedPage.page,
+                image: makeSolidImage(index == 0 ? .systemRed : .systemBlue)
+            )
+        }
+        let directoryURL = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+
+        let export = try service.export(
+            card,
+            renderedPages: suppliedPages,
+            to: directoryURL
+        )
+        XCTAssertEqual(export.pageCount, suppliedPages.count)
+        XCTAssertEqual(export.files.count, suppliedPages.count)
+
+        for (index, fileURL) in export.files.enumerated() {
+            let bitmap = try XCTUnwrap(NSBitmapImageRep(data: Data(contentsOf: fileURL)))
+            let centerColor = try XCTUnwrap(
+                bitmap.colorAt(x: bitmap.pixelsWide / 2, y: bitmap.pixelsHigh / 2)
+            )
+            XCTAssertEqual(bitmap.pixelsWide, 1200)
+            XCTAssertEqual(bitmap.pixelsHigh, 1600)
+            if index == 0 {
+                XCTAssertGreaterThan(centerColor.redComponent, 0.8)
+                XCTAssertLessThan(centerColor.blueComponent, 0.4)
+            } else {
+                XCTAssertGreaterThan(centerColor.blueComponent, 0.8)
+                XCTAssertLessThan(centerColor.redComponent, 0.4)
+            }
+        }
+
+        for (index, suppliedPage) in suppliedPages.enumerated() {
+            let temporaryURL = try service.temporaryPNGURL(
+                for: card,
+                renderedPage: suppliedPage,
+                pageCount: suppliedPages.count
+            )
+            defer { try? FileManager.default.removeItem(at: temporaryURL.deletingLastPathComponent()) }
+            let bitmap = try XCTUnwrap(NSBitmapImageRep(data: Data(contentsOf: temporaryURL)))
+            let centerColor = try XCTUnwrap(
+                bitmap.colorAt(x: bitmap.pixelsWide / 2, y: bitmap.pixelsHigh / 2)
+            )
+            if index == 0 {
+                XCTAssertGreaterThan(centerColor.redComponent, 0.8)
+                XCTAssertLessThan(centerColor.blueComponent, 0.4)
+            } else {
+                XCTAssertGreaterThan(centerColor.blueComponent, 0.8)
+                XCTAssertLessThan(centerColor.redComponent, 0.4)
+            }
+        }
+    }
+
     func testRenderingRejectsTextThatCannotFitItsSafeArea() {
         let template = ShareCardTemplate(
             id: "tiny-safe-area",
@@ -812,5 +942,14 @@ final class ShareCardServiceTests: XCTestCase {
             noteText: note,
             createdAt: Date(timeIntervalSinceReferenceDate: 0)
         )
+    }
+
+    private func makeSolidImage(_ color: NSColor) -> NSImage {
+        let image = NSImage(size: ShareCardService.canvasSize)
+        image.lockFocus()
+        color.setFill()
+        NSRect(origin: .zero, size: ShareCardService.canvasSize).fill()
+        image.unlockFocus()
+        return image
     }
 }

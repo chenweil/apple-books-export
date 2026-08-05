@@ -495,6 +495,9 @@ enum VerifyLayout {
             return
         }
         let closeFrame = closeSuperview.convert(closeButton.frame, to: editor.view)
+        check("完成按钮绑定关闭路径",
+              closeButton.target === editor && closeButton.action != nil,
+              "target=\(String(describing: closeButton.target)), action=\(String(describing: closeButton.action))")
         check("完成按钮仍在编辑器内",
               closeFrame.minX >= -0.5 && closeFrame.maxX <= editor.view.bounds.maxX + 0.5
                   && closeFrame.minY >= -0.5 && closeFrame.maxY <= editor.view.bounds.maxY + 0.5,
@@ -711,7 +714,8 @@ enum VerifyLayout {
               let vertical = view(named: "share-card-vertical-alignment", in: editor.view)
                   as? NSSegmentedControl,
               let copyMenu = view(named: "share-card-copy-menu", in: editor.view) as? NSPopUpButton,
-              let pageLabel = view(named: "share-card-page-label", in: editor.view) as? NSTextField else {
+              let pageLabel = view(named: "share-card-page-label", in: editor.view) as? NSTextField,
+              let preview = view(named: "share-card-preview", in: editor.view) as? NSImageView else {
             check("排版与页码控件可定位", false, "缺少字号、对齐或页码控件")
             return
         }
@@ -742,11 +746,47 @@ enum VerifyLayout {
               "页码=\(pageLabel.stringValue)")
         check("缩略图带保持在窗口内", pageButtons.allSatisfy { $0.frame.width <= 120 && $0.frame.height <= 120 },
               "缩略图高度=\(pageButtons.map { Int($0.frame.height) })")
+        let previewFrame = frame(of: preview, in: editor.view)
+        check("大预览保持 3:4 比例",
+              previewFrame.height > 0 && abs(previewFrame.width / previewFrame.height - 0.75) < 0.01,
+              "预览尺寸=\(previewFrame.size)")
+        let previewSize = preview.image?.size ?? .zero
+        check("预览使用固定导出画布",
+              abs(previewSize.width - ShareCardService.canvasSize.width) < 0.5
+                  && abs(previewSize.height - ShareCardService.canvasSize.height) < 0.5,
+              "图片尺寸=\(previewSize)")
+        check("缩略图显式降采样",
+              pageButtons.allSatisfy {
+                  guard let image = $0.image else { return false }
+                  return abs(image.size.width - 72) < 0.5 && abs(image.size.height - 96) < 0.5
+              },
+              "图片尺寸=\(pageButtons.compactMap(\.image).map(\.size))")
+        let thumbnailScrollViews = scrollViews(in: editor.view).filter { scrollView in
+            guard let documentView = scrollView.documentView else { return false }
+            return scrollView.hasHorizontalScroller
+                && !scrollView.hasVerticalScroller
+                && buttons(in: documentView).filter {
+                    $0.identifier?.rawValue.hasPrefix("share-card-page-") == true
+                }.count == pageButtons.count
+        }
+        if let thumbnailScrollView = thumbnailScrollViews.first {
+            let scrollFrame = frame(of: thumbnailScrollView, in: editor.view)
+            let documentWidth = thumbnailScrollView.documentView?.bounds.width ?? 0
+            let viewportWidth = thumbnailScrollView.contentView.bounds.width
+            check("多页缩略图使用内部横向滚动且边界固定",
+                  scrollFrame.height <= 112.5 && documentWidth > viewportWidth,
+                  "面板=\(scrollFrame), 内容宽=\(documentWidth), 视口宽=\(viewportWidth)")
+        } else {
+            check("多页缩略图使用内部横向滚动且边界固定", false, "找不到缩略图滚动面板")
+        }
 
         if pageButtons.count > 1 {
             invoke(pageButtons[1])
             check("点击缩略图切换当前页", pageLabel.stringValue == "第 2 / \(pageButtons.count) 页",
                   "页码=\(pageLabel.stringValue)")
+            check("当前页缩略图选中态唯一",
+                  pageButtons.filter { $0.state == .on }.count == 1 && pageButtons[1].state == .on,
+                  "选中数=\(pageButtons.filter { $0.state == .on }.count)")
             guard let copyButton = view(titled: "复制图片", in: editor.view) as? NSButton else {
                 check("多页复制入口可定位", false, "找不到复制按钮")
                 return
@@ -762,11 +802,35 @@ enum VerifyLayout {
                 textView.string = "改成短文本"
                 editor.textDidChange(Notification(name: NSText.didChangeNotification, object: textView))
                 editor.view.layoutSubtreeIfNeeded()
+                let saveButton = view(titled: "保存 PNG", in: editor.view) as? NSButton
+                check("文字防抖期间禁用旧输出",
+                      !copyButton.isEnabled && !copyMenu.isEnabled && !(saveButton?.isEnabled ?? true)
+                          && pageLabel.stringValue.isEmpty,
+                      "复制=\(copyButton.isEnabled), 全部=\(copyMenu.isEnabled), 保存=\(saveButton?.isEnabled ?? false), 页码=\(pageLabel.stringValue)")
+                runMainLoop(for: 0.3)
+                editor.view.layoutSubtreeIfNeeded()
+                let updatedPageButtons = buttons(in: editor.view).filter {
+                    $0.identifier?.rawValue.hasPrefix("share-card-page-") == true
+                }
                 check("页数减少时当前页钳制到末页",
-                      pageLabel.stringValue == "第 1 / 1 页",
-                      "页码=\(pageLabel.stringValue)")
+                      pageLabel.stringValue == "第 1 / 1 页" && updatedPageButtons.count == 1,
+                      "页码=\(pageLabel.stringValue), 缩略图数=\(updatedPageButtons.count)")
             }
         }
+        if let closeButton = view(titled: "完成", in: editor.view) {
+            let closeFrame = frame(of: closeButton, in: editor.view)
+            check("长文状态下关闭入口保持可见",
+                  closeFrame.minX >= -0.5 && closeFrame.minY >= -0.5
+                      && closeFrame.maxX <= editor.view.bounds.maxX + 0.5
+                      && closeFrame.maxY <= editor.view.bounds.maxY + 0.5,
+                  "关闭按钮=\(closeFrame), 编辑器=\(editor.view.bounds)")
+        } else {
+            check("长文状态下关闭入口保持可见", false, "找不到完成按钮")
+        }
+    }
+
+    private static func runMainLoop(for duration: TimeInterval) {
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: duration))
     }
 
     private static func invoke(_ item: NSMenuItem) {

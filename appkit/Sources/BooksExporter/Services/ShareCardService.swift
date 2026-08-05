@@ -624,16 +624,35 @@ public final class ShareCardService {
             throw ShareCardExportError.emptyCardText
         }
 
-        let directoryURL = fileManager.temporaryDirectory
-            .appendingPathComponent("BooksExporter-ShareCard-\(UUID().uuidString)", isDirectory: true)
-        try fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)
-
-        let fileURL = directoryURL.appendingPathComponent(
-            fileName(for: card, pageIndex: page.index, pageCount: pageCount)
-        )
         let data = try pngData(for: card, page: page)
-        try data.write(to: fileURL, options: .atomic)
-        return fileURL
+        return try writeTemporaryPNG(
+            data,
+            for: card,
+            pageIndex: page.index,
+            pageCount: pageCount
+        )
+    }
+
+    public func temporaryPNGURL(
+        for card: ShareCard,
+        renderedPage: ShareCardRenderedPage,
+        pageCount: Int
+    ) throws -> URL {
+        let page = renderedPage.page
+        guard !card.primaryText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              pageCount > 0,
+              page.index >= 0,
+              page.index < pageCount else {
+            throw ShareCardExportError.emptyCardText
+        }
+
+        let data = try pngData(for: renderedPage.image)
+        return try writeTemporaryPNG(
+            data,
+            for: card,
+            pageIndex: page.index,
+            pageCount: pageCount
+        )
     }
 
     public func export(
@@ -655,17 +674,50 @@ public final class ShareCardService {
         to directoryURL: URL,
         openExportFolder: Bool = ShareCardPreferences.openExportFolder
     ) throws -> ShareCardExportResult {
+        return try export(
+            card,
+            pageCount: pages.count,
+            to: directoryURL,
+            openExportFolder: openExportFolder
+        ) { index in
+            try pngData(for: card, page: pages[index])
+        }
+    }
+
+    public func export(
+        _ card: ShareCard,
+        renderedPages: [ShareCardRenderedPage],
+        to directoryURL: URL,
+        openExportFolder: Bool = ShareCardPreferences.openExportFolder
+    ) throws -> ShareCardExportResult {
+        return try export(
+            card,
+            pageCount: renderedPages.count,
+            to: directoryURL,
+            openExportFolder: openExportFolder
+        ) { index in
+            try pngData(for: renderedPages[index].image)
+        }
+    }
+
+    private func export(
+        _ card: ShareCard,
+        pageCount: Int,
+        to directoryURL: URL,
+        openExportFolder: Bool,
+        dataForPage: (Int) throws -> Data
+    ) throws -> ShareCardExportResult {
         guard !card.primaryText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              !pages.isEmpty else {
+              pageCount > 0 else {
             throw ShareCardExportError.emptyCardText
         }
 
         try fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)
-        let files = try pages.enumerated().map { index, page in
+        let files = try (0..<pageCount).map { index in
             let fileURL = directoryURL.appendingPathComponent(
-                fileName(for: card, pageIndex: index, pageCount: pages.count)
+                fileName(for: card, pageIndex: index, pageCount: pageCount)
             )
-            let data = try pngData(for: card, page: page)
+            let data = try dataForPage(index)
             try data.write(to: fileURL, options: .atomic)
             return fileURL
         }
@@ -676,7 +728,7 @@ public final class ShareCardService {
 
         return ShareCardExportResult(
             files: files,
-            pageCount: pages.count,
+            pageCount: pageCount,
             didRevealExportFolder: openExportFolder
         )
     }
@@ -798,6 +850,63 @@ public final class ShareCardService {
             throw ShareCardExportError.imageEncodingFailed
         }
         return data
+    }
+
+    private func pngData(for image: NSImage) throws -> Data {
+        let width = Int(Self.canvasSize.width)
+        let height = Int(Self.canvasSize.height)
+        guard let bitmap = NSBitmapImageRep(
+            bitmapDataPlanes: nil,
+            pixelsWide: width,
+            pixelsHigh: height,
+            bitsPerSample: 8,
+            samplesPerPixel: 4,
+            hasAlpha: true,
+            isPlanar: false,
+            colorSpaceName: .deviceRGB,
+            bitmapFormat: [],
+            bytesPerRow: 0,
+            bitsPerPixel: 0
+        ) else {
+            throw ShareCardExportError.imageEncodingFailed
+        }
+
+        let graphicsContext = NSGraphicsContext(bitmapImageRep: bitmap)
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = graphicsContext
+        defer { NSGraphicsContext.restoreGraphicsState() }
+
+        NSColor.clear.setFill()
+        NSRect(origin: .zero, size: Self.canvasSize).fill()
+        graphicsContext?.imageInterpolation = .high
+        image.draw(
+            in: NSRect(origin: .zero, size: Self.canvasSize),
+            from: NSRect(origin: .zero, size: image.size),
+            operation: .copy,
+            fraction: 1
+        )
+
+        guard let data = bitmap.representation(using: .png, properties: [:]) else {
+            throw ShareCardExportError.imageEncodingFailed
+        }
+        return data
+    }
+
+    private func writeTemporaryPNG(
+        _ data: Data,
+        for card: ShareCard,
+        pageIndex: Int,
+        pageCount: Int
+    ) throws -> URL {
+        let directoryURL = fileManager.temporaryDirectory
+            .appendingPathComponent("BooksExporter-ShareCard-\(UUID().uuidString)", isDirectory: true)
+        try fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+
+        let fileURL = directoryURL.appendingPathComponent(
+            fileName(for: card, pageIndex: pageIndex, pageCount: pageCount)
+        )
+        try data.write(to: fileURL, options: .atomic)
+        return fileURL
     }
 
     private func drawText(
