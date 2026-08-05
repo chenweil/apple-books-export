@@ -467,12 +467,13 @@ final class ShareCardServiceTests: XCTestCase {
             )
         )
         let renderedPages = try service.render(for: card)
-        XCTAssertGreaterThanOrEqual(renderedPages.count, 2)
+        XCTAssertGreaterThanOrEqual(renderedPages.count, 3)
 
-        let suppliedPages = Array(renderedPages.prefix(2)).enumerated().map { index, renderedPage in
+        let pageColors: [NSColor] = [.systemRed, .systemBlue, .systemGreen]
+        let suppliedPages = Array(renderedPages.prefix(3)).enumerated().map { index, renderedPage in
             ShareCardRenderedPage(
                 page: renderedPage.page,
-                image: makeSolidImage(index == 0 ? .systemRed : .systemBlue)
+                image: makeSolidImage(pageColors[index])
             )
         }
         let directoryURL = try makeTemporaryDirectory()
@@ -487,7 +488,11 @@ final class ShareCardServiceTests: XCTestCase {
         XCTAssertEqual(export.files.count, suppliedPages.count)
         XCTAssertEqual(
             export.files.map(\.lastPathComponent),
-            ["The Quiet Book - A. Reader 1.png", "The Quiet Book - A. Reader 2.png"]
+            [
+                "The Quiet Book - A. Reader 1.png",
+                "The Quiet Book - A. Reader 2.png",
+                "The Quiet Book - A. Reader 3.png"
+            ]
         )
 
         for (index, fileURL) in export.files.enumerated() {
@@ -500,9 +505,13 @@ final class ShareCardServiceTests: XCTestCase {
             if index == 0 {
                 XCTAssertGreaterThan(centerColor.redComponent, 0.8)
                 XCTAssertLessThan(centerColor.blueComponent, 0.4)
-            } else {
+            } else if index == 1 {
                 XCTAssertGreaterThan(centerColor.blueComponent, 0.8)
                 XCTAssertLessThan(centerColor.redComponent, 0.4)
+            } else {
+                XCTAssertGreaterThan(centerColor.greenComponent, 0.8)
+                XCTAssertLessThan(centerColor.redComponent, 0.4)
+                XCTAssertLessThan(centerColor.blueComponent, 0.4)
             }
         }
 
@@ -518,15 +527,21 @@ final class ShareCardServiceTests: XCTestCase {
                 "The Quiet Book - A. Reader \(index + 1).png"
             )
             let bitmap = try XCTUnwrap(NSBitmapImageRep(data: Data(contentsOf: temporaryURL)))
+            XCTAssertEqual(bitmap.pixelsWide, 1200)
+            XCTAssertEqual(bitmap.pixelsHigh, 1600)
             let centerColor = try XCTUnwrap(
                 bitmap.colorAt(x: bitmap.pixelsWide / 2, y: bitmap.pixelsHigh / 2)
             )
             if index == 0 {
                 XCTAssertGreaterThan(centerColor.redComponent, 0.8)
                 XCTAssertLessThan(centerColor.blueComponent, 0.4)
-            } else {
+            } else if index == 1 {
                 XCTAssertGreaterThan(centerColor.blueComponent, 0.8)
                 XCTAssertLessThan(centerColor.redComponent, 0.4)
+            } else {
+                XCTAssertGreaterThan(centerColor.greenComponent, 0.8)
+                XCTAssertLessThan(centerColor.redComponent, 0.4)
+                XCTAssertLessThan(centerColor.blueComponent, 0.4)
             }
         }
     }

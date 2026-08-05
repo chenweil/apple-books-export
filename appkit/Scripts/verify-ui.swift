@@ -686,7 +686,9 @@ enum VerifyLayout {
         print("\n分享卡片排版与多页")
         let book = Book(id: "b1", title: "测试书", author: "某人",
                         totalAnnotations: 1, highlightsCount: 1, notesCount: 0)
-        let longText = String(repeating: "中英文 mixed passage，必须完整保留。 ", count: 220)
+        let longText = (0..<220)
+            .map { "第 \($0) 段 mixed passage，必须完整保留。 " }
+            .joined()
         let annotation = Annotation(
             id: "long-1",
             type: .highlight,
@@ -783,11 +785,19 @@ enum VerifyLayout {
         }
 
         if pageButtons.count > 1 {
-            invoke(pageButtons[1])
-            check("点击缩略图切换当前页", pageLabel.stringValue == "第 2 / \(pageButtons.count) 页",
+            guard let inspectedPageButton = pageButtons.dropFirst().first else {
+                check("点击缩略图切换当前页", false, "找不到非首页缩略图")
+                return
+            }
+            invoke(inspectedPageButton)
+            let selectedPageIndex = pageButtons.firstIndex { $0.state == .on }
+            let selectedPageNumber = inspectedPageButton.tag + 1
+            check("点击缩略图切换当前页",
+                  pageLabel.stringValue == "第 \(selectedPageNumber) / \(pageButtons.count) 页",
                   "页码=\(pageLabel.stringValue)")
             check("当前页缩略图选中态唯一",
-                  pageButtons.filter { $0.state == .on }.count == 1 && pageButtons[1].state == .on,
+                  pageButtons.filter { $0.state == .on }.count == 1
+                      && inspectedPageButton.state == .on,
                   "选中数=\(pageButtons.filter { $0.state == .on }.count)")
             guard let copyButton = view(titled: "复制图片", in: editor.view) as? NSButton else {
                 check("多页复制入口可定位", false, "找不到复制按钮")
@@ -800,19 +810,20 @@ enum VerifyLayout {
             invoke(copyMenu)
             let copiedAllPageData = copiedImages.compactMap(\.tiffRepresentation)
             let selectedPageIsPreserved: Bool
-            if copiedAllPageData.count == pageButtons.count,
+            if let selectedPageIndex,
+               copiedAllPageData.indices.contains(selectedPageIndex),
                let copiedCurrentPageData {
-                selectedPageIsPreserved = copiedAllPageData[1] == copiedCurrentPageData
+                selectedPageIsPreserved = copiedAllPageData[selectedPageIndex] == copiedCurrentPageData
             } else {
                 selectedPageIsPreserved = false
             }
-            let allPagesContainDistinctContent = copiedAllPageData.count > 1
-                && copiedAllPageData[0] != copiedAllPageData[1]
+            let allPagesContainDistinctContent = copiedAllPageData.count == pageButtons.count
+                && Set(copiedAllPageData).count == pageButtons.count
             check("复制菜单传出全部页面", copiedImages.count == pageButtons.count,
                   "图片数=\(copiedImages.count)")
             check("当前页与全部页面复制内容范围明确",
                   selectedPageIsPreserved && allPagesContainDistinctContent,
-                  "选中页位于全部页第 2 项=\(selectedPageIsPreserved), 全部页首两项不同=\(allPagesContainDistinctContent)")
+                  "选中页位于全部页对应位置=\(selectedPageIsPreserved), 全部页内容均可区分=\(allPagesContainDistinctContent)")
 
             if let textView = firstTextView(in: editor.view) {
                 textView.string = "改成短文本"
