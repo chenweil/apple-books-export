@@ -2,6 +2,23 @@
 
 本文件记录 AppKit 版本的可见变更。
 
+## v0.1.8 - 2026-08-05
+
+### Share Card 编辑器
+
+- 从选中的 Apple Books 标注进入 Share Card 编辑器，默认直接生成可预览的 1200×1600 卡片。
+- 支持自动/固定字号、11 款随应用分发字体、水平/垂直对齐、12 个绑定背景与配色的模板。
+- 长正文和长笔记形成连续页面；大预览、页码和有边界缩略图带共享同一组渲染页面。
+- 保存全部页面，复制默认当前页并可复制全部页面；AirDrop 发送当前页临时 PNG，不要求先保存。
+- 移除泛用 macOS 分享面板；卡片编辑只影响导出内容，不修改原始 Apple Books 标注。
+- 补充服务层测试、AppKit UI 探针和生成图片视觉检查记录。
+
+### 发布准备
+
+- 发布候选版本为 `0.1.8`、构建号 `9`，默认产物为 `Books-Exporter-0.1.8-unsigned.dmg`。
+- 当前 DMG 未进行 Developer ID 签名或 notarization；真实设备 AirDrop、GitHub Release 和推送需在发布环境单独完成。
+- 完整验收证据与未执行项见 [`docs/plans/2026-08-05-appkit-share-card-issue-13-verification.md`](docs/plans/2026-08-05-appkit-share-card-issue-13-verification.md)。
+
 ## v0.1.7 - 2026-08-04
 
 ### 修复

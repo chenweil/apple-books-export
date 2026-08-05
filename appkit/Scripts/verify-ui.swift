@@ -37,6 +37,7 @@ enum VerifyLayout {
         checkAnnotationFilter()
         checkExportScope()
         checkCardEntry()
+        checkShareCardRealEntry()
         checkShareCardAlternativeLayout()
         checkShareCardActions()
         checkShareCardFontSelection()
@@ -502,6 +503,57 @@ enum VerifyLayout {
               closeFrame.minX >= -0.5 && closeFrame.maxX <= editor.view.bounds.maxX + 0.5
                   && closeFrame.minY >= -0.5 && closeFrame.maxY <= editor.view.bounds.maxY + 0.5,
               "frame=\(closeFrame) editor=\(editor.view.bounds)")
+    }
+
+    private static func checkShareCardRealEntry() {
+        print("\n详情控制器入口打开分享卡片编辑器")
+        let book = Book(id: "b1", title: "测试书", author: "某人",
+                        totalAnnotations: 1, highlightsCount: 1, notesCount: 0)
+        let annotation = sample("h0", .highlight)
+        let controller = BookDetailViewController()
+        controller.loadView()
+        let detail = controller.view as! BookDetailView
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 779, height: 700),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentViewController = controller
+        window.makeKeyAndOrderFront(nil)
+        defer { window.orderOut(nil); window.close() }
+
+        controller.show(book: book, annotations: [annotation])
+        detail.layoutSubtreeIfNeeded()
+
+        guard let table = firstTableView(in: detail),
+              let cell = table.view(atColumn: 0, row: 0, makeIfNecessary: true),
+              let cardButton = view(named: "share-card-entry", in: cell) as? NSButton else {
+            check("真实详情入口可定位", false, "找不到标注行入口")
+            return
+        }
+
+        table.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+        detail.tableViewSelectionDidChange(Notification(name: NSTableView.selectionDidChangeNotification))
+        table.layoutSubtreeIfNeeded()
+        cell.layoutSubtreeIfNeeded()
+        invoke(cardButton)
+        runMainLoop(for: 0.05)
+
+        let editor = controller.presentedViewControllers?.compactMap {
+            $0 as? ShareCardEditorViewController
+        }.first
+        check("详情控制器入口打开编辑器", editor != nil,
+              "presented=\(controller.presentedViewControllers?.count ?? 0)")
+        guard let editor else { return }
+        editor.view.layoutSubtreeIfNeeded()
+        let preview = view(named: "share-card-preview", in: editor.view) as? NSImageView
+        let pageLabel = view(named: "share-card-page-label", in: editor.view) as? NSTextField
+        check("入口默认生成预览", preview?.image?.size == ShareCardService.canvasSize,
+              "图片尺寸=\(preview?.image?.size ?? .zero)")
+        check("入口默认页码可见", pageLabel?.stringValue == "第 1 / 1 页",
+              "页码=\(pageLabel?.stringValue ?? "缺失")")
+        editor.dismiss(editor)
     }
 
     private static func checkShareCardActions() {

@@ -4,11 +4,12 @@ AppKit 版本的 Apple Books 笔记导出工具,把高亮和笔记导出为 Mark
 
 > **状态**: 实验性研究项目,可能归档。当前聚焦 AppKit GUI 栈。
 
-当前 AppKit 版本: `v0.1.7` (`build 8`, unsigned)。应用重新激活时会重新读取 Apple Books 数据，也可以在“设置…”中配置低频自动刷新，变更记录见
+当前 AppKit 版本候选: `v0.1.8` (`build 9`, unsigned)。应用重新激活时会重新读取 Apple Books 数据，也可以在“设置…”中配置低频自动刷新，变更记录见
 [`CHANGELOG.md`](CHANGELOG.md)。
 
-本版本可从 [GitHub Release v0.1.7](https://github.com/chenweil/apple-books-export/releases/tag/v0.1.7)
-下载 `Books-Exporter-0.1.7-unsigned.dmg`。该 DMG 未签名、未 notarization，仅适合本机安装验证。
+上一已发布版本可从 [GitHub Release v0.1.7](https://github.com/chenweil/apple-books-export/releases/tag/v0.1.7)
+下载 `Books-Exporter-0.1.7-unsigned.dmg`。`v0.1.8` 的发布说明见
+[`docs/releases/v0.1.8.md`](docs/releases/v0.1.8.md)。当前候选 DMG 未签名、未 notarization，仅适合本机安装验证。
 
 ## 系统要求
 
@@ -38,7 +39,7 @@ chmod +x Scripts/package-dmg.sh
 ./Scripts/package-dmg.sh
 ```
 
-产物位于仓库根目录的 `dist/Books-Exporter-0.1.7-unsigned.dmg`。也可以覆盖版本号：
+默认产物位于仓库根目录的 `dist/Books-Exporter-0.1.8-unsigned.dmg`。也可以覆盖版本号：
 
 ```bash
 APP_VERSION=0.1.8 BUILD_VERSION=9 ./Scripts/package-dmg.sh
@@ -82,7 +83,7 @@ appkit/
     ├── Models/                # Book / Annotation / AnnotationType
     ├── Services/              # AppSettings / DatabaseService / BookService / ShareCardService
     │   └── ShareCardService.swift # 生成、分页、PNG 导出的公共 seam
-    ├── Resources/share-card-backgrounds/ # 六个本地主题背景
+    ├── Resources/share-card-backgrounds/ # 十二个本地主题背景
     ├── Resources/fonts/       # Share Card 字体与对应许可证
     └── Utilities/             # PermissionHelper
 ```
@@ -130,9 +131,10 @@ Apple Books 不把「笔记」存成独立对象 —— 笔记就是给高亮加
 | S1 | 完成 | Share Card 选中态入口、默认卡片和 1200×1600 PNG 导出 |
 | S2 | 完成 | 笔记-only 内容、可选 supplementary note、作者归因和 card-only 编辑 |
 | S3 | 完成 | 42pt 最小字号、连续卡片分页、文件命名和打开目录偏好 |
-| S4 | 完成 | 六个主题和按需四个完整 Alternative Cards |
-| S5 | 完成 | 保存轻提示、保存后系统分享和 AppKit library/test target 拆分 |
+| S4 | 完成 | 十二个主题和持久轮换的四个完整 Alternative Cards |
+| S5 | 完成 | 多页预览、当前页/全部页复制、全部保存、当前页 AirDrop 和稳定操作栏 |
 | S6 | 完成 | Share Card 支持系统默认、思源黑体、思源宋体、演示悠然小楷、演示佛系体、站酷文艺体、庞门正道粗书体、四款汇文字体和霞鹜文楷切换,预览与导出共用字体 |
+| S7 | 完成 | #13 集成验收、生成图片视觉检查和 `v0.1.8 build 9` unsigned 发布候选准备 |
 
 Share Card 编辑器当前提供“系统默认”、思源黑体、思源宋体、演示悠然小楷、演示佛系体、
 站酷文艺体、庞门正道粗书体、汇文明朝体、汇文仿宋、汇文正楷、汇文港黑和霞鹜文楷共十二个选项。字体文件及来源/授权说明随应用资源
@@ -157,12 +159,13 @@ Share Card 编辑器当前提供“系统默认”、思源黑体、思源宋体
 `BooksExporterCore` 是 library target,`BooksExporter` 只保留瘦 executable 入口,
 因此 `Tests/BooksExporterCoreTests` 可以在公共 Share Card seam、数据库服务和设置偏好边界上运行 XCTest。
 测试覆盖默认 Highlight、note-only、可选 note、作者缺失、临时文字编辑、PNG
-尺寸与命名、长文分页、字体资源渲染、目录偏好、四个 Alternative Cards,以及
-Apple Books WAL 中最新标注的读取、共享数据库连接并发读取串行化和刷新间隔偏好持久化。
+尺寸与命名、长文分页、字体资源渲染、目录偏好、十二个模板和四个 Alternative
+Cards,以及 Apple Books WAL 中最新标注的读取、共享数据库连接并发读取串行化和刷新间隔偏好持久化。
 
 `Scripts/verify-ui.sh` 仍把探针和真实源码一起编译(排除 executable 入口),
-断言分栏约束、内容列宽度、按钮排布、行高、排序可访问性、类型筛选和选中标注后
-才显示 Card Entry。它是 UI 回归探针,不是 XCTest。
+断言分栏约束、内容列宽度、按钮排布、行高、排序可访问性、类型筛选、选中标注后
+才显示 Card Entry,以及真实 `BookDetailViewController` 入口打开编辑器后的默认预览。
+它是 UI 回归探针,不是 XCTest。
 
 ## 跟其他分支的关系
 

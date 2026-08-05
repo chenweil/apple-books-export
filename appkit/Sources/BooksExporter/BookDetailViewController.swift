@@ -43,6 +43,13 @@ final class BookDetailViewController: NSViewController {
         }
     }
 
+    func show(book: Book, annotations: [Annotation]) {
+        selectedBook = book
+        loadTask?.cancel()
+        detailView.show(book: book)
+        detailView.setAnnotations(annotations)
+    }
+
     func refresh(using books: [Book]) {
         guard let selectedBook,
               let refreshedBook = books.first(where: { $0.id == selectedBook.id }) else {
