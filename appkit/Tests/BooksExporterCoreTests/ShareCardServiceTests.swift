@@ -67,6 +67,8 @@ final class ShareCardServiceTests: XCTestCase {
 
         let unreadableFixedSize = ShareCardTypography(sizeMode: .fixed, fontSize: 12)
         XCTAssertEqual(unreadableFixedSize.fontSize, ShareCardTypography.minimumReadableFontSize)
+        let oversizedFixedSize = ShareCardTypography(sizeMode: .fixed, fontSize: 999)
+        XCTAssertEqual(oversizedFixedSize.fontSize, ShareCardTypography.maximumReadableFontSize)
         let manualPage = ShareCardPage(index: 0, primaryText: "text", supplementaryNote: nil, fontSize: 12)
         XCTAssertEqual(manualPage.fontSize, ShareCardTypography.minimumReadableFontSize)
     }
@@ -154,25 +156,128 @@ final class ShareCardServiceTests: XCTestCase {
 
         XCTAssertFalse(page.primaryTextFrame.intersects(noteFrame))
         XCTAssertFalse(noteFrame.intersects(page.attributionFrame))
-        XCTAssertEqual(page.supplementaryNoteFontSize, 38)
+        XCTAssertEqual(
+            page.supplementaryNoteFontSize,
+            ShareCardService.supplementaryNoteFontSize(for: page.fontSize)
+        )
         XCTAssertEqual(card.template.primaryTextColor, card.template.supplementaryNoteColor)
     }
 
     func testLongSupplementaryNotePaginatesWithoutTruncation() {
         let note = String(repeating: "这是一段必须完整保留的补充笔记。 ", count: 80)
+        let typography = ShareCardTypography(sizeMode: .fixed, fontSize: 42)
         let card = ShareCardService().makeCard(
             for: makeBook(author: "A. Reader"),
             annotation: makeAnnotation(content: "A highlighted passage.", note: note),
-            includeNote: true
+            includeNote: true,
+            typography: typography
         )
 
         let pages = ShareCardService().pages(for: card)
 
         XCTAssertEqual(pages.compactMap(\.supplementaryNote).joined(), note)
-        XCTAssertGreaterThan(pages.count, 1)
-        XCTAssertTrue(pages.compactMap(\.supplementaryNoteFrame).allSatisfy {
-            card.template.noteArea.contains($0)
+        XCTAssertGreaterThan(pages.count, 2)
+        XCTAssertEqual(pages.first?.supplementaryNoteFontSize, 30)
+        XCTAssertTrue(pages.first?.supplementaryNoteFrame.map(card.template.noteArea.contains) ?? false)
+        XCTAssertTrue(pages.dropFirst().compactMap(\.supplementaryNoteFrame).allSatisfy {
+            card.template.textSafeArea.contains($0)
         })
+    }
+
+    func testSupplementaryNoteContinuationUsesTheFullTextSafeArea() throws {
+        let note = String(repeating: "续页笔记应使用完整正文区域。 ", count: 120)
+        let service = ShareCardService()
+        let card = service.makeCard(
+            for: makeBook(author: "A. Reader"),
+            annotation: makeAnnotation(content: "正文", note: note),
+            includeNote: true,
+            typography: ShareCardTypography(sizeMode: .fixed, fontSize: 42)
+        )
+
+        let notePages = service.pages(for: card).filter { $0.supplementaryNote != nil }
+        let firstNote = try XCTUnwrap(notePages.first?.supplementaryNote)
+        let firstContinuation = try XCTUnwrap(notePages.dropFirst().first?.supplementaryNote)
+
+        XCTAssertEqual(notePages.first?.primaryText, "正文")
+        XCTAssertGreaterThan(firstContinuation.utf16.count, firstNote.utf16.count * 3)
+        XCTAssertTrue(notePages.dropFirst().allSatisfy {
+            card.template.textSafeArea.contains($0.supplementaryNoteFrame ?? .zero)
+        })
+    }
+
+    func testSupplementaryNoteFontSizeScalesWithPrimaryFontSize() {
+        let card = ShareCardService().makeCard(
+            for: makeBook(author: "A. Reader"),
+            annotation: makeAnnotation(content: "A highlighted passage.", note: "A proportional note."),
+            includeNote: true,
+            typography: ShareCardTypography(sizeMode: .fixed, fontSize: 72)
+        )
+
+        let page = ShareCardService().pages(for: card)[0]
+
+        XCTAssertEqual(page.supplementaryNoteFontSize, 72 * ShareCardService.supplementaryNoteScale)
+        XCTAssertEqual(
+            ShareCardService.supplementaryNoteFontSize(for: 999),
+            ShareCardService.maximumReadableFontSize * ShareCardService.supplementaryNoteScale
+        )
+    }
+
+    func testAutomaticTypographyPaginatesAfterReachingMinimumReadableSize() {
+        let text = String(repeating: "自动字号达到下限后仍然分页。 ", count: 260)
+        let card = ShareCardService().makeCard(
+            for: makeBook(author: "A. Reader"),
+            annotation: makeAnnotation(content: text, note: nil),
+            typography: ShareCardTypography(sizeMode: .automatic)
+        )
+
+        let pages = ShareCardService().pages(for: card)
+
+        XCTAssertGreaterThan(pages.count, 1)
+        XCTAssertTrue(pages.allSatisfy { $0.fontSize == ShareCardService.minimumReadableFontSize })
+        XCTAssertEqual(pages.map(\.primaryText).joined(), text)
+    }
+
+    func testLineHeightAndMixedLanguagePaginationAreStableAcrossFonts() {
+        let text = String(repeating: "中文 English 123，行高和分页必须保持一致。 ", count: 80)
+        let service = ShareCardService()
+
+        XCTAssertEqual(ShareCardService.lineHeightMultiple, 1.4)
+        let lineTypography = ShareCardTypography(sizeMode: .fixed, fontSize: 42)
+        let oneLineCard = service.makeCard(
+            for: makeBook(author: "A. Reader"),
+            annotation: makeAnnotation(content: "one line", note: nil),
+            typography: lineTypography
+        )
+        let twoLineCard = service.makeCard(
+            for: makeBook(author: "A. Reader"),
+            annotation: makeAnnotation(content: "one line\ntwo line", note: nil),
+            typography: lineTypography
+        )
+        let oneLineHeight = service.pages(for: oneLineCard)[0].primaryTextFrame.height
+        let twoLineHeight = service.pages(for: twoLineCard)[0].primaryTextFrame.height
+        XCTAssertEqual(twoLineHeight - oneLineHeight, 42 * ShareCardService.lineHeightMultiple, accuracy: 2)
+
+        for font in ShareCardFont.allCases {
+            let card = service.makeCard(
+                for: makeBook(author: "A. Reader"),
+                annotation: makeAnnotation(content: text, note: nil),
+                typography: ShareCardTypography(
+                    font: font,
+                    sizeMode: .fixed,
+                    fontSize: 42,
+                    horizontalAlignment: .center,
+                    verticalAlignment: .center
+                )
+            )
+
+            let pages = service.pages(for: card)
+
+            XCTAssertFalse(pages.isEmpty, "字体没有生成页面: \(font.rawValue)")
+            XCTAssertEqual(pages.map(\.primaryText).joined(), text, "字体分页截断: \(font.rawValue)")
+            XCTAssertTrue(pages.allSatisfy { page in
+                card.template.textSafeArea.contains(page.primaryTextFrame)
+            }, "字体正文越过安全区: \(font.rawValue)")
+        }
     }
 
     func testBundledFontsRenderAndSurviveAlternativeCards() throws {
@@ -205,7 +310,13 @@ final class ShareCardServiceTests: XCTestCase {
             XCTAssertEqual(card.font, font)
             XCTAssertEqual(service.pages(for: card).map(\.primaryText).joined(), card.primaryText)
 
-            let image = try service.previewImage(for: card)
+            let image: NSImage
+            do {
+                image = try service.previewImage(for: card)
+            } catch {
+                XCTFail("字体渲染失败: \(font.rawValue), \(error)")
+                continue
+            }
             XCTAssertEqual(image.size, ShareCardService.canvasSize)
             let registeredFont = try XCTUnwrap(NSFont(name: postScriptName, size: 42),
                                                "字体未注册: \(font.rawValue)")
@@ -252,6 +363,56 @@ final class ShareCardServiceTests: XCTestCase {
         let result = try ShareCardService().export(card, to: directoryURL)
 
         XCTAssertEqual(result.files.map { $0.lastPathComponent }, ["The Quiet Book.png"])
+    }
+
+    func testRenderAndTemporaryPageURLUseTheSelectedPageContract() throws {
+        let service = ShareCardService()
+        let card = service.makeCard(
+            for: makeBook(author: "A. Reader"),
+            annotation: makeAnnotation(
+                content: String(repeating: "A page that must remain available. ", count: 180),
+                note: nil
+            )
+        )
+
+        let renderedPages = try service.render(for: card)
+        XCTAssertGreaterThan(renderedPages.count, 1)
+        XCTAssertEqual(renderedPages.map(\.page.primaryText).joined(), card.primaryText)
+        XCTAssertTrue(renderedPages.allSatisfy { $0.image.size == ShareCardService.canvasSize })
+
+        let pageURL = try service.temporaryPNGURL(for: card, pageIndex: 1)
+        defer { try? FileManager.default.removeItem(at: pageURL.deletingLastPathComponent()) }
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(data: Data(contentsOf: pageURL)))
+        XCTAssertEqual(bitmap.pixelsWide, 1200)
+        XCTAssertEqual(bitmap.pixelsHigh, 1600)
+
+        let directoryURL = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let export = try service.export(card, pages: renderedPages.map(\.page), to: directoryURL)
+        XCTAssertEqual(export.pageCount, renderedPages.count)
+        XCTAssertEqual(export.files.count, renderedPages.count)
+    }
+
+    func testRenderingRejectsTextThatCannotFitItsSafeArea() {
+        let template = ShareCardTemplate(
+            id: "tiny-safe-area",
+            theme: .mistWash,
+            textSafeArea: CGRect(x: 0, y: 0, width: 1, height: 1)
+        )
+        let card = ShareCard(
+            bookTitle: "The Quiet Book",
+            author: "A. Reader",
+            primaryText: "This text cannot fit.",
+            supplementaryNote: nil,
+            template: template,
+            typography: ShareCardTypography(sizeMode: .fixed, fontSize: 72)
+        )
+
+        XCTAssertThrowsError(try ShareCardService().previewImage(for: card)) { error in
+            guard case ShareCardExportError.textRenderingFailed = error else {
+                return XCTFail("unexpected error: \(error)")
+            }
+        }
     }
 
     func testHighlightNoteIsOptionalAndCardEditDoesNotMutateAnnotation() {
@@ -379,14 +540,14 @@ final class ShareCardServiceTests: XCTestCase {
         XCTAssertEqual(revealedURL, secondDirectory)
     }
 
-    func testAlternativeCardsUseFourCompleteTemplatesAndSixCuratedThemesExist() {
+    func testAlternativeCardsUseFourCompleteTemplatesAndTwelveCuratedThemesExist() {
         let service = ShareCardService()
         let card = service.makeCard(
             for: makeBook(author: "A. Reader"),
             annotation: makeAnnotation(content: "A short passage.", note: nil)
         )
 
-        XCTAssertEqual(ShareCardTheme.allCases.count, 6)
+        XCTAssertEqual(ShareCardTheme.allCases.count, 12)
         let alternatives = service.alternativeCards(for: card)
 
         XCTAssertEqual(alternatives.count, 4)
@@ -394,6 +555,61 @@ final class ShareCardServiceTests: XCTestCase {
         XCTAssertTrue(alternatives.allSatisfy { $0.primaryText == card.primaryText })
         XCTAssertTrue(alternatives.allSatisfy { $0.attributionText == card.attributionText })
         XCTAssertEqual(Set(alternatives.map { $0.theme }).count, 4)
+    }
+
+    func testAllThemesRenderBundledBackgroundsAndReadableTextContrast() throws {
+        let service = ShareCardService()
+        let card = service.makeCard(
+            for: makeBook(author: "A. Reader"),
+            annotation: makeAnnotation(content: "一段用于检查主题背景和文字对比度的书摘。", note: nil)
+        )
+
+        for theme in ShareCardTheme.allCases {
+            let template = service.template(for: theme)
+            let background = try XCTUnwrap(service.backgroundImage(for: theme), "缺少主题背景: \(theme.rawValue)")
+            let bitmap = try XCTUnwrap(
+                background.representations.compactMap { $0 as? NSBitmapImageRep }.first,
+                "主题背景无法读取: \(theme.rawValue)"
+            )
+            XCTAssertEqual(bitmap.pixelsWide * 4, bitmap.pixelsHigh * 3, "主题背景不是 3:4: \(theme.rawValue)")
+
+            let themedCard = service.makeCard(
+                for: makeBook(author: "A. Reader"),
+                annotation: makeAnnotation(content: card.primaryText, note: nil),
+                theme: theme
+            )
+            let image = try service.previewImage(for: themedCard)
+            XCTAssertEqual(image.size, ShareCardService.canvasSize)
+
+            let luminances = luminances(
+                in: background,
+                area: template.textSafeArea,
+                sampleStride: 12
+            )
+            XCTAssertFalse(luminances.isEmpty, "主题安全区没有可采样像素: \(theme.rawValue)")
+            let p90 = luminances.sorted()[Int(Double(luminances.count - 1) * 0.9)]
+            let textLuminance = relativeLuminance(template.primaryTextColor)
+            let contrast = (max(p90, textLuminance) + 0.05) / (min(p90, textLuminance) + 0.05)
+            XCTAssertGreaterThanOrEqual(contrast, 4.5, "主题文字对比度不足: \(theme.rawValue), \(contrast)")
+        }
+    }
+
+    func testAlternativeCardsUsePersistentFourStepRotationAndSkipCurrentTheme() {
+        let service = ShareCardService()
+        let card = service.makeCard(
+            for: makeBook(author: "A. Reader"),
+            annotation: makeAnnotation(content: "A short passage.", note: nil)
+        )
+
+        let firstCards = service.alternativeCards(for: card)
+        let first = firstCards.map(\.theme)
+        let second = service.alternativeCards(for: card).map(\.theme)
+        let afterSelection = service.alternativeCards(for: firstCards[0]).map(\.theme)
+
+        XCTAssertEqual(first, [.sageLeaf, .blushArcs, .sandContours, .lavenderStars])
+        XCTAssertEqual(second, [.lavenderStars, .stoneTextile, .vintagePaper, .pinkBlueWash])
+        XCTAssertFalse(first.contains(card.theme))
+        XCTAssertEqual(afterSelection, [.softStone, .linePaper, .ruledNote, .collagePaper])
     }
 
     func testAlternativeTemplatesPreserveAllTypographyChoices() {
@@ -419,6 +635,49 @@ final class ShareCardServiceTests: XCTestCase {
             .appendingPathComponent("books-exporter-share-card-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
+    }
+
+    private func luminances(in image: NSImage, area: CGRect, sampleStride: Int) -> [CGFloat] {
+        guard let bitmap = image.representations.compactMap({ $0 as? NSBitmapImageRep }).first else {
+            return []
+        }
+        let xStart = max(0, Int(CGFloat(bitmap.pixelsWide) * area.minX / ShareCardService.canvasSize.width))
+        let xEnd = min(bitmap.pixelsWide, Int(CGFloat(bitmap.pixelsWide) * area.maxX / ShareCardService.canvasSize.width))
+        let yStart = max(0, Int(CGFloat(bitmap.pixelsHigh) * area.minY / ShareCardService.canvasSize.height))
+        let yEnd = min(bitmap.pixelsHigh, Int(CGFloat(bitmap.pixelsHigh) * area.maxY / ShareCardService.canvasSize.height))
+
+        var values: [CGFloat] = []
+        for y in stride(from: yStart, to: yEnd, by: sampleStride) {
+            for x in stride(from: xStart, to: xEnd, by: sampleStride) {
+                guard let color = bitmap.colorAt(x: x, y: y) else { continue }
+                values.append(relativeLuminance(color))
+            }
+        }
+        return values
+    }
+
+    private func relativeLuminance(_ color: ShareCardColor) -> CGFloat {
+        let red = color.red
+        let green = color.green
+        let blue = color.blue
+        return relativeLuminance(red: red, green: green, blue: blue)
+    }
+
+    private func relativeLuminance(_ color: NSColor) -> CGFloat {
+        guard let rgb = color.usingColorSpace(.sRGB) else { return 1 }
+        var red: CGFloat = 0
+        var green: CGFloat = 0
+        var blue: CGFloat = 0
+        var alpha: CGFloat = 0
+        rgb.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
+        return relativeLuminance(red: red, green: green, blue: blue)
+    }
+
+    private func relativeLuminance(red: CGFloat, green: CGFloat, blue: CGFloat) -> CGFloat {
+        func linearize(_ value: CGFloat) -> CGFloat {
+            value <= 0.03928 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4)
+        }
+        return 0.2126 * linearize(red) + 0.7152 * linearize(green) + 0.0722 * linearize(blue)
     }
 
     private func makeBook(author: String) -> Book {

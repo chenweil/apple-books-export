@@ -40,6 +40,7 @@ enum VerifyLayout {
         checkShareCardAlternativeLayout()
         checkShareCardActions()
         checkShareCardFontSelection()
+        checkShareCardThemeGrid()
         checkShareCardTypographyAndPages()
         checkClassifier()
         checkBookRowCentering()
@@ -525,6 +526,13 @@ enum VerifyLayout {
         invoke(copyButton)
         check("复制图片传出预览图", copiedImages.count == 1 && copiedImages[0].size == ShareCardService.canvasSize,
               "count=\(copiedImages.count) size=\(copiedImages.first?.size ?? .zero)")
+
+        guard let airDropButton = view(titled: "AirDrop", in: editor.view) as? NSButton else {
+            check("AirDrop 控件可定位", false, "找不到 AirDrop 按钮")
+            return
+        }
+        check("AirDrop 按钮保持可见", !airDropButton.isHidden,
+              "hidden=\(airDropButton.isHidden) enabled=\(airDropButton.isEnabled)")
     }
 
     private static func checkShareCardFontSelection() {
@@ -568,6 +576,48 @@ enum VerifyLayout {
             }
             check("切换字体后清理旧候选卡片", candidatesAfterFontChange.isEmpty,
                   "候选数=\(candidatesAfterFontChange.count)")
+        }
+    }
+
+    private static func checkShareCardThemeGrid() {
+        print("\n分享卡片主题网格")
+        let book = Book(id: "b1", title: "测试书", author: "某人",
+                        totalAnnotations: 1, highlightsCount: 1, notesCount: 0)
+        let editor = ShareCardEditorViewController(book: book, annotation: sample("h0", .highlight))
+        editor.loadView()
+        hosted(editor.view, width: 980, height: 700)
+        editor.view.layoutSubtreeIfNeeded()
+
+        let themeButtons = buttons(in: editor.view).filter {
+            $0.identifier?.rawValue.hasPrefix("share-card-theme-") == true
+        }
+        check("主题网格包含 12 个模板", themeButtons.count == ShareCardTheme.allCases.count,
+              "主题数=\(themeButtons.count)")
+        let visibleThemeNames = Set(textFields(in: editor.view).map(\.stringValue))
+        check("主题缩略图带有可见名称",
+              Set(ShareCardTheme.allCases.map(\.displayName)).isSubset(of: visibleThemeNames),
+              "名称=\(ShareCardTheme.allCases.map(\.displayName))")
+
+        let themeFrames = themeButtons.map { frame(of: $0, in: editor.view) }
+        let themeDimensions = Set(themeFrames.map { "\(Int($0.width.rounded()))x\(Int($0.height.rounded()))" })
+        check("主题缩略图尺寸稳定",
+              themeDimensions.count == 1
+                  && themeFrames.allSatisfy { $0.width <= 80 && $0.height <= 100 },
+              "尺寸=\(themeDimensions.sorted())")
+        check("主题网格不溢出编辑器",
+              themeFrames.allSatisfy {
+                  $0.minX >= -0.5 && $0.maxX <= editor.view.bounds.maxX + 0.5
+                      && $0.minY >= -0.5 && $0.maxY <= editor.view.bounds.maxY + 0.5
+              },
+              "范围=\(themeFrames)")
+        check("主题网格有唯一选中态", themeButtons.filter { $0.state == .on }.count == 1,
+              "选中数=\(themeButtons.filter { $0.state == .on }.count)")
+
+        if let lastTheme = themeButtons.last {
+            invoke(lastTheme)
+            check("选择主题后保持唯一选中态",
+                  themeButtons.filter { $0.state == .on }.count == 1 && lastTheme.state == .on,
+                  "选中数=\(themeButtons.filter { $0.state == .on }.count)")
         }
     }
 
@@ -651,6 +701,15 @@ enum VerifyLayout {
             invoke(copyMenu)
             check("复制菜单传出全部页面", copiedImages.count == pageButtons.count,
                   "图片数=\(copiedImages.count)")
+
+            if let textView = firstTextView(in: editor.view) {
+                textView.string = "改成短文本"
+                editor.textDidChange(Notification(name: NSText.didChangeNotification, object: textView))
+                editor.view.layoutSubtreeIfNeeded()
+                check("页数减少时当前页钳制到末页",
+                      pageLabel.stringValue == "第 1 / 1 页",
+                      "页码=\(pageLabel.stringValue)")
+            }
         }
     }
 
@@ -696,6 +755,19 @@ enum VerifyLayout {
             if let found = firstTableView(in: subview) { return found }
         }
         return nil
+    }
+
+    private static func firstTextView(in view: NSView) -> NSTextView? {
+        if let textView = view as? NSTextView { return textView }
+        for subview in view.subviews {
+            if let found = firstTextView(in: subview) { return found }
+        }
+        return nil
+    }
+
+    private static func textFields(in view: NSView) -> [NSTextField] {
+        let own = view as? NSTextField
+        return ([own].compactMap { $0 }) + view.subviews.flatMap { textFields(in: $0) }
     }
 
     private static func checkClassifier() {

@@ -26,7 +26,7 @@ Share Cards show the book title and author in their footer. If an author is unav
 
 ## Typography
 
-Share Cards use the selected bundled or system font. The reader may keep the default automatic size or choose a fixed readable size; a fixed size causes long text to paginate instead of silently shrinking. Primary text supports independent horizontal and vertical alignment. Supplementary notes inherit the selected font, palette, and alignment while using a smaller size; attribution remains template-positioned.
+Share Cards use the selected bundled or system font. The reader may keep the default automatic size or choose a fixed readable size; after automatic sizing reaches the minimum readable size, long text also paginates instead of shrinking or truncating. Primary text supports independent horizontal and vertical alignment. Line height is fixed at 1.4 times the font size for measurement, pagination, and drawing. Supplementary notes inherit the selected font, palette, and alignment; their size is `max(30, primaryFontSize × 0.6)`, and overflow notes use the full text-safe region on continuation pages. Attribution remains template-positioned.
 
 ## Export
 
@@ -46,11 +46,11 @@ When the reader accepts the default Share Card choices, export begins immediatel
 
 ## Card Actions
 
-The primary completion action saves all Card Pages as PNG files. The copy action copies the selected page by default and offers copying all pages as a secondary menu action. AirDrop occupies the former generic share-button position and sends the selected page. The generic macOS sharing panel is not part of this surface.
+The primary completion action saves all Card Pages as PNG files. The copy action copies the selected page by default and offers copying all pages as a secondary menu action. AirDrop occupies the former generic share-button position, generates a temporary PNG for the selected page, and sends it without requiring a prior save. When AirDrop is unavailable the stable button remains visible but disabled. The generic macOS sharing panel is not part of this surface.
 
 ## Long Passage Handling
 
-The Share Card canvas is fixed at 1200 by 1600 pixels. Automatic sizing keeps the existing readable fitting behavior; a manually selected size is preserved. If the content still does not fit, the system creates consecutive Card Pages instead of truncating the passage. The editor shows one large selected preview plus a bounded thumbnail strip.
+The Share Card canvas is fixed at 1200 by 1600 pixels. Automatic sizing keeps the existing readable fitting behavior and paginates after reaching the minimum readable size; a manually selected size is preserved. If the content still does not fit, the system creates consecutive Card Pages instead of truncating the passage. A supplementary note uses its note region on the page carrying primary text, then uses the full text-safe region on note-only continuation pages. When settings reduce the sequence length, the selected page is retained when valid and clamped to the last page otherwise. The editor shows one large selected preview plus a bounded thumbnail strip.
 
 ## Share Card Surface
 
@@ -62,7 +62,7 @@ The Share Card action is contextual. It appears beside an Annotation only after 
 
 ## Background Generation
 
-The card editor opens with a default template preview. The theme panel shows all twelve bundled backgrounds as bounded thumbnails. “Change it up” rotates through the template pool and shows four complete candidates only when requested, rather than generating candidates on every editor open.
+The card editor opens with a default template preview. The theme panel shows all twelve bundled backgrounds as bounded thumbnails. A Card Template is an atomic background-plus-palette choice. “Change it up” rotates through the canonical twelve-template order with a persistent cursor, shows the next four templates after the cursor while skipping the current template, and advances the cursor by four modulo twelve after each request. Selecting a candidate does not reset the cursor or user typography.
 
 ## Background Style
 
@@ -82,11 +82,11 @@ The card editor opens with a ready-to-export default. Theme colour, generated Ba
 
 ## Card Template
 
-An internal, ready-to-use combination of a background, text palette, text-safe region, attribution region, and restrained decoration. Selecting a different template preserves the reader's font, size mode, size, and alignment; it changes only the visual treatment and template-owned layout.
+An internal, ready-to-use atomic combination of one background, one text palette, a text-safe region, an attribution region, and restrained decoration. Selecting a different template preserves the reader's font, size mode, size, and alignment; it changes only the visual treatment and template-owned layout. The old variant-based safe-area mechanism is not part of the template contract.
 
 ## Alternative Cards
 
-The “change it up” action presents four complete Card Templates selected in a predictable rotation from the twelve-background pool. It is not limited to swapping a background image, and it does not overwrite user typography choices.
+The “change it up” action presents four complete Card Templates selected by the persistent cursor rule from the canonical twelve-template pool. It is not limited to swapping a background image, and it does not overwrite user typography choices.
 
 ## Default Card Content
 

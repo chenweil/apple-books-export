@@ -4,6 +4,9 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate 
     private static let alternativePreviewSize = NSSize(width: 72, height: 96)
     private static let previewSize = NSSize(width: 360, height: 480)
     private static let thumbnailSize = NSSize(width: 72, height: 96)
+    private static let themeThumbnailSize = NSSize(width: 64, height: 86)
+    private static let minimumContentSize = NSSize(width: 940, height: 720)
+    private static let maximumContentSize = NSSize(width: 1280, height: 960)
 
     private let book: Book
     private let annotation: Annotation
@@ -11,6 +14,7 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate 
     private var card: ShareCard
     private var alternativeCards: [ShareCard] = []
     private var renderedPages: [ShareCardPage] = []
+    private var renderedPageImages: [NSImage] = []
     private var selectedPageIndex = 0
 
     private let previewImageView = NSImageView()
@@ -20,7 +24,9 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate 
     private let textView = NSTextView()
     private let textScrollView = NSScrollView()
     private let noteCheckbox = NSButton(checkboxWithTitle: "添加笔记", target: nil, action: nil)
-    private let themePopup = NSPopUpButton(frame: .zero, pullsDown: false)
+    private let themeScrollView = NSScrollView()
+    private let themeGridStack = NSStackView()
+    private var themeButtons: [NSButton] = []
     private let fontPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let sizeModePopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let fontSizePopup = NSPopUpButton(frame: .zero, pullsDown: false)
@@ -51,11 +57,18 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate 
         self.card = ShareCardService().makeCard(for: book, annotation: annotation)
         self.copyHandler = copyHandler
         super.init(nibName: nil, bundle: nil)
-        preferredContentSize = NSSize(width: 980, height: 700)
+        preferredContentSize = NSSize(width: 980, height: 720)
     }
 
     required init?(coder: NSCoder) {
         fatalError("不支持从 Interface Builder 加载")
+    }
+
+    override func viewDidAppear() {
+        super.viewDidAppear()
+        guard let window = view.window else { return }
+        window.contentMinSize = Self.minimumContentSize
+        window.contentMaxSize = Self.maximumContentSize
     }
 
     override func loadView() {
@@ -65,6 +78,7 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate 
         noteCheckbox.isEnabled = !(annotation.noteText?.isEmpty ?? true)
         noteCheckbox.state = .off
         folderCheckbox.state = ShareCardPreferences.openExportFolder ? .on : .off
+        reloadThemeGrid()
         syncTypographyControls()
         updatePreview()
     }
@@ -117,10 +131,17 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate 
         noteCheckbox.target = self
         noteCheckbox.action = #selector(noteChanged)
 
-        themePopup.addItems(withTitles: ShareCardTheme.allCases.map { $0.displayName })
-        themePopup.selectItem(at: ShareCardTheme.allCases.firstIndex(of: card.theme) ?? 0)
-        themePopup.target = self
-        themePopup.action = #selector(themeChanged)
+        themeScrollView.translatesAutoresizingMaskIntoConstraints = false
+        themeScrollView.hasVerticalScroller = true
+        themeScrollView.hasHorizontalScroller = false
+        themeScrollView.autohidesScrollers = true
+        themeScrollView.borderType = .bezelBorder
+        themeScrollView.drawsBackground = true
+        themeScrollView.documentView = themeGridStack
+        themeGridStack.orientation = .vertical
+        themeGridStack.alignment = .leading
+        themeGridStack.spacing = 8
+        themeGridStack.translatesAutoresizingMaskIntoConstraints = false
 
         fontPopup.addItems(withTitles: ShareCardFont.allCases.map { $0.displayName })
         fontPopup.selectItem(at: ShareCardFont.allCases.firstIndex(of: card.font) ?? 0)
@@ -217,10 +238,11 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate 
         statusLabel.lineBreakMode = .byTruncatingTail
 
         let themeLabel = NSTextField(labelWithString: "主题")
-        let themeRow = NSStackView(views: [themeLabel, themePopup])
+        let themeRow = NSStackView(views: [themeLabel, themeScrollView])
         themeRow.orientation = .horizontal
         themeRow.alignment = .centerY
         themeRow.spacing = 8
+        themeLabel.widthAnchor.constraint(equalToConstant: 40).isActive = true
 
         let fontLabel = NSTextField(labelWithString: "字体")
         let fontRow = NSStackView(views: [fontLabel, fontPopup])
@@ -261,7 +283,7 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate 
         )
         controls.orientation = .vertical
         controls.alignment = .leading
-        controls.spacing = 12
+        controls.spacing = 8
         controls.translatesAutoresizingMaskIntoConstraints = false
 
         let previewColumn = NSStackView(views: [previewImageView, pageLabel, thumbnailScrollView])
@@ -296,6 +318,9 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate 
             textScrollView.heightAnchor.constraint(equalToConstant: 140),
             textScrollView.widthAnchor.constraint(equalTo: controls.widthAnchor),
             themeRow.widthAnchor.constraint(equalTo: controls.widthAnchor),
+            themeScrollView.widthAnchor.constraint(equalTo: controls.widthAnchor, constant: -48),
+            themeScrollView.heightAnchor.constraint(equalToConstant: 126),
+            themeGridStack.widthAnchor.constraint(equalTo: themeScrollView.contentView.widthAnchor),
             fontRow.widthAnchor.constraint(equalTo: controls.widthAnchor),
             sizeRow.widthAnchor.constraint(equalTo: controls.widthAnchor),
             horizontalRow.widthAnchor.constraint(equalTo: controls.widthAnchor),
@@ -313,9 +338,9 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate 
         updateCardFromEditor()
     }
 
-    @objc private func themeChanged() {
-        guard ShareCardTheme.allCases.indices.contains(themePopup.indexOfSelectedItem) else { return }
-        let theme = ShareCardTheme.allCases[themePopup.indexOfSelectedItem]
+    @objc private func themeSelected(_ sender: NSButton) {
+        guard ShareCardTheme.allCases.indices.contains(sender.tag) else { return }
+        let theme = ShareCardTheme.allCases[sender.tag]
         clearAlternatives()
         card = service.makeCard(
             for: book,
@@ -325,6 +350,7 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate 
             theme: theme,
             typography: card.typography
         )
+        syncThemeSelection()
         invalidateExport()
         updatePreview()
     }
@@ -412,7 +438,7 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate 
         guard alternativeCards.indices.contains(sender.tag) else { return }
         card = alternativeCards[sender.tag]
         textView.string = card.primaryText
-        themePopup.selectItem(at: ShareCardTheme.allCases.firstIndex(of: card.theme) ?? 0)
+        syncThemeSelection()
         fontPopup.selectItem(at: ShareCardFont.allCases.firstIndex(of: card.font) ?? 0)
         syncTypographyControls()
         invalidateExport()
@@ -451,9 +477,7 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate 
         defer { saveButton.isEnabled = true }
 
         do {
-            let result = try service.export(card, to: directoryURL)
-            lastExportResult = result
-            updateAirDropAvailability()
+            let result = try service.export(card, pages: renderedPages, to: directoryURL)
             let count = result.files.count
             statusLabel.stringValue = count == 1 ? "已保存" : "已保存 \(count) 张卡片"
         } catch {
@@ -462,63 +486,59 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate 
     }
 
     @objc private func copyRequested() {
-        do {
-            guard renderedPages.indices.contains(selectedPageIndex) else {
-                statusLabel.stringValue = "复制失败"
-                return
-            }
-            let image = try service.previewImage(for: card, pageIndex: selectedPageIndex)
-            guard copyHandler([image]) else {
-                statusLabel.stringValue = "复制失败"
-                return
-            }
-            statusLabel.stringValue = renderedPages.count == 1
-                ? "已复制图片"
-                : "已复制第 \(selectedPageIndex + 1) 页"
-        } catch {
-            statusLabel.stringValue = "复制失败：\(error.localizedDescription)"
+        guard renderedPages.indices.contains(selectedPageIndex),
+              renderedPageImages.indices.contains(selectedPageIndex) else {
+            statusLabel.stringValue = "复制失败"
+            return
         }
+        let image = renderedPageImages[selectedPageIndex]
+        guard copyHandler([image]) else {
+            statusLabel.stringValue = "复制失败"
+            return
+        }
+        statusLabel.stringValue = renderedPages.count == 1
+            ? "已复制图片"
+            : "已复制第 \(selectedPageIndex + 1) 页"
     }
 
     @objc private func copyAllRequested() {
-        do {
-            guard !renderedPages.isEmpty else {
-                statusLabel.stringValue = "复制失败"
-                return
-            }
-            let images = try renderedPages.indices.map {
-                try service.previewImage(for: card, pageIndex: $0)
-            }
-            guard copyHandler(images) else {
-                statusLabel.stringValue = "复制失败"
-                return
-            }
-            statusLabel.stringValue = "已复制 \(images.count) 张图片"
-        } catch {
-            statusLabel.stringValue = "复制失败：\(error.localizedDescription)"
+        guard !renderedPages.isEmpty, renderedPageImages.count == renderedPages.count else {
+            statusLabel.stringValue = "复制失败"
+            return
         }
+        let images = renderedPageImages
+        guard copyHandler(images) else {
+            statusLabel.stringValue = "复制失败"
+            return
+        }
+        statusLabel.stringValue = "已复制 \(images.count) 张图片"
     }
 
     @objc private func airDropRequested() {
-        guard let result = lastExportResult,
-              result.files.indices.contains(selectedPageIndex),
+        guard renderedPages.indices.contains(selectedPageIndex),
               let airDrop = NSSharingService(named: .sendViaAirDrop) else {
             statusLabel.stringValue = "AirDrop 当前不可用"
             return
         }
-        let file = result.files[selectedPageIndex]
-        guard airDrop.canPerform(withItems: [file]) else {
-            statusLabel.stringValue = "AirDrop 当前不可用"
-            return
+        do {
+            let file = try service.temporaryPNGURL(
+                for: card,
+                page: renderedPages[selectedPageIndex],
+                pageCount: renderedPages.count
+            )
+            guard airDrop.canPerform(withItems: [file]) else {
+                statusLabel.stringValue = "AirDrop 当前不可用"
+                return
+            }
+            airDrop.perform(withItems: [file])
+        } catch {
+            statusLabel.stringValue = "AirDrop 失败：\(error.localizedDescription)"
         }
-        airDrop.perform(withItems: [file])
     }
 
     @objc private func closeRequested() {
         dismiss(self)
     }
-
-    private var lastExportResult: ShareCardExportResult?
 
     func textDidChange(_ notification: Notification) {
         updateCardFromEditor()
@@ -589,6 +609,77 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate 
             ShareCardVerticalAlignment.allCases.firstIndex(of: card.typography.verticalAlignment) ?? 1
     }
 
+    private func reloadThemeGrid() {
+        themeButtons = []
+        themeGridStack.arrangedSubviews.forEach {
+            themeGridStack.removeArrangedSubview($0)
+            $0.removeFromSuperview()
+        }
+
+        let themes = ShareCardTheme.allCases
+        let columns = 4
+        for start in stride(from: 0, to: themes.count, by: columns) {
+            let row = NSStackView()
+            row.orientation = .horizontal
+            row.alignment = .centerY
+            row.spacing = 8
+            row.translatesAutoresizingMaskIntoConstraints = false
+
+            for index in start..<min(start + columns, themes.count) {
+                let theme = themes[index]
+                let button: NSButton
+                if let background = service.backgroundImage(for: theme) {
+                    button = NSButton(
+                        image: background,
+                        target: self,
+                        action: #selector(themeSelected(_:))
+                    )
+                } else {
+                    button = NSButton(title: theme.displayName, target: self, action: #selector(themeSelected(_:)))
+                }
+                button.tag = index
+                button.setButtonType(.toggle)
+                button.state = theme == card.theme ? .on : .off
+                button.imageScaling = .scaleProportionallyUpOrDown
+                button.bezelStyle = .regularSquare
+                button.toolTip = theme.displayName
+                button.setAccessibilityLabel("主题 \(theme.displayName)")
+                button.identifier = NSUserInterfaceItemIdentifier("share-card-theme-\(theme.rawValue)")
+                button.translatesAutoresizingMaskIntoConstraints = false
+                NSLayoutConstraint.activate([
+                    button.widthAnchor.constraint(equalToConstant: Self.themeThumbnailSize.width),
+                    button.heightAnchor.constraint(equalToConstant: Self.themeThumbnailSize.height)
+                ])
+
+                let nameLabel = NSTextField(labelWithString: theme.displayName)
+                nameLabel.alignment = .center
+                nameLabel.font = .systemFont(ofSize: 11)
+                nameLabel.lineBreakMode = .byTruncatingTail
+                nameLabel.setAccessibilityLabel("主题名称 \(theme.displayName)")
+                nameLabel.toolTip = theme.displayName
+
+                let item = NSStackView(views: [button, nameLabel])
+                item.orientation = .vertical
+                item.alignment = .centerX
+                item.spacing = 4
+                item.translatesAutoresizingMaskIntoConstraints = false
+                item.widthAnchor.constraint(equalToConstant: Self.themeThumbnailSize.width).isActive = true
+                row.addArrangedSubview(item)
+                themeButtons.append(button)
+            }
+            themeGridStack.addArrangedSubview(row)
+            row.widthAnchor.constraint(equalTo: themeGridStack.widthAnchor).isActive = true
+        }
+    }
+
+    private func syncThemeSelection() {
+        for button in themeButtons {
+            button.state = button.tag == ShareCardTheme.allCases.firstIndex(of: card.theme)
+                ? .on
+                : .off
+        }
+    }
+
     private func clearAlternatives() {
         alternativeCards = []
         alternativeStack.arrangedSubviews.forEach {
@@ -599,8 +690,6 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate 
     }
 
     private func invalidateExport() {
-        lastExportResult = nil
-        airDropButton.isEnabled = false
         copyMenuButton.isEnabled = false
         statusLabel.stringValue = ""
     }
@@ -612,17 +701,24 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate 
     }
 
     private func updateAirDropAvailability() {
-        guard let result = lastExportResult,
-              result.files.indices.contains(selectedPageIndex),
+        guard renderedPageImages.indices.contains(selectedPageIndex),
               let airDrop = NSSharingService(named: .sendViaAirDrop) else {
             airDropButton.isEnabled = false
             return
         }
-        airDropButton.isEnabled = airDrop.canPerform(withItems: [result.files[selectedPageIndex]])
+        airDropButton.isEnabled = airDrop.canPerform(withItems: [renderedPageImages[selectedPageIndex]])
     }
 
     private func updatePreview() {
-        renderedPages = service.pages(for: card)
+        do {
+            let rendered = try service.render(for: card)
+            renderedPages = rendered.map(\.page)
+            renderedPageImages = rendered.map(\.image)
+        } catch {
+            renderedPages = []
+            renderedPageImages = []
+            statusLabel.stringValue = "无法生成页面预览"
+        }
         if renderedPages.isEmpty {
             selectedPageIndex = 0
             thumbnailStack.arrangedSubviews.forEach {
@@ -632,7 +728,9 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate 
             pageLabel.stringValue = ""
             previewImageView.image = nil
             copyButton.isEnabled = false
-            statusLabel.stringValue = "请输入卡片文字"
+            if card.primaryText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                statusLabel.stringValue = "请输入卡片文字"
+            }
             return
         }
 
@@ -648,36 +746,39 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate 
             $0.removeFromSuperview()
         }
 
-        do {
-            for (index, _) in renderedPages.enumerated() {
-                let button = NSButton(
-                    image: try service.previewImage(for: card, pageIndex: index),
-                    target: self,
-                    action: #selector(pageSelected(_:))
-                )
-                button.tag = index
-                button.setButtonType(.toggle)
-                button.state = index == selectedPageIndex ? .on : .off
-                button.imageScaling = .scaleProportionallyUpOrDown
-                button.bezelStyle = .regularSquare
-                button.toolTip = "查看第 \(index + 1) 页"
-                button.setAccessibilityLabel("第 \(index + 1) 页")
-                button.identifier = NSUserInterfaceItemIdentifier("share-card-page-\(index)")
-                button.translatesAutoresizingMaskIntoConstraints = false
-                thumbnailStack.addArrangedSubview(button)
-                NSLayoutConstraint.activate([
-                    button.widthAnchor.constraint(equalToConstant: Self.thumbnailSize.width),
-                    button.heightAnchor.constraint(equalToConstant: Self.thumbnailSize.height)
-                ])
-            }
-        } catch {
+        guard renderedPageImages.count == renderedPages.count else {
             statusLabel.stringValue = "无法生成页面预览"
+            return
+        }
+        for (index, _) in renderedPages.enumerated() {
+            let button = NSButton(
+                image: renderedPageImages[index],
+                target: self,
+                action: #selector(pageSelected(_:))
+            )
+            button.tag = index
+            button.setButtonType(.toggle)
+            button.state = index == selectedPageIndex ? .on : .off
+            button.imageScaling = .scaleProportionallyUpOrDown
+            button.bezelStyle = .regularSquare
+            button.toolTip = "查看第 \(index + 1) 页"
+            button.setAccessibilityLabel("第 \(index + 1) 页")
+            button.identifier = NSUserInterfaceItemIdentifier("share-card-page-\(index)")
+            button.translatesAutoresizingMaskIntoConstraints = false
+            thumbnailStack.addArrangedSubview(button)
+            NSLayoutConstraint.activate([
+                button.widthAnchor.constraint(equalToConstant: Self.thumbnailSize.width),
+                button.heightAnchor.constraint(equalToConstant: Self.thumbnailSize.height)
+            ])
         }
     }
 
     private func updateSelectedPagePreview() {
         do {
-            previewImageView.image = try service.previewImage(for: card, pageIndex: selectedPageIndex)
+            guard renderedPageImages.indices.contains(selectedPageIndex) else {
+                throw ShareCardExportError.emptyCardText
+            }
+            previewImageView.image = renderedPageImages[selectedPageIndex]
             copyButton.isEnabled = true
             copyMenuButton.isEnabled = renderedPages.count > 1
             updateAirDropAvailability()
