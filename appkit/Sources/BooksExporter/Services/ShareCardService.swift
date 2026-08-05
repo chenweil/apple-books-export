@@ -248,7 +248,6 @@ public struct ShareCardTemplate: Equatable, Codable {
     public let noteArea: CGRect
     public let attributionArea: CGRect
     public let primaryTextColor: ShareCardColor
-    public let supplementaryNoteColor: ShareCardColor
     public let attributionColor: ShareCardColor
 
     public init(
@@ -258,7 +257,6 @@ public struct ShareCardTemplate: Equatable, Codable {
         noteArea: CGRect = CGRect(x: 130, y: 300, width: 940, height: 130),
         attributionArea: CGRect = CGRect(x: 130, y: 90, width: 940, height: 180),
         primaryTextColor: ShareCardColor = .nearBlack,
-        supplementaryNoteColor: ShareCardColor? = nil,
         attributionColor: ShareCardColor = ShareCardColor(red: 0.18, green: 0.18, blue: 0.18)
     ) {
         self.id = id
@@ -267,7 +265,6 @@ public struct ShareCardTemplate: Equatable, Codable {
         self.noteArea = noteArea
         self.attributionArea = attributionArea
         self.primaryTextColor = primaryTextColor
-        self.supplementaryNoteColor = supplementaryNoteColor ?? primaryTextColor
         self.attributionColor = attributionColor
     }
 }
@@ -335,6 +332,7 @@ public struct ShareCardPage: Equatable {
     public let fontSize: CGFloat
     public let primaryTextFrame: CGRect
     public let supplementaryNoteFrame: CGRect?
+    public let supplementaryNoteDividerFrame: CGRect?
     public let supplementaryNoteFontSize: CGFloat
     public let attributionFrame: CGRect
 
@@ -345,6 +343,7 @@ public struct ShareCardPage: Equatable {
         fontSize: CGFloat,
         primaryTextFrame: CGRect = .zero,
         supplementaryNoteFrame: CGRect? = nil,
+        supplementaryNoteDividerFrame: CGRect? = nil,
         supplementaryNoteFontSize: CGFloat = 0,
         attributionFrame: CGRect = .zero
     ) {
@@ -360,6 +359,7 @@ public struct ShareCardPage: Equatable {
         )
         self.primaryTextFrame = primaryTextFrame
         self.supplementaryNoteFrame = supplementaryNoteFrame
+        self.supplementaryNoteDividerFrame = supplementaryNoteDividerFrame
         self.supplementaryNoteFontSize = supplementaryNoteFontSize
         self.attributionFrame = attributionFrame
     }
@@ -417,6 +417,9 @@ public final class ShareCardService {
     public static let lineHeightMultiple: CGFloat = 1.4
     public static let minimumSupplementaryNoteFontSize: CGFloat = 30
     public static let supplementaryNoteScale: CGFloat = 0.6
+    public static let supplementaryNoteObliqueness: CGFloat = 0.12
+    public static let supplementaryNoteDividerHeight: CGFloat = 2
+    private static let supplementaryNoteDividerSpacing: CGFloat = 16
 
     public static func supplementaryNoteFontSize(for primaryFontSize: CGFloat) -> CGFloat {
         let boundedFontSize = primaryFontSize.isFinite
@@ -557,6 +560,20 @@ public final class ShareCardService {
             let supplementaryNoteFontSize = supplementaryNote.map { _ in
                 Self.supplementaryNoteFontSize(for: fontSize)
             } ?? 0
+            let supplementaryNoteFrame = supplementaryNote.map {
+                textFrame(
+                    for: $0,
+                    in: supplementaryNoteArea,
+                    card: card,
+                    fontSize: supplementaryNoteFontSize,
+                    style: .note
+                )
+            }
+            let supplementaryNoteDividerFrame = segment.primaryText.isEmpty
+                ? nil
+                : supplementaryNote.map { _ in
+                    self.supplementaryNoteDividerFrame(for: card.template)
+                }
             return ShareCardPage(
                 index: index,
                 primaryText: segment.primaryText,
@@ -565,14 +582,8 @@ public final class ShareCardService {
                 primaryTextFrame: segment.primaryText.isEmpty
                     ? .zero
                     : primaryTextFrame(for: segment.primaryText, card: card, fontSize: fontSize),
-                supplementaryNoteFrame: supplementaryNote.map {
-                    textFrame(
-                        for: $0,
-                        in: supplementaryNoteArea,
-                        card: card,
-                        fontSize: supplementaryNoteFontSize
-                    )
-                },
+                supplementaryNoteFrame: supplementaryNoteFrame,
+                supplementaryNoteDividerFrame: supplementaryNoteDividerFrame,
                 supplementaryNoteFontSize: supplementaryNoteFontSize,
                 attributionFrame: card.template.attributionArea
             )
@@ -812,9 +823,15 @@ public final class ShareCardService {
             color: card.template.primaryTextColor,
             alignment: card.typography.horizontalAlignment,
             lineBreakMode: .byWordWrapping,
+            style: .primary,
             context: context
         ) else {
             throw ShareCardExportError.textRenderingFailed
+        }
+
+        if let dividerFrame = page.supplementaryNoteDividerFrame {
+            card.template.primaryTextColor.nsColor.setFill()
+            dividerFrame.fill()
         }
 
         if let note = page.supplementaryNote {
@@ -823,9 +840,10 @@ public final class ShareCardService {
                 in: page.supplementaryNoteFrame ?? card.template.noteArea,
                 fontSize: page.supplementaryNoteFontSize,
                 font: card.font,
-                color: card.template.supplementaryNoteColor,
+                color: card.template.primaryTextColor,
                 alignment: card.typography.horizontalAlignment,
                 lineBreakMode: .byWordWrapping,
+                style: .note,
                 context: context
             ) else {
                 throw ShareCardExportError.textRenderingFailed
@@ -841,6 +859,7 @@ public final class ShareCardService {
             alignment: .left,
             lineBreakMode: .byCharWrapping,
             weight: .medium,
+            style: .attribution,
             context: context
         ) else {
             throw ShareCardExportError.textRenderingFailed
@@ -918,6 +937,7 @@ public final class ShareCardService {
         alignment: ShareCardHorizontalAlignment,
         lineBreakMode: NSLineBreakMode,
         weight: NSFont.Weight = .regular,
+        style: ShareCardTextStyle = .primary,
         context: CGContext
     ) -> Bool {
         guard !text.isEmpty, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -932,7 +952,8 @@ public final class ShareCardService {
             alignment: alignment,
             color: color,
             weight: weight,
-            lineBreakMode: lineBreakMode
+            lineBreakMode: lineBreakMode,
+            style: style
         )
         let framesetter = CTFramesetterCreateWithAttributedString(string as CFAttributedString)
         let path = CGPath(rect: rect, transform: nil)
@@ -1153,14 +1174,16 @@ public final class ShareCardService {
         text: String,
         card: ShareCard,
         fontSize: CGFloat,
-        area: CGRect? = nil
+        area: CGRect? = nil,
+        style: ShareCardTextStyle = .primary
     ) -> [String] {
         let framesetter = CTFramesetterCreateWithAttributedString(
             attributedText(
                 text,
                 fontSize: fontSize,
                 font: card.font,
-                alignment: card.typography.horizontalAlignment
+                alignment: card.typography.horizontalAlignment,
+                style: style
             ) as CFAttributedString
         )
         let length = text.utf16.count
@@ -1202,7 +1225,8 @@ public final class ShareCardService {
             text: text,
             card: card,
             fontSize: fontSize,
-            area: card.template.noteArea
+            area: card.template.noteArea,
+            style: .note
         ).first
         guard let firstSegment, !firstSegment.isEmpty else { return [] }
 
@@ -1213,7 +1237,8 @@ public final class ShareCardService {
             text: remaining,
             card: card,
             fontSize: fontSize,
-            area: card.template.textSafeArea
+            area: card.template.textSafeArea,
+            style: .note
         )
     }
 
@@ -1224,7 +1249,8 @@ public final class ShareCardService {
         alignment: ShareCardHorizontalAlignment,
         color: ShareCardColor? = nil,
         weight: NSFont.Weight = .regular,
-        lineBreakMode: NSLineBreakMode = .byWordWrapping
+        lineBreakMode: NSLineBreakMode = .byWordWrapping,
+        style: ShareCardTextStyle = .primary
     ) -> NSAttributedString {
         let paragraphStyle = NSMutableParagraphStyle()
         paragraphStyle.alignment = alignment.nsTextAlignment
@@ -1239,6 +1265,9 @@ public final class ShareCardService {
         ]
         if let color {
             attributes[.foregroundColor] = color.nsColor
+        }
+        if style == .note {
+            attributes[.obliqueness] = Self.supplementaryNoteObliqueness
         }
         return NSAttributedString(
             string: text,
@@ -1267,9 +1296,16 @@ public final class ShareCardService {
         for text: String,
         in safeArea: CGRect,
         card: ShareCard,
-        fontSize: CGFloat
+        fontSize: CGFloat,
+        style: ShareCardTextStyle = .primary
     ) -> CGRect {
-        let measuredHeight = measuredHeight(for: text, card: card, fontSize: fontSize, width: safeArea.width)
+        let measuredHeight = measuredHeight(
+            for: text,
+            card: card,
+            fontSize: fontSize,
+            width: safeArea.width,
+            style: style
+        )
         let height = min(
             safeArea.height,
             max(measuredHeight + 4, fontSize * Self.lineHeightMultiple)
@@ -1290,14 +1326,16 @@ public final class ShareCardService {
         for text: String,
         card: ShareCard,
         fontSize: CGFloat,
-        width: CGFloat
+        width: CGFloat,
+        style: ShareCardTextStyle = .primary
     ) -> CGFloat {
         let framesetter = CTFramesetterCreateWithAttributedString(
             attributedText(
                 text,
                 fontSize: fontSize,
                 font: card.font,
-                alignment: card.typography.horizontalAlignment
+                alignment: card.typography.horizontalAlignment,
+                style: style
             ) as CFAttributedString
         )
         var fitRange = CFRange()
@@ -1310,6 +1348,21 @@ public final class ShareCardService {
         )
         return ceil(size.height)
     }
+
+    private func supplementaryNoteDividerFrame(for template: ShareCardTemplate) -> CGRect {
+        CGRect(
+            x: template.noteArea.minX,
+            y: template.noteArea.maxY + Self.supplementaryNoteDividerSpacing,
+            width: template.noteArea.width,
+            height: Self.supplementaryNoteDividerHeight
+        )
+    }
+}
+
+private enum ShareCardTextStyle: Equatable {
+    case primary
+    case note
+    case attribution
 }
 
 private extension ShareCardHorizontalAlignment {

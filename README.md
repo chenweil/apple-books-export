@@ -4,12 +4,12 @@ AppKit 版本的 Apple Books 笔记导出工具,把高亮和笔记导出为 Mark
 
 > **状态**: 实验性研究项目,可能归档。当前聚焦 AppKit GUI 栈。
 
-当前 AppKit 版本候选: `v0.1.8` (`build 9`, unsigned)。应用重新激活时会重新读取 Apple Books 数据，也可以在“设置…”中配置低频自动刷新，变更记录见
+当前 AppKit 版本: `v0.1.8` (`build 9`, unsigned)。应用重新激活时会重新读取 Apple Books 数据，也可以在“设置…”中配置低频自动刷新，变更记录见
 [`CHANGELOG.md`](CHANGELOG.md)。
 
-上一已发布版本可从 [GitHub Release v0.1.7](https://github.com/chenweil/apple-books-export/releases/tag/v0.1.7)
-下载 `Books-Exporter-0.1.7-unsigned.dmg`。`v0.1.8` 的发布说明见
-[`docs/releases/v0.1.8.md`](docs/releases/v0.1.8.md)。当前候选 DMG 未签名、未 notarization，仅适合本机安装验证。
+`v0.1.8` 可从 [GitHub Release v0.1.8](https://github.com/chenweil/apple-books-export/releases/tag/v0.1.8)
+下载 `Books-Exporter-0.1.8-unsigned.dmg`；发布说明见 [`docs/releases/v0.1.8.md`](docs/releases/v0.1.8.md)。
+DMG 未签名、未 notarization，仅适合本机安装验证。
 
 ## 系统要求
 
@@ -134,7 +134,7 @@ Apple Books 不把「笔记」存成独立对象 —— 笔记就是给高亮加
 | S4 | 完成 | 十二个主题和持久轮换的四个完整 Alternative Cards |
 | S5 | 完成 | 多页预览、当前页/全部页复制、全部保存、当前页 AirDrop 和稳定操作栏 |
 | S6 | 完成 | Share Card 支持系统默认、思源黑体、思源宋体、演示悠然小楷、演示佛系体、站酷文艺体、庞门正道粗书体、四款汇文字体和霞鹜文楷切换,预览与导出共用字体 |
-| S7 | 完成 | #13 集成验收、生成图片视觉检查和 `v0.1.8 build 9` unsigned 发布候选准备 |
+| S7 | 完成 | #13 集成验收、笔记视觉层级、生成图片视觉检查和 `v0.1.8 build 9` unsigned 发布候选准备 |
 
 Share Card 编辑器当前提供“系统默认”、思源黑体、思源宋体、演示悠然小楷、演示佛系体、
 站酷文艺体、庞门正道粗书体、汇文明朝体、汇文仿宋、汇文正楷、汇文港黑和霞鹜文楷共十二个选项。字体文件及来源/授权说明随应用资源

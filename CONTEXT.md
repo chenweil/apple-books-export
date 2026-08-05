@@ -26,7 +26,7 @@ Share Cards show the book title and author in their footer. If an author is unav
 
 ## Typography
 
-Share Cards use the selected bundled or system font. The reader may keep the default automatic size or choose a fixed readable size; after automatic sizing reaches the minimum readable size, long text also paginates instead of shrinking or truncating. Primary text supports independent horizontal and vertical alignment. Line height is fixed at 1.4 times the font size for measurement, pagination, and drawing. Supplementary notes inherit the selected font, palette, and alignment; their size is `max(30, primaryFontSize × 0.6)`, and overflow notes use the full text-safe region on continuation pages. Attribution remains template-positioned.
+Share Cards use the selected bundled or system font. The reader may keep the default automatic size or choose a fixed readable size; after automatic sizing reaches the minimum readable size, long text also paginates instead of shrinking or truncating. Primary text supports independent horizontal and vertical alignment. Line height is fixed at 1.4 times the font size for measurement, pagination, and drawing. Supplementary notes inherit the selected font, primary text color, and alignment; their size is `max(30, primaryFontSize × 0.6)`, use a light oblique emphasis and a thin divider from the same text color, and overflow notes use the full text-safe region on continuation pages. Attribution remains template-positioned.
 
 ## Export
 

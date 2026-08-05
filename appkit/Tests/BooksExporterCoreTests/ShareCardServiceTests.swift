@@ -160,7 +160,49 @@ final class ShareCardServiceTests: XCTestCase {
             page.supplementaryNoteFontSize,
             ShareCardService.supplementaryNoteFontSize(for: page.fontSize)
         )
-        XCTAssertEqual(card.template.primaryTextColor, card.template.supplementaryNoteColor)
+    }
+
+    func testSupplementaryNoteUsesASeparatedItalicLayout() throws {
+        let service = ShareCardService()
+        let card = service.makeCard(
+            for: makeBook(author: "A. Reader"),
+            annotation: makeAnnotation(content: "A highlighted passage.", note: "A visually distinct note."),
+            includeNote: true,
+            typography: ShareCardTypography(sizeMode: .fixed, fontSize: 42)
+        )
+
+        let page = try XCTUnwrap(service.pages(for: card).first)
+        let noteFrame = try XCTUnwrap(page.supplementaryNoteFrame)
+        let dividerFrame = try XCTUnwrap(page.supplementaryNoteDividerFrame)
+
+        XCTAssertTrue(noteFrame.maxY < dividerFrame.minY)
+        XCTAssertTrue(dividerFrame.maxY < page.primaryTextFrame.minY)
+        XCTAssertTrue(card.template.textSafeArea.contains(page.primaryTextFrame))
+        XCTAssertTrue(card.template.noteArea.contains(noteFrame))
+        XCTAssertGreaterThan(dividerFrame.width, 0)
+        XCTAssertGreaterThan(dividerFrame.height, 0)
+
+        let preview = try service.previewImage(for: card)
+        XCTAssertEqual(preview.size, ShareCardService.canvasSize)
+        if let inspectionPath = ProcessInfo.processInfo.environment["SHARE_CARD_INSPECTION_DIR"],
+           let tiffData = preview.tiffRepresentation,
+           let bitmap = NSBitmapImageRep(data: tiffData),
+           let pngData = bitmap.representation(using: .png, properties: [:]) {
+            let inspectionDirectory = URL(fileURLWithPath: inspectionPath, isDirectory: true)
+            try FileManager.default.createDirectory(at: inspectionDirectory, withIntermediateDirectories: true)
+            try pngData.write(to: inspectionDirectory.appendingPathComponent("share-card-note.png"))
+        }
+
+        let continuationNote = String(repeating: "续页笔记不应重复分割线。 ", count: 120)
+        let longCard = service.makeCard(
+            for: makeBook(author: "A. Reader"),
+            annotation: makeAnnotation(content: "正文", note: continuationNote),
+            includeNote: true,
+            typography: ShareCardTypography(sizeMode: .fixed, fontSize: 42)
+        )
+        let pages = service.pages(for: longCard)
+        XCTAssertNotNil(pages.first?.supplementaryNoteDividerFrame)
+        XCTAssertTrue(pages.dropFirst().allSatisfy { $0.supplementaryNoteDividerFrame == nil })
     }
 
     func testLongSupplementaryNotePaginatesWithoutTruncation() {
@@ -736,7 +778,7 @@ final class ShareCardServiceTests: XCTestCase {
 
             let regions = [
                 (name: "正文", area: template.textSafeArea, color: template.primaryTextColor),
-                (name: "笔记", area: template.noteArea, color: template.supplementaryNoteColor),
+                (name: "笔记", area: template.noteArea, color: template.primaryTextColor),
                 (name: "署名", area: template.attributionArea, color: template.attributionColor)
             ]
             for region in regions {
