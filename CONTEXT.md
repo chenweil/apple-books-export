@@ -96,3 +96,19 @@ When an Annotation includes both a highlighted passage and a note, the initial S
 ## Note-only Card
 
 An Annotation with a note but no highlighted passage can still produce a Share Card. Its note becomes the primary text, using the same contextual Card Entry as a highlighted passage.
+
+## Version Discovery
+
+Version Discovery is the AppKit application's check of official stable release metadata to tell the reader when a newer Compatible Release exists. It does not download or install the application.
+
+## Manual Update
+
+A Manual Update begins when the reader chooses to view the official release page, then downloads and installs the release themselves. It is separate from Version Discovery and is the only update path currently supported.
+
+## Stable Channel
+
+The Stable Channel contains public, non-prerelease releases intended for general use. Version Discovery ignores beta, nightly, and other prerelease versions.
+
+## Compatible Release
+
+A Compatible Release is a Stable Channel release that meets the reader's minimum macOS version and CPU architecture. Incompatible releases are not presented as available updates.

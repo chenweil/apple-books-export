@@ -8,9 +8,14 @@ REPO_DIR="$(cd "$APPKIT_DIR/.." && pwd)"
 CONFIG="${CONFIG:-release}"
 APP_VERSION="${APP_VERSION:-0.1.8}"
 BUILD_VERSION="${BUILD_VERSION:-9}"
+MINIMUM_MACOS_VERSION="${MINIMUM_MACOS_VERSION:-14.0}"
+ARCHITECTURE="${ARCHITECTURE:-$(uname -m)}"
+RELEASE_NOTES="${RELEASE_NOTES:-}"
+RELEASE_URL="${RELEASE_URL:-https://github.com/chenweil/apple-books-export/releases/tag/v${APP_VERSION}}"
 APP_NAME="Books Exporter.app"
 DMG_NAME="Books-Exporter-${APP_VERSION}-unsigned.dmg"
 DIST_DIR="${DIST_DIR:-$REPO_DIR/dist}"
+UPDATE_MANIFEST_NAME="latest.json"
 
 BIN_DIR="$(swift build -c "$CONFIG" --show-bin-path)"
 BIN_PATH="$BIN_DIR/BooksExporter"
@@ -53,3 +58,21 @@ hdiutil create \
 
 plutil -lint "$APP_DIR/Contents/Info.plist" >/dev/null
 echo "Created unsigned DMG: $DMG_PATH"
+
+MANIFEST_PLIST="$STAGING_DIR/update-manifest.plist"
+MANIFEST_JSON="$STAGING_DIR/$UPDATE_MANIFEST_NAME"
+UPDATE_MANIFEST_PATH="$DIST_DIR/$UPDATE_MANIFEST_NAME"
+
+plutil -create xml1 "$MANIFEST_PLIST"
+plutil -insert schema_version -integer 1 "$MANIFEST_PLIST"
+plutil -insert channel -string "stable" "$MANIFEST_PLIST"
+plutil -insert version -string "$APP_VERSION" "$MANIFEST_PLIST"
+plutil -insert minimum_macos -string "$MINIMUM_MACOS_VERSION" "$MANIFEST_PLIST"
+plutil -insert architectures -array "$MANIFEST_PLIST"
+plutil -insert architectures.0 -string "$ARCHITECTURE" "$MANIFEST_PLIST"
+plutil -insert release_url -string "$RELEASE_URL" "$MANIFEST_PLIST"
+plutil -insert notes -string "$RELEASE_NOTES" "$MANIFEST_PLIST"
+plutil -lint "$MANIFEST_PLIST" >/dev/null
+plutil -convert json -o "$MANIFEST_JSON" "$MANIFEST_PLIST"
+cp "$MANIFEST_JSON" "$UPDATE_MANIFEST_PATH"
+echo "Created update manifest: $UPDATE_MANIFEST_PATH"

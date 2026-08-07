@@ -39,10 +39,11 @@ chmod +x Scripts/package-dmg.sh
 ./Scripts/package-dmg.sh
 ```
 
-默认产物位于仓库根目录的 `dist/Books-Exporter-0.1.8-unsigned.dmg`。也可以覆盖版本号：
+默认产物位于仓库根目录的 `dist/Books-Exporter-0.1.8-unsigned.dmg`，同时会生成供 Version Discovery 使用的 `dist/latest.json`。发布 stable 版本时，将这两个文件一起上传到对应的 GitHub Release。
+也可以覆盖版本号和发布说明：
 
 ```bash
-APP_VERSION=0.1.8 BUILD_VERSION=9 ./Scripts/package-dmg.sh
+APP_VERSION=0.1.9 BUILD_VERSION=10 RELEASE_NOTES='修复版本检查' ./Scripts/package-dmg.sh
 ```
 
 安装时将 DMG 中的 `Books Exporter.app` 拖到 `/Applications`。首次打开如果被 Gatekeeper 拦截，优先在 Finder 中右键应用并选择“打开”；必要时可执行：
@@ -81,7 +82,7 @@ appkit/
     ├── BookListSorter.swift            # 排序(纯函数)
     ├── BookColumn.swift                # 列标识
     ├── Models/                # Book / Annotation / AnnotationType
-    ├── Services/              # AppSettings / DatabaseService / BookService / ShareCardService
+    ├── Services/              # AppSettings / DatabaseService / BookService / ShareCardService / UpdateChecker
     │   └── ShareCardService.swift # 生成、分页、PNG 导出的公共 seam
     ├── Resources/share-card-backgrounds/ # 十二个本地主题背景
     ├── Resources/fonts/       # Share Card 字体与对应许可证

@@ -68,6 +68,10 @@ enum VerifyLayout {
                   && settings?.keyEquivalent == ","
                   && settings?.keyEquivalentModifierMask == [.command],
               "\(settings?.title ?? "缺失")")
+
+        let checkForUpdates = menu.items.first?.submenu?.items.first { $0.title == "检查更新…" }
+        check("检查更新入口", checkForUpdates?.action == #selector(AppDelegate.checkForUpdates(_:)),
+              "\(checkForUpdates?.title ?? "缺失")")
     }
 
     private static func checkSettings() {

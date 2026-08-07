@@ -39,6 +39,13 @@ enum MainMenu {
         settings.keyEquivalentModifierMask = [.command]
         settings.target = NSApp.delegate
 
+        let checkForUpdates = NSMenuItem(
+            title: "检查更新…",
+            action: #selector(AppDelegate.checkForUpdates(_:)),
+            keyEquivalent: ""
+        )
+        checkForUpdates.target = NSApp.delegate
+
         return [
             NSMenuItem(
                 title: "关于 \(appName)",
@@ -46,6 +53,7 @@ enum MainMenu {
                 keyEquivalent: ""
             ),
             settings,
+            checkForUpdates,
             .separator(),
             NSMenuItem(title: "隐藏 \(appName)", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h"),
             hideOthers,
