@@ -112,3 +112,43 @@ The Stable Channel contains public, non-prerelease releases intended for general
 ## Compatible Release
 
 A Compatible Release is a Stable Channel release that meets the reader's minimum macOS version and CPU architecture. Incompatible releases are not presented as available updates.
+
+## Headless Mainline
+
+The Headless Mainline is the `main` product surface without a shipped GUI. It provides the Rust CLI, the read-only TUI, and the Agent Data Skill. The deprecated Tauri GUI may remain in source history during migration, but it is not the default product entry or release target.
+
+## Canonical Rust Data Core
+
+The Canonical Rust Data Core is the single source of truth for reading Apple Books data, normalizing books and annotations, applying selection identity, and producing export results. Human CLI, TUI, Agent Data Skill, and the future AppKit GUI consume its contracts rather than maintaining separate database rules.
+
+## Machine JSON Protocol
+
+The Machine JSON Protocol is the versioned, structured boundary between the Canonical Rust Data Core and non-human consumers. Successful results are machine-readable, unsupported schema versions fail explicitly, and diagnostics use stable error codes rather than exposing SQLite implementation details.
+
+## Stable Asset Identity
+
+Stable Asset Identity is the Apple Books `asset_id` used by machine consumers to refer to a book across refreshed lists and changing display order. Human-facing commands may continue to accept a display index, but an index is not a durable identity.
+
+## Read-only TUI Surface
+
+The Read-only TUI Surface is the terminal experience for searching and browsing books and annotation details. It does not modify Apple Books, export files, invoke AI operations, or replace the GUI.
+
+## Agent Data Skill
+
+The Agent Data Skill is the repository-managed workflow that lets an AI agent list, select, inspect, and export Apple Books annotations through the Rust CLI. It is local-first, verifies its executable and output, and does not silently invoke AI, modify Apple Books, or upload note content.
+
+## AppKit GUI Surface
+
+The AppKit GUI Surface is the future official macOS graphical experience. It remains a separate implementation during migration, then consumes the Canonical Rust Data Core through the Machine JSON Protocol before it is merged into the Headless Mainline.
+
+## Tauri Legacy GUI
+
+The Tauri Legacy GUI is the existing Rust/Tauri graphical surface that is no longer the target product entry. Its source is retained for rollback and historical comparison until the Cutover Gate is satisfied; it is not expanded as part of the migration.
+
+## Cutover Gate
+
+The Cutover Gate is the set of acceptance conditions for making AppKit the official GUI and deleting the Tauri Legacy GUI: stable CLI contracts, working TUI and Agent Data Skill, AppKit integration with Rust, permission and packaging verification, real macOS smoke evidence, and an explicit capability-gap decision.
+
+## Local Data Boundary
+
+The Local Data Boundary means that listing, reading, browsing, and Markdown export keep Apple Books content on the local machine. Network-backed AI enrichment or other remote operations require a separate, explicit future decision and are not implied by the Agent Data Skill.
