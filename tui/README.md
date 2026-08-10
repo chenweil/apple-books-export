@@ -1,6 +1,6 @@
 # Apple Books TUI
 
-只读 OpenTUI 前端，用于搜索和浏览 Apple Books 中包含笔记的书籍。
+只读 OpenTUI 前端，通过 Rust Machine JSON Protocol 搜索书籍并浏览完整标注详情。
 
 ## Requirements
 
@@ -25,9 +25,10 @@ Set `APPLE_BOOKS_EXPORTER_BIN` to override the Rust backend path.
 
 - `/`: focus search
 - `↑` / `↓`: browse books
-- `Enter`: open the detail view on narrow terminals
-- `Esc`: return or leave search
+- `Enter`: open and focus the annotation detail view
+- `↑` / `↓` in detail: scroll annotation content
+- `Esc`: return to the book list or leave search
 - `Tab`: switch between search and the list
 - `q`: cleanly destroy the renderer and quit
 
-This first phase is intentionally read-only. Export, AI, card generation, and configuration remain in the existing CLI and Tauri GUI.
+The detail view shows the selected book, author, annotation count, highlight text, note text, chapter, location, and timestamp. This first phase is intentionally read-only: it does not export, call AI, generate cards, or write configuration.

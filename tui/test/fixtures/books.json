@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "books": [
+    {
+      "asset_id": "book-1",
+      "title": "深入理解计算机系统",
+      "author": "Randal E. Bryant",
+      "note_count": 2
+    }
+  ]
+}

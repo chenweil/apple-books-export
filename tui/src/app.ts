@@ -2,6 +2,7 @@ import {
   BoxRenderable,
   InputRenderable,
   InputRenderableEvents,
+  ScrollBoxRenderable,
   SelectRenderable,
   SelectRenderableEvents,
   TextAttributes,
@@ -10,46 +11,121 @@ import {
   type KeyEvent,
   type SelectOption,
 } from "@opentui/core";
-import type { Book } from "./backend";
+import {
+  BackendCommandError,
+  loadAnnotations as loadAnnotationsFromBackend,
+  type Annotation,
+  type AnnotationResponse,
+  type Book,
+} from "./backend";
 import { getLayoutMode, type LayoutMode } from "./layout";
 
 type CompactScreen = "list" | "detail";
 
+type AnnotationLoader = (assetId: string) => Promise<AnnotationResponse>;
+
+interface BookBrowserOptions {
+  loadAnnotations?: AnnotationLoader;
+}
+
 export interface BookBrowser {
   applyLayout(width: number): void;
+  waitForIdle(): Promise<void>;
 }
 
 function optionsFor(books: Book[]): SelectOption[] {
   return books.map((book) => ({
     name: book.title,
-    description: `${book.author} · ${book.note_count} 条笔记`,
+    description: `${book.author} · ${book.note_count} 条标注`,
     value: book,
   }));
 }
 
-function bookDetail(book: Book | undefined): string {
-  if (!book) {
-    return "没有匹配的书籍。\n\n按 / 修改搜索条件。";
+function formatCreatedAt(value: string | null): string {
+  if (!value) return "未知";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return `${parsed.toISOString().slice(0, 16).replace("T", " ")} UTC`;
+}
+
+function formatAnnotation(annotation: Annotation, index: number): string {
+  const kind = annotation.type === "note" ? "笔记" : "高亮";
+  return [
+    `#${index + 1} · ${kind}`,
+    `正文：${annotation.content_text ?? "（无正文）"}`,
+    `笔记：${annotation.note_text ?? "（无笔记）"}`,
+    `章节：${annotation.chapter_title ?? "未知"}`,
+    `位置：${annotation.location ?? "未知"}`,
+    `时间：${formatCreatedAt(annotation.created_at)}`,
+  ].join("\n");
+}
+
+function loadingDetail(book: Book): string {
+  return [
+    book.title,
+    `作者：${book.author || "未知"}`,
+    `标注：${book.note_count} 条`,
+    "",
+    "正在读取标注详情…",
+  ].join("\n");
+}
+
+function emptyDetail(): string {
+  return "没有匹配的书籍。\n\n按 / 修改搜索条件。";
+}
+
+function annotationDetail(response: AnnotationResponse): string {
+  const annotations = response.annotations.length
+    ? response.annotations.map(formatAnnotation).join("\n\n────────\n\n")
+    : "没有可显示的标注。";
+
+  return [
+    response.title,
+    `作者：${response.author || "未知"}`,
+    `标注：${response.annotation_count} 条`,
+    "",
+    annotations,
+  ].join("\n");
+}
+
+function errorDetail(book: Book, error: unknown): string {
+  if (error instanceof BackendCommandError) {
+    return [
+      book.title,
+      `作者：${book.author || "未知"}`,
+      "",
+      `错误：${error.code}`,
+      error.message,
+      error.remediation ? `处理：${error.remediation}` : undefined,
+    ]
+      .filter((line): line is string => line !== undefined)
+      .join("\n");
   }
 
   return [
     book.title,
-    "",
     `作者：${book.author || "未知"}`,
-    `笔记：${book.note_count} 条`,
     "",
-    "当前为只读原型。",
-    "导出与 AI 写操作尚未接入。",
+    "读取标注失败。",
+    String(error),
   ].join("\n");
 }
 
 export function createBookBrowser(
   renderer: CliRenderer,
   books: Book[],
+  options: BookBrowserOptions = {},
 ): BookBrowser {
+  const loadAnnotations =
+    options.loadAnnotations ?? loadAnnotationsFromBackend;
+  const annotationCache = new Map<string, AnnotationResponse>();
   let filteredBooks = books;
   let layoutMode: LayoutMode = getLayoutMode(renderer.width);
   let compactScreen: CompactScreen = "list";
+  let detailFocused = false;
+  let detailRequestId = 0;
+  let activeLoad: Promise<void> = Promise.resolve();
+  let destroyed = false;
 
   const root = new BoxRenderable(renderer, {
     id: "app",
@@ -126,7 +202,7 @@ export function createBookBrowser(
       content: [
         "/      搜索",
         "↑/↓    浏览",
-        "Enter  详情",
+        "Enter  打开详情",
         "Esc    返回",
         "Tab    切换焦点",
         "q      退出",
@@ -157,21 +233,21 @@ export function createBookBrowser(
   });
   listPanel.add(bookSelect);
 
-  const detailPanel = new BoxRenderable(renderer, {
+  const detailPanel = new ScrollBoxRenderable(renderer, {
     id: "book-detail-panel",
     height: "100%",
     flexGrow: 1,
-    flexDirection: "column",
     focusable: true,
+    scrollY: true,
     border: true,
     borderStyle: "rounded",
     borderColor: "#3a4258",
-    title: "书籍详情",
+    title: "标注详情",
     padding: 1,
   });
   const detailText = new TextRenderable(renderer, {
     id: "book-detail",
-    content: bookDetail(books[0]),
+    content: books[0] ? loadingDetail(books[0]) : emptyDetail(),
     width: "100%",
     fg: "#c0caf5",
     selectable: true,
@@ -204,8 +280,45 @@ export function createBookBrowser(
     return bookSelect.getSelectedOption()?.value as Book | undefined;
   }
 
-  function updateDetail(book = selectedBook()): void {
-    detailText.content = bookDetail(book);
+  function setDetailContent(content: string): void {
+    if (destroyed) return;
+    detailPanel.scrollTo(0);
+    detailText.content = content;
+  }
+
+  function requestDetails(book: Book | undefined): void {
+    const requestId = ++detailRequestId;
+    if (!book) {
+      setDetailContent(emptyDetail());
+      activeLoad = Promise.resolve();
+      return;
+    }
+
+    const cached = annotationCache.get(book.asset_id);
+    if (cached) {
+      setDetailContent(annotationDetail(cached));
+      activeLoad = Promise.resolve();
+      return;
+    }
+
+    setDetailContent(loadingDetail(book));
+    activeLoad = loadAnnotations(book.asset_id)
+      .then((response) => {
+        if (response.asset_id !== book.asset_id) {
+          throw new Error(
+            `标注响应 asset_id 不匹配：${response.asset_id}`,
+          );
+        }
+        annotationCache.set(book.asset_id, response);
+        if (requestId === detailRequestId) {
+          setDetailContent(annotationDetail(response));
+        }
+      })
+      .catch((error: unknown) => {
+        if (requestId === detailRequestId) {
+          setDetailContent(errorDetail(book, error));
+        }
+      });
   }
 
   function showCompactScreen(screen: CompactScreen): void {
@@ -217,7 +330,7 @@ export function createBookBrowser(
     footerText.content =
       screen === "list"
         ? "/ 搜索  ↑↓ 浏览  Enter 详情  q 退出"
-        : "Esc 返回列表  q 退出";
+        : "↑↓ 滚动  Esc 返回列表  q 退出";
   }
 
   function filterBooks(query: string): void {
@@ -233,12 +346,28 @@ export function createBookBrowser(
     bookSelect.options = optionsFor(filteredBooks);
     if (filteredBooks.length > 0) bookSelect.setSelectedIndex(0);
     listPanel.title = `搜索结果 (${filteredBooks.length})`;
-    updateDetail(filteredBooks[0]);
+    requestDetails(filteredBooks[0]);
   }
 
   function focusList(): void {
+    detailFocused = false;
     searchInput.blur();
+    detailPanel.blur();
     bookSelect.focus();
+    if (layoutMode !== "compact") {
+      footerText.content = "/ 搜索  ↑↓ 浏览  Enter 详情  Tab 切换  q 退出";
+    }
+  }
+
+  function focusDetail(): void {
+    const book = selectedBook();
+    if (!book) return;
+    detailFocused = true;
+    searchInput.blur();
+    bookSelect.blur();
+    if (layoutMode === "compact") showCompactScreen("detail");
+    detailPanel.focus();
+    footerText.content = "↑↓ 滚动  Esc 返回列表  q 退出";
   }
 
   function applyLayout(width: number): void {
@@ -257,13 +386,15 @@ export function createBookBrowser(
     detailPanel.visible = true;
     listPanel.width = layoutMode === "medium" ? "45%" : 36;
     detailPanel.flexGrow = 1;
-    footerText.content = "/ 搜索  ↑↓ 浏览  Enter 详情  Tab 切换  q 退出";
+    footerText.content = detailFocused
+      ? "↑↓ 滚动  Esc 返回列表  q 退出"
+      : "/ 搜索  ↑↓ 浏览  Enter 详情  Tab 切换  q 退出";
   }
 
   detailPanel.onKeyDown = (key: KeyEvent) => {
-    if (key.name === "escape" && layoutMode === "compact") {
-      showCompactScreen("list");
-      bookSelect.focus();
+    if (key.name === "escape") {
+      if (layoutMode === "compact") showCompactScreen("list");
+      focusList();
     }
   };
 
@@ -272,17 +403,10 @@ export function createBookBrowser(
   bookSelect.on(
     SelectRenderableEvents.SELECTION_CHANGED,
     (_index: number, option: SelectOption) => {
-      updateDetail(option.value as Book);
+      requestDetails(option.value as Book);
     },
   );
-  bookSelect.on(SelectRenderableEvents.ITEM_SELECTED, () => {
-    updateDetail();
-    if (layoutMode === "compact") {
-      bookSelect.blur();
-      showCompactScreen("detail");
-      detailPanel.focus();
-    }
-  });
+  bookSelect.on(SelectRenderableEvents.ITEM_SELECTED, focusDetail);
 
   renderer.keyInput.on("keypress", (key: KeyEvent) => {
     if (key.name === "q" && !searchInput.focused) {
@@ -293,13 +417,15 @@ export function createBookBrowser(
     if (key.name === "/" && !searchInput.focused) {
       key.preventDefault();
       key.stopPropagation();
+      detailFocused = false;
       bookSelect.blur();
+      detailPanel.blur();
       searchInput.focus();
       return;
     }
 
     if (key.name === "tab") {
-      if (searchInput.focused) {
+      if (searchInput.focused || detailFocused) {
         focusList();
       } else {
         bookSelect.blur();
@@ -311,16 +437,24 @@ export function createBookBrowser(
     if (key.name === "escape") {
       if (searchInput.focused) {
         focusList();
-      } else if (layoutMode === "compact" && compactScreen === "detail") {
-        showCompactScreen("list");
-        bookSelect.focus();
+      } else if (detailFocused) {
+        if (layoutMode === "compact") showCompactScreen("list");
+        focusList();
       }
     }
   });
 
   renderer.on("resize", applyLayout);
+  renderer.on("destroy", () => {
+    destroyed = true;
+    detailRequestId += 1;
+  });
   applyLayout(renderer.width);
   bookSelect.focus();
+  requestDetails(books[0]);
 
-  return { applyLayout };
+  return {
+    applyLayout,
+    waitForIdle: () => activeLoad,
+  };
 }
