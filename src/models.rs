@@ -14,6 +14,7 @@ pub struct Book {
 /// 笔记/高亮
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Annotation {
+    pub id: String,
     pub asset_id: String,
     pub selected_text: Option<String>,
     pub note: Option<String>,

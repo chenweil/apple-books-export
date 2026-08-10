@@ -1,58 +1,81 @@
 //! Apple Books Exporter - SQLite Database Access
 
 use crate::models::{Annotation, Book};
-use anyhow::{Context, Result};
-use rusqlite::Connection;
+use anyhow::Result;
+use rusqlite::{Connection, OpenFlags};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::io;
+use std::path::{Path, PathBuf};
+
+#[derive(Debug, thiserror::Error)]
+pub enum DatabaseAccessError {
+    #[error("Apple Books database was not found: {path}")]
+    NotFound { path: PathBuf },
+    #[error("permission denied while reading Apple Books database: {path}")]
+    PermissionDenied { path: PathBuf },
+    #[error("Apple Books database is unreadable at {path}: {message}")]
+    Unreadable { path: PathBuf, message: String },
+}
 
 /// 数据库访问层
 pub struct DB {
     annotation_conn: Connection,
     library_conn: Connection,
+    annotation_path: PathBuf,
+    library_path: PathBuf,
 }
 
 impl DB {
-    /// 打开 Apple Books 数据库
-    pub fn open_apple_books() -> Result<Self> {
-        let annotation_path = find_annotation_db()?;
-        let library_path = find_library_db()?;
+    /// 返回当前 Apple Books 数据库路径。
+    pub fn apple_books_paths() -> std::result::Result<(PathBuf, PathBuf), DatabaseAccessError> {
+        Ok((find_annotation_db()?, find_library_db()?))
+    }
 
-        let annotation_conn = Connection::open(&annotation_path)
-            .with_context(|| format!("无法打开注释数据库：{}", annotation_path.display()))?;
-        let library_conn = Connection::open(&library_path)
-            .with_context(|| format!("无法打开书籍库数据库：{}", library_path.display()))?;
+    /// 打开 Apple Books 数据库（只读）。
+    pub fn open_apple_books() -> std::result::Result<Self, DatabaseAccessError> {
+        let (annotation_path, library_path) = Self::apple_books_paths()?;
+        let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
+        let annotation_conn = Connection::open_with_flags(&annotation_path, flags)
+            .map_err(|error| classify_sqlite_open_error(&annotation_path, error))?;
+        let library_conn = Connection::open_with_flags(&library_path, flags)
+            .map_err(|error| classify_sqlite_open_error(&library_path, error))?;
 
         Ok(DB {
             annotation_conn,
             library_conn,
+            annotation_path,
+            library_path,
         })
+    }
+
+    pub fn paths(&self) -> (&Path, &Path) {
+        (&self.annotation_path, &self.library_path)
+    }
+
+    /// 验证当前数据库包含协议依赖的表和字段。
+    pub fn validate(&self) -> Result<()> {
+        self.annotation_conn.prepare(
+            "SELECT Z_PK, ZANNOTATIONASSETID, ZANNOTATIONSELECTEDTEXT, ZANNOTATIONNOTE,              ZANNOTATIONLOCATION, ZANNOTATIONCREATIONDATE, ZANNOTATIONTYPE, ZANNOTATIONDELETED              FROM ZAEANNOTATION LIMIT 0",
+        )?;
+        self.library_conn
+            .prepare("SELECT ZASSETID, ZTITLE, ZAUTHOR FROM ZBKLIBRARYASSET LIMIT 0")?;
+        Ok(())
     }
 
     /// 列出所有有笔记的书籍
     pub fn list_books(&self) -> Result<Vec<Book>> {
-        // 1. 从注释数据库获取所有唯一的 asset_id 及其笔记数
         let asset_counts = count_annotations_by_asset(&self.annotation_conn)?;
-
-        // 2. 从书籍库数据库获取书籍信息
         let mut book_map: HashMap<String, Book> = HashMap::new();
-        let _stmt = self.library_conn.prepare(
-            "SELECT ZASSETID, ZTITLE, ZAUTHOR, ZSORTKEY FROM ZBKLIBRARYASSET WHERE ZASSETID IN (?)",
-        )?;
 
         for (asset_id, note_count) in asset_counts {
-            if let Ok(mut book) = self.get_book_info(&asset_id) {
-                if let Some(b) = book.as_mut() {
-                    b.note_count = note_count;
-                    book_map.insert(asset_id, b.clone());
-                }
+            if let Some(mut book) = self.get_book_info(&asset_id)? {
+                book.note_count = note_count;
+                book_map.insert(asset_id, book);
             }
         }
 
-        // 3. 按 ZSORTKEY 排序
         let mut books: Vec<Book> = book_map.into_values().collect();
         books.sort_by(|a, b| a.title.cmp(&b.title));
-
         Ok(books)
     }
 
@@ -63,9 +86,9 @@ impl DB {
 
     /// 获取书籍信息
     pub fn get_book_info(&self, asset_id: &str) -> Result<Option<Book>> {
-        let mut stmt = self.library_conn.prepare(
-            "SELECT ZTITLE, ZAUTHOR FROM ZBKLIBRARYASSET WHERE ZASSETID = ? LIMIT 1",
-        )?;
+        let mut stmt = self
+            .library_conn
+            .prepare("SELECT ZTITLE, ZAUTHOR FROM ZBKLIBRARYASSET WHERE ZASSETID = ? LIMIT 1")?;
         match stmt.query_row([asset_id], |row| {
             Ok(Book {
                 asset_id: asset_id.to_string(),
@@ -76,77 +99,83 @@ impl DB {
         }) {
             Ok(book) => Ok(Some(book)),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(e.into()),
+            Err(error) => Err(error.into()),
         }
     }
 }
 
-/// 查找注释数据库
-fn find_annotation_db() -> Result<PathBuf> {
-    let home = crate::utils::home_dir()
-        .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    let base_path = format!(
-        "{}/Library/Containers/com.apple.iBooksX/Data/Documents/AEAnnotation",
-        home
-    );
-    let base_path = std::path::Path::new(&base_path);
-
-    if !base_path.exists() {
-        anyhow::bail!("未找到 Apple Books 注释数据库目录：{}", base_path.display());
-    }
-
-    let mut latest = None;
-    let mut latest_time = 0i64;
-
-    for entry in std::fs::read_dir(base_path)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.extension().map_or(false, |ext| ext == "sqlite") {
-            let metadata = entry.metadata()?;
-            let mtime = metadata.modified()?.elapsed()?.as_secs() as i64;
-            if mtime > latest_time {
-                latest_time = mtime;
-                latest = Some(path);
-            }
-        }
-    }
-
-    latest.ok_or_else(|| anyhow::anyhow!("未找到注释数据库文件"))
+fn find_annotation_db() -> std::result::Result<PathBuf, DatabaseAccessError> {
+    find_latest_database("Library/Containers/com.apple.iBooksX/Data/Documents/AEAnnotation")
 }
 
-/// 查找书籍库数据库
-fn find_library_db() -> Result<PathBuf> {
-    let home = crate::utils::home_dir()
-        .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    let base_path = format!(
-        "{}/Library/Containers/com.apple.iBooksX/Data/Documents/BKLibrary",
-        home
-    );
-    let base_path = std::path::Path::new(&base_path);
+fn find_library_db() -> std::result::Result<PathBuf, DatabaseAccessError> {
+    find_latest_database("Library/Containers/com.apple.iBooksX/Data/Documents/BKLibrary")
+}
 
-    if !base_path.exists() {
-        anyhow::bail!("未找到 Apple Books 书籍库数据库目录：{}", base_path.display());
-    }
+fn find_latest_database(
+    relative_directory: &str,
+) -> std::result::Result<PathBuf, DatabaseAccessError> {
+    let home = crate::utils::home_dir().unwrap_or_default();
+    let base_path = home.join(relative_directory);
+    let entries =
+        std::fs::read_dir(&base_path).map_err(|error| classify_io_error(&base_path, error))?;
+    let mut latest: Option<(std::time::SystemTime, PathBuf)> = None;
 
-    let mut latest = None;
-    let mut latest_time = 0i64;
-
-    for entry in std::fs::read_dir(base_path)? {
-        let entry = entry?;
+    for entry in entries {
+        let entry = entry.map_err(|error| classify_io_error(&base_path, error))?;
         let path = entry.path();
-        if path.extension().map_or(false, |ext| ext == "sqlite") {
-            let metadata = entry.metadata()?;
-            let mtime = metadata.modified()?.elapsed()?.as_secs() as i64;
-            if mtime > latest_time {
-                latest_time = mtime;
-                latest = Some(path);
+        if path
+            .extension()
+            .is_some_and(|extension| extension == "sqlite")
+        {
+            let modified = entry
+                .metadata()
+                .and_then(|metadata| metadata.modified())
+                .map_err(|error| classify_io_error(&path, error))?;
+            if latest
+                .as_ref()
+                .is_none_or(|(latest_modified, _)| modified > *latest_modified)
+            {
+                latest = Some((modified, path));
             }
         }
     }
 
-    latest.ok_or_else(|| anyhow::anyhow!("未找到书籍库数据库文件"))
+    latest
+        .map(|(_, path)| path)
+        .ok_or(DatabaseAccessError::NotFound { path: base_path })
+}
+
+fn classify_sqlite_open_error(path: &Path, error: rusqlite::Error) -> DatabaseAccessError {
+    if matches!(
+        &error,
+        rusqlite::Error::SqliteFailure(failure, _)
+            if failure.code == rusqlite::ErrorCode::CannotOpen
+    ) {
+        DatabaseAccessError::PermissionDenied {
+            path: path.to_path_buf(),
+        }
+    } else {
+        DatabaseAccessError::Unreadable {
+            path: path.to_path_buf(),
+            message: error.to_string(),
+        }
+    }
+}
+
+fn classify_io_error(path: &Path, error: io::Error) -> DatabaseAccessError {
+    match error.kind() {
+        io::ErrorKind::NotFound => DatabaseAccessError::NotFound {
+            path: path.to_path_buf(),
+        },
+        io::ErrorKind::PermissionDenied => DatabaseAccessError::PermissionDenied {
+            path: path.to_path_buf(),
+        },
+        _ => DatabaseAccessError::Unreadable {
+            path: path.to_path_buf(),
+            message: error.to_string(),
+        },
+    }
 }
 
 /// Apple Books 里存在大量空壳标注:`ZANNOTATIONSELECTEDTEXT` 与 `ZANNOTATIONNOTE`
@@ -180,6 +209,7 @@ fn count_annotations_by_asset(conn: &Connection) -> Result<Vec<(String, u32)>> {
 fn fetch_annotations(conn: &Connection, asset_id: &str) -> Result<Vec<Annotation>> {
     let mut stmt = conn.prepare(&format!(
         "SELECT
+            Z_PK,
             ZANNOTATIONSELECTEDTEXT,
             ZANNOTATIONNOTE,
             ZANNOTATIONLOCATION,
@@ -193,12 +223,13 @@ fn fetch_annotations(conn: &Connection, asset_id: &str) -> Result<Vec<Annotation
     let annotations = stmt
         .query_map([asset_id], |row| {
             Ok(Annotation {
+                id: format!("annotation-{}", row.get::<_, i64>(0)?),
                 asset_id: asset_id.to_string(),
-                selected_text: row.get(0)?,
-                note: row.get(1)?,
-                location: row.get(2)?,
-                annotation_type: row.get(4)?,
-                creation_date: row.get(3)?,
+                selected_text: row.get(1)?,
+                note: row.get(2)?,
+                location: row.get(3)?,
+                annotation_type: row.get(5)?,
+                creation_date: row.get(4)?,
             })
         })?
         .collect::<Result<Vec<Annotation>, _>>()?;

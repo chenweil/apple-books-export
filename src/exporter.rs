@@ -5,7 +5,7 @@ use crate::utils::sanitize_filename;
 use anyhow::{Context, Result};
 use std::collections::BTreeSet;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// 导出格式
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,6 +25,15 @@ impl From<&str> for ExportFormat {
 }
 
 /// 导出书籍笔记
+#[derive(Debug, thiserror::Error)]
+pub enum ExportWriteError {
+    #[error("output file already exists: {0}")]
+    OutputFileExists(PathBuf),
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
+}
+
+/// 导出书籍笔记。保留旧入口的覆盖行为，供现有人类 CLI/GUI 调用。
 pub fn export_book(
     book: &Book,
     annotations: &[Annotation],
@@ -32,32 +41,62 @@ pub fn export_book(
     output_dir: &Path,
     format: ExportFormat,
 ) -> Result<()> {
-    // 创建输出目录
-    let book_dir = output_dir.join(&book.title);
-    fs::create_dir_all(&book_dir).with_context(|| format!("无法创建输出目录：{:?}", book_dir))?;
+    export_book_checked(book, annotations, llm_results, output_dir, format, true)
+        .map(|_| ())
+        .map_err(anyhow::Error::from)
+}
 
-    // 生成主笔记文件
+/// 机器入口使用的受保护导出：默认由调用方禁止覆盖，并返回所有生成文件。
+pub fn export_book_checked(
+    book: &Book,
+    annotations: &[Annotation],
+    llm_results: &[Option<LLMResult>],
+    output_dir: &Path,
+    format: ExportFormat,
+    overwrite: bool,
+) -> std::result::Result<Vec<PathBuf>, ExportWriteError> {
+    let book_dir = output_dir.join(safe_path_component(&book.title));
     let main_file = book_dir.join(format!("{}.md", sanitize_filename(&book.title)));
+    let mut generated_files = vec![main_file.clone()];
 
-    let main_content = generate_main_note(book, annotations, llm_results, format)?;
-    fs::write(&main_file, main_content)
-        .with_context(|| format!("无法写入主笔记文件：{:?}", main_file))?;
-
-    // 生成单独的 LLM 笔记文件
-    for (_i, (ann, llm_result)) in annotations.iter().zip(llm_results.iter()).enumerate() {
-        if let Some(result) = llm_result {
+    for (ann, llm_result) in annotations.iter().zip(llm_results.iter()) {
+        if llm_result.is_some() {
             if let Some(selected_text) = &ann.selected_text {
-                let file_name = format!("{}.md", sanitize_filename(selected_text));
-                let file_path = book_dir.join(file_name);
-
-                let content = generate_llm_note(book, ann, result, format)?;
-                fs::write(&file_path, content)
-                    .with_context(|| format!("无法写入笔记文件：{:?}", file_path))?;
+                generated_files
+                    .push(book_dir.join(format!("{}.md", sanitize_filename(selected_text))));
             }
         }
     }
 
-    Ok(())
+    if !overwrite {
+        if let Some(existing) = generated_files.iter().find(|path| path.exists()) {
+            return Err(ExportWriteError::OutputFileExists(existing.clone()));
+        }
+    }
+
+    fs::create_dir_all(&book_dir).with_context(|| format!("无法创建输出目录：{:?}", book_dir))?;
+    let main_content = generate_main_note(book, annotations, llm_results, format)?;
+    fs::write(&main_file, main_content)
+        .with_context(|| format!("无法写入主笔记文件：{:?}", main_file))?;
+
+    for (ann, llm_result) in annotations.iter().zip(llm_results.iter()) {
+        if let (Some(result), Some(selected_text)) = (llm_result, &ann.selected_text) {
+            let file_path = book_dir.join(format!("{}.md", sanitize_filename(selected_text)));
+            let content = generate_llm_note(book, ann, result, format)?;
+            fs::write(&file_path, content)
+                .with_context(|| format!("无法写入笔记文件：{:?}", file_path))?;
+        }
+    }
+
+    Ok(generated_files)
+}
+
+fn safe_path_component(value: &str) -> String {
+    let sanitized = sanitize_filename(value);
+    match sanitized.as_str() {
+        "" | "." | ".." => "_".to_string(),
+        _ => sanitized,
+    }
 }
 
 /// 生成主笔记内容
@@ -208,6 +247,7 @@ mod tests {
         };
         let annotations = vec![
             Annotation {
+                id: "annotation-test".to_string(),
                 asset_id: "book".to_string(),
                 selected_text: None,
                 note: None,
@@ -216,6 +256,7 @@ mod tests {
                 creation_date: None,
             },
             Annotation {
+                id: "annotation-test".to_string(),
                 asset_id: "book".to_string(),
                 selected_text: Some("真正的高亮".to_string()),
                 note: None,

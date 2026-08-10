@@ -1,8 +1,10 @@
 //! Apple Books Exporter - CLI Entry Point
 
 use apple_books_exporter::{
-    build_enrich_prompt, generate_card, parse_llm_result, Annotation, CardStyle, DB, ExportFormat,
-    LLMCache, LLMProvider, load_config, save_config, sanitize_filename,
+    build_enrich_prompt, generate_card, load_config, parse_llm_result, sanitize_filename,
+    save_config, Annotation, AnnotationResponse, BookListResponse, CardStyle, DoctorResponse,
+    ErrorResponse, ExportFormat, ExportResponse, ExportWriteError, LLMCache, LLMProvider,
+    MachineError, DB,
 };
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
@@ -19,7 +21,7 @@ fn truncate_str(s: &str, max_chars: usize) -> String {
 #[derive(Parser)]
 #[command(name = "apple-books-exporter")]
 #[command(about = "Export Apple Books notes and highlights to Markdown", long_about = None)]
-#[command(version = "0.1.0")]
+#[command(version)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -38,10 +40,33 @@ enum Commands {
         json: bool,
     },
 
+    /// 获取一本书的标注详情
+    Annotations {
+        /// 书籍稳定标识
+        #[arg(long)]
+        asset_id: Option<String>,
+
+        /// 以稳定的机器可读 JSON 输出
+        #[arg(long)]
+        json: bool,
+    },
+
     /// 导出笔记为 Markdown
     Export {
-        /// 书籍序号
-        index: usize,
+        /// 书籍序号（人类 CLI）
+        index: Option<usize>,
+
+        /// 书籍稳定标识（机器 CLI）
+        #[arg(long)]
+        asset_id: Option<String>,
+
+        /// 以稳定的机器可读 JSON 输出
+        #[arg(long)]
+        json: bool,
+
+        /// 显式允许覆盖已有文件
+        #[arg(long)]
+        overwrite: bool,
 
         /// 输出目录
         #[arg(short, long)]
@@ -50,6 +75,13 @@ enum Commands {
         /// 输出格式 (obsidian|markdown)
         #[arg(short, long, default_value = "obsidian")]
         format: String,
+    },
+
+    /// 诊断 binary 和 Apple Books 数据库可用性
+    Doctor {
+        /// 以稳定的机器可读 JSON 输出
+        #[arg(long)]
+        json: bool,
     },
 
     /// AI 增强笔记（调用 LLM）
@@ -127,23 +159,123 @@ enum Commands {
 }
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() {
     let cli = Cli::parse();
 
-    match cli.command {
-        Commands::List { json } => cmd_list(json),
-        Commands::Export { index, output, format } => cmd_export(index, output, &format),
-        Commands::Enrich { book, index: single_index, all, force, output, format } => {
-            cmd_enrich(&cli.config, book, single_index, all, force, output, &format).await
+    let result = match cli.command {
+        Commands::List { json: true } => {
+            return finish_machine(cmd_list_json());
         }
-        Commands::Card { book, index: single_index, all, style, output } => {
-            cmd_card(&cli.config, book, single_index, all, &style, output)
+        Commands::List { json: false } => cmd_list(false),
+        Commands::Annotations {
+            asset_id,
+            json: true,
+        } => {
+            return finish_machine(cmd_annotations_json(asset_id.as_deref()));
         }
+        Commands::Annotations {
+            asset_id,
+            json: false,
+        } => match asset_id {
+            Some(asset_id) => cmd_annotations(&asset_id),
+            None => Err(anyhow::anyhow!("请提供 --asset-id")),
+        },
+        Commands::Export {
+            index,
+            asset_id,
+            json: true,
+            overwrite,
+            output,
+            format,
+        } => {
+            if index.is_some() {
+                return finish_machine(Err(MachineError::invalid_argument(
+                    "The JSON export command does not accept a positional book index.",
+                )));
+            }
+            return finish_machine(cmd_export_json(
+                asset_id.as_deref(),
+                output,
+                &format,
+                overwrite,
+            ));
+        }
+        Commands::Export {
+            index,
+            asset_id,
+            json: false,
+            overwrite,
+            output,
+            format,
+        } => {
+            if asset_id.is_some() {
+                Err(anyhow::anyhow!("--asset-id 需要与 --json 一起使用"))
+            } else if overwrite {
+                Err(anyhow::anyhow!("--overwrite 仅用于 JSON 导出入口"))
+            } else {
+                match index {
+                    Some(index) => cmd_export(index, output, &format),
+                    None => Err(anyhow::anyhow!("请提供书籍序号")),
+                }
+            }
+        }
+        Commands::Doctor { json: true } => {
+            return finish_machine(cmd_doctor_json());
+        }
+        Commands::Doctor { json: false } => cmd_doctor(),
+        Commands::Enrich {
+            book,
+            index: single_index,
+            all,
+            force,
+            output,
+            format,
+        } => cmd_enrich(&cli.config, book, single_index, all, force, output, &format).await,
+        Commands::Card {
+            book,
+            index: single_index,
+            all,
+            style,
+            output,
+        } => cmd_card(&cli.config, book, single_index, all, &style, output),
         Commands::Cache { book } => cmd_cache(&cli.config, book),
-        Commands::Config { base_url, api_key, model, provider: _ } => {
-            cmd_config(&cli.config, base_url, api_key, model)
+        Commands::Config {
+            base_url,
+            api_key,
+            model,
+            provider: _,
+        } => cmd_config(&cli.config, base_url, api_key, model),
+    };
+
+    if let Err(error) = result {
+        eprintln!("Error: {error:#}");
+        std::process::exit(1);
+    }
+}
+
+fn finish_machine(result: Result<String, MachineError>) {
+    match result {
+        Ok(json) => println!("{json}"),
+        Err(error) => {
+            let response = ErrorResponse::new(error);
+            match serde_json::to_string(&response) {
+                Ok(json) => eprintln!("{json}"),
+                Err(_) => eprintln!(
+                    "{{\"schema_version\":1,\"error\":{{\"code\":\"PROTOCOL_SERIALIZATION_FAILED\",\"message\":\"Failed to serialize machine error response.\"}}}}"
+                ),
+            }
+            std::process::exit(1);
         }
     }
+}
+
+fn cmd_list_json() -> Result<String, MachineError> {
+    let db = DB::open_apple_books().map_err(MachineError::from_database_error)?;
+    let books = db
+        .list_books()
+        .map_err(|error| MachineError::database_unreadable(error.to_string()))?;
+    serialize_book_list(&books)
+        .map_err(|error| MachineError::protocol_serialization_failed(error.to_string()))
 }
 
 fn cmd_list(json: bool) -> anyhow::Result<()> {
@@ -155,7 +287,7 @@ fn cmd_list(json: bool) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    println!("Apple Books Exporter v0.1.0");
+    println!("Apple Books Exporter v{}", env!("CARGO_PKG_VERSION"));
     println!("正在加载书籍列表...\n");
 
     if books.is_empty() {
@@ -164,14 +296,23 @@ fn cmd_list(json: bool) -> anyhow::Result<()> {
     }
 
     // 打印表头
-    println!("{:<5} {:<50} {:<20} {:>8}", "序号", "书名", "作者", "笔记数");
+    println!(
+        "{:<5} {:<50} {:<20} {:>8}",
+        "序号", "书名", "作者", "笔记数"
+    );
     println!("{}", "─".repeat(90));
 
     // 打印书籍列表
     for (i, book) in books.iter().enumerate() {
         let title = truncate_str(&book.title, 48);
         let author = truncate_str(&book.author, 20);
-        println!("{:<5} {:<50} {:<20} {:>8}", i + 1, title, author, book.note_count);
+        println!(
+            "{:<5} {:<50} {:<20} {:>8}",
+            i + 1,
+            title,
+            author,
+            book.note_count
+        );
     }
 
     println!("\n共 {} 本书", books.len());
@@ -180,10 +321,86 @@ fn cmd_list(json: bool) -> anyhow::Result<()> {
 }
 
 fn serialize_book_list(books: &[apple_books_exporter::Book]) -> serde_json::Result<String> {
-    serde_json::to_string(&serde_json::json!({
-        "schema_version": 1,
-        "books": books,
-    }))
+    serde_json::to_string(&BookListResponse::new(books))
+}
+
+fn cmd_annotations_json(asset_id: Option<&str>) -> Result<String, MachineError> {
+    let asset_id = asset_id.ok_or_else(MachineError::missing_asset_id)?;
+    let db = DB::open_apple_books().map_err(MachineError::from_database_error)?;
+    let book = db
+        .get_book_info(asset_id)
+        .map_err(|error| MachineError::database_unreadable(error.to_string()))?
+        .ok_or_else(|| MachineError::invalid_asset_id(asset_id))?;
+    let annotations = db
+        .get_annotations(asset_id)
+        .map_err(|error| MachineError::database_unreadable(error.to_string()))?;
+    serde_json::to_string(&AnnotationResponse::new(&book, &annotations))
+        .map_err(|error| MachineError::protocol_serialization_failed(error.to_string()))
+}
+
+fn cmd_annotations(asset_id: &str) -> anyhow::Result<()> {
+    let db = DB::open_apple_books()?;
+    let book = db
+        .get_book_info(asset_id)?
+        .ok_or_else(|| anyhow::anyhow!("无效的 asset_id：{asset_id}"))?;
+    let annotations = db.get_annotations(asset_id)?;
+
+    println!("{} - {}", book.title, book.author);
+    for annotation in annotations {
+        if let Some(text) = annotation.selected_text {
+            println!("> {text}");
+        }
+        if let Some(note) = annotation.note {
+            println!("笔记：{note}");
+        }
+        println!();
+    }
+    Ok(())
+}
+
+fn cmd_export_json(
+    asset_id: Option<&str>,
+    output: Option<PathBuf>,
+    format: &str,
+    overwrite: bool,
+) -> Result<String, MachineError> {
+    let asset_id = asset_id.ok_or_else(MachineError::missing_asset_id)?;
+    let db = DB::open_apple_books().map_err(MachineError::from_database_error)?;
+    let mut book = db
+        .get_book_info(asset_id)
+        .map_err(|error| MachineError::database_unreadable(error.to_string()))?
+        .ok_or_else(|| MachineError::invalid_asset_id(asset_id))?;
+    let annotations = db
+        .get_annotations(asset_id)
+        .map_err(|error| MachineError::database_unreadable(error.to_string()))?;
+    book.note_count = annotations.len() as u32;
+    let output_dir = output.unwrap_or_else(|| {
+        apple_books_exporter::home_dir()
+            .unwrap_or_default()
+            .join("books-exported")
+    });
+    let export_format = ExportFormat::from(format);
+    let llm_results = vec![None; annotations.len()];
+    let generated_files = apple_books_exporter::export_book_checked(
+        &book,
+        &annotations,
+        &llm_results,
+        &output_dir,
+        export_format,
+        overwrite,
+    )
+    .map_err(|error| match error {
+        ExportWriteError::OutputFileExists(path) => MachineError::output_file_exists(&path),
+        ExportWriteError::Other(error) => MachineError::output_unwritable(error.to_string()),
+    })?;
+    serde_json::to_string(&ExportResponse::new(
+        &book,
+        annotations.len(),
+        export_format,
+        &output_dir,
+        &generated_files,
+    ))
+    .map_err(|error| MachineError::protocol_serialization_failed(error.to_string()))
 }
 
 fn cmd_export(index: usize, output: Option<PathBuf>, format: &str) -> anyhow::Result<()> {
@@ -223,11 +440,44 @@ fn cmd_export(index: usize, output: Option<PathBuf>, format: &str) -> anyhow::Re
 
     // 导出
     let llm_results: Vec<Option<apple_books_exporter::LLMResult>> = vec![None; annotations.len()];
-    apple_books_exporter::export_book(&book, &annotations, &llm_results, &output_dir, export_format)?;
+    apple_books_exporter::export_book(
+        &book,
+        &annotations,
+        &llm_results,
+        &output_dir,
+        export_format,
+    )?;
 
     println!("导出完成！");
     println!("输出目录：{:?}", output_dir);
 
+    Ok(())
+}
+
+fn cmd_doctor_json() -> Result<String, MachineError> {
+    if std::env::consts::OS != "macos" || !matches!(std::env::consts::ARCH, "aarch64" | "x86_64") {
+        return Err(MachineError::binary_incompatible());
+    }
+    let db = DB::open_apple_books().map_err(MachineError::from_database_error)?;
+    db.validate()
+        .map_err(|error| MachineError::database_unreadable(error.to_string()))?;
+    let (annotation_path, library_path) = db.paths();
+    serde_json::to_string(&DoctorResponse::ready(&annotation_path, &library_path))
+        .map_err(|error| MachineError::protocol_serialization_failed(error.to_string()))
+}
+
+fn cmd_doctor() -> anyhow::Result<()> {
+    let db = DB::open_apple_books()?;
+    db.validate()?;
+    let (annotation_path, library_path) = db.paths();
+    println!(
+        "Binary: {} {}",
+        std::env::consts::OS,
+        std::env::consts::ARCH
+    );
+    println!("Annotation database: {}", annotation_path.display());
+    println!("Library database: {}", library_path.display());
+    println!("Status: ok");
     Ok(())
 }
 
@@ -304,7 +554,8 @@ async fn cmd_enrich(
     println!("缓存路径：{:?} (共 {} 条)", cache_path, cache.count());
 
     // 处理每条笔记
-    let mut llm_results: Vec<Option<apple_books_exporter::LLMResult>> = vec![None; annotations.len()];
+    let mut llm_results: Vec<Option<apple_books_exporter::LLMResult>> =
+        vec![None; annotations.len()];
     let mut cached_count = 0;
     let mut processed_count = 0;
     let mut error_count = 0;
@@ -402,7 +653,13 @@ async fn cmd_enrich(
     };
 
     // 导出
-    apple_books_exporter::export_book(&book_info, &annotations, &llm_results, &output_dir, export_format)?;
+    apple_books_exporter::export_book(
+        &book_info,
+        &annotations,
+        &llm_results,
+        &output_dir,
+        export_format,
+    )?;
 
     println!("导出完成！");
     println!("输出目录：{:?}", output_dir);
@@ -491,9 +748,20 @@ fn cmd_card(
         let filename = format!("card_{:02}_{}.png", idx + 1, sanitize_filename(highlight));
         let output_path = output_dir.join(&filename);
 
-        println!("[{}/{}] 生成卡片：{}", idx + 1, to_process.len(), highlight.chars().take(30).collect::<String>());
+        println!(
+            "[{}/{}] 生成卡片：{}",
+            idx + 1,
+            to_process.len(),
+            highlight.chars().take(30).collect::<String>()
+        );
 
-        match generate_card(highlight, explanation, &book_info.title, card_style, &output_path) {
+        match generate_card(
+            highlight,
+            explanation,
+            &book_info.title,
+            card_style,
+            &output_path,
+        ) {
             Ok(()) => {
                 println!("  ✓ 已保存：{:?}", output_path);
                 success += 1;
@@ -540,7 +808,10 @@ fn cmd_cache(config_path: &PathBuf, book: usize) -> anyhow::Result<()> {
     }
 
     println!("缓存条目数：{}", entries.len());
-    println!("\n{:<5} {:<40} {:<30} {}", "序号", "标签", "更新日期", "问题");
+    println!(
+        "\n{:<5} {:<40} {:<30} {}",
+        "序号", "标签", "更新日期", "问题"
+    );
     println!("{}", "─".repeat(120));
 
     for (i, (_key, entry)) in entries.iter().enumerate() {

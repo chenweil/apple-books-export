@@ -316,6 +316,7 @@ mod tests {
 
     fn annotation(location: &str, text: &str) -> Annotation {
         Annotation {
+            id: "annotation-test".to_string(),
             asset_id: "book".to_string(),
             selected_text: Some(text.to_string()),
             note: None,
