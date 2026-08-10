@@ -31,14 +31,14 @@ cd apple-books-export
 
 # 2. 编译二进制（首次需要）
 cargo build --release
-cp target/release/apple-books-exporter skills/apple-books-export-rust/scripts/
 
 # 3. 安装 skill
 cd skills/apple-books-export-rust/scripts
 ./install.sh
 
 # 4. 验证安装
-~/.agents/skills/apple-books-export-rust/scripts/apple-books-exporter list
+~/.agents/skills/apple-books-export-rust/scripts/validate.sh --print-path
+~/.agents/skills/apple-books-export-rust/scripts/apple-books-exporter list --json
 ```
 
 ### 方式二：直接使用二进制
@@ -150,9 +150,14 @@ skills/apple-books-export-rust/
 └── scripts/
     ├── apple-books-exporter              # 默认二进制
     ├── apple-books-exporter-aarch64-apple-darwin  # macOS ARM
+    ├── validate.sh                        # binary/架构/协议能力校验
     ├── build.sh                          # 编译脚本
     └── install.sh                        # 安装脚本
 ```
+
+Skill 使用 Rust Machine JSON Protocol：执行前校验 binary 存在、macOS CPU
+架构和 `--help` 能力；刷新 `list --json` 后通过 `asset_id` 调用
+`annotations --asset-id ... --json` 与 `export --asset-id ... --json`，并在报告成功前验证非空 Markdown 文件。不会解析人类表格、自动下载 binary、修改 Apple Books 或调用 AI。
 
 ### 编译二进制（必需）
 
@@ -178,7 +183,8 @@ cd skills/apple-books-export-rust/scripts
 安装脚本会：
 1. 检测当前系统平台
 2. 复制二进制文件到 `~/.agents/skills/apple-books-export-rust/scripts/`
-3. 复制 SKILL.md 文档
+3. 复制 SKILL.md 和 validator
+4. 验证 binary 架构及 `list`、`annotations`、`export`、`doctor` 命令
 
 ### 跨平台编译
 
