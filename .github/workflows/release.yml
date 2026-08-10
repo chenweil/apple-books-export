@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   # ─────────────────────────────────────────────────
-  # 1. 构建矩阵: 两个 macOS 平台各跑 CLI + GUI
+  # 1. 构建矩阵: 两个 macOS 平台构建 CLI
   #    (Linux 已移除 — Apple Books 仅存在于 macOS)
   # ─────────────────────────────────────────────────
   build:
@@ -40,6 +40,9 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Validate headless mainline
+        run: bash tests/headless_mainline.sh
 
       # ── CLI 构建准备 ──────────────────────────────
       - name: Install Rust toolchain (CLI)
@@ -67,12 +70,14 @@ jobs:
         id: locate-cli
         run: |
           CLI="target/${{ matrix.target }}/release/apple-books-exporter"
+          OUTPUT="${{ matrix.binary_name }}"
           if [ ! -f "$CLI" ]; then
             echo "❌ CLI binary not found: $CLI"
             exit 1
           fi
-          echo "binary_path=$CLI" >> "$GITHUB_OUTPUT"
-          echo "✅ Built: $CLI ($(du -h "$CLI" | cut -f1))"
+          cp "$CLI" "$OUTPUT"
+          echo "binary_path=$OUTPUT" >> "$GITHUB_OUTPUT"
+          echo "✅ Built: $OUTPUT ($(du -h "$OUTPUT" | cut -f1))"
 
       - name: Upload CLI artifact
         uses: actions/upload-artifact@v4
@@ -80,80 +85,6 @@ jobs:
           name: cli-${{ matrix.binary_name }}
           path: ${{ steps.locate-cli.outputs.binary_path }}
           if-no-files-found: error
-          retention-days: 7
-
-      # ── GUI 构建准备 ──────────────────────────────
-      - name: Setup Node.js (GUI frontend)
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-
-      - name: Install frontend dependencies
-        run: npm ci
-
-      # ── GUI 构建 ──────────────────────────────────
-      # Tauri 2.x: 前端用 vite 构建,然后 cargo tauri build
-      - name: Build GUI app
-        working-directory: src-tauri
-        run: |
-          # 确保 frontend dist 已构建 (tauri.conf.json 的 beforeBuildCommand 会自动跑 npm run build)
-          cargo tauri build --target ${{ matrix.target }}
-
-      - name: Locate GUI artifacts
-        id: locate-gui
-        run: |
-          BUNDLE_DIR="src-tauri/target/${{ matrix.target }}/release/bundle"
-          APP="$BUNDLE_DIR/macos/Apple Books Exporter.app"
-          DMG_SRC=$(ls "$BUNDLE_DIR/dmg/"*.dmg 2>/dev/null | head -1)
-
-          if [ ! -d "$APP" ]; then
-            echo "❌ .app not found: $APP"
-            ls -la "$BUNDLE_DIR/" 2>&1 || true
-            exit 1
-          fi
-
-          # .app 是目录,打包成 zip 才能上传到 GitHub Release
-          # ditto 保留 macOS 资源分支和扩展属性 (这是 macOS 应用的推荐打包方式)
-          cd "$BUNDLE_DIR/macos"
-          ZIP="Apple-Books-Exporter-${{ matrix.target }}.app.zip"
-          ditto -c -k --sequesterRsrc --keepParent "Apple Books Exporter.app" "$ZIP"
-          cd - > /dev/null
-
-          # 把 dmg 重命名成稳定格式(去掉版本号和空格)
-          if [ -n "$DMG_SRC" ] && [ -f "$DMG_SRC" ]; then
-            DMG="Apple-Books-Exporter-${{ matrix.target }}.dmg"
-            cp "$DMG_SRC" "$DMG"
-            echo "dmg_path=$DMG" >> "$GITHUB_OUTPUT"
-          else
-            echo "dmg_path=" >> "$GITHUB_OUTPUT"
-          fi
-
-          echo "app_zip_path=$ZIP" >> "$GITHUB_OUTPUT"
-
-          echo "✅ Built .app: $APP ($(du -sh "$APP" | cut -f1))"
-          echo "✅ Built .app.zip: $ZIP ($(du -h "$ZIP" | cut -f1))"
-          if [ -n "$DMG_SRC" ] && [ -f "$DMG_SRC" ]; then
-            echo "✅ Built .dmg: $DMG ($(du -h "$DMG_SRC" | cut -f1))"
-          else
-            echo "⚠️ .dmg not built (will skip upload)"
-          fi
-
-      - name: Upload GUI .app.zip artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: gui-app-${{ matrix.target }}
-          path: ${{ steps.locate-gui.outputs.app_zip_path }}
-          if-no-files-found: error
-          retention-days: 7
-
-      - name: Upload GUI .dmg artifact
-        if: steps.locate-gui.outputs.dmg_path != ''
-        uses: actions/upload-artifact@v4
-        with:
-          name: gui-dmg-${{ matrix.target }}
-          path: ${{ steps.locate-gui.outputs.dmg_path }}
-          if-no-files-found: warn
           retention-days: 7
 
   # ─────────────────────────────────────────────────
@@ -182,7 +113,7 @@ jobs:
         working-directory: dist
         run: |
           # 对所有可下载文件生成 checksum
-          find . -maxdepth 2 -type f \( -name "apple-books-exporter-*" -o -name "Apple-Books-Exporter-*" \) \
+          find . -maxdepth 2 -type f -name "apple-books-exporter-*" \
             -exec sha256sum {} \; | tee SHA256SUMS
           echo ""
           echo "=== 文件清单 ==="
@@ -202,12 +133,8 @@ jobs:
           files: |
             dist/apple-books-exporter-aarch64-apple-darwin
             dist/apple-books-exporter-x86_64-apple-darwin
-            dist/Apple-Books-Exporter-aarch64-apple-darwin.app.zip
-            dist/Apple-Books-Exporter-x86_64-apple-darwin.app.zip
-            dist/Apple-Books-Exporter-aarch64-apple-darwin.dmg
-            dist/Apple-Books-Exporter-x86_64-apple-darwin.dmg
             dist/SHA256SUMS
-          fail_on_unmatched_files: false  # macOS 产物在不同 platform 下可选产出,容错
+          fail_on_unmatched_files: true
           overwrite_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

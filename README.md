@@ -1,6 +1,10 @@
 # Apple Books 笔记导出工具
 
-Rust 版本 Apple Books 笔记导出工具，支持 CLI 和 GUI，可导出笔记、高亮、书签为 Markdown 文件，并支持 AI 增强和图片卡片生成。
+Rust 版本 Apple Books 笔记导出工具，提供 CLI、只读 TUI 和 Agent Data Skill，可导出笔记、高亮、书签为 Markdown 文件，并支持 AI 增强和图片卡片生成。
+
+当前 `main` 是 Headless Mainline：默认入口是 Rust CLI、Read-only TUI 和
+Agent Data Skill。Tauri Legacy GUI 源码仍保留，但不属于默认文档、构建或
+发布路径。
 
 ## 功能
 
@@ -9,7 +13,7 @@ Rust 版本 Apple Books 笔记导出工具，支持 CLI 和 GUI，可导出笔�
 - 🔍 按书名搜索导出（模糊匹配）
 - 🤖 AI 增强：为笔记添加解释、标签、复习问题
 - 🎴 图片卡片：生成精美的知识卡片
-- 🖥️ GUI 支持：Tauri 跨平台桌面应用
+- 🧭 Headless Mainline：CLI、只读 TUI 和 Agent Data Skill
 - ⌨️ TUI 支持：OpenTUI 只读搜索和浏览书籍
 - 🤖 AI Agent Skill：支持 AI 助手直接调用
 
@@ -20,68 +24,54 @@ Rust 版本 Apple Books 笔记导出工具，支持 CLI 和 GUI，可导出笔�
 
 ## 快速开始
 
-### 方式一：使用 Skill（推荐）
-
-适合 AI Agent 用户，安装后可直接被 Claude Code、Gemini CLI 等调用。
-
-```bash
-# 1. 克隆项目
-git clone https://github.com/chenweil/apple-books-export.git
-cd apple-books-export
-
-# 2. 编译二进制（首次需要）
-cargo build --release
-
-# 3. 安装 skill
-cd skills/apple-books-export-rust/scripts
-./install.sh
-
-# 4. 验证安装
-~/.agents/skills/apple-books-export-rust/scripts/validate.sh --print-path
-~/.agents/skills/apple-books-export-rust/scripts/apple-books-exporter list --json
-```
-
-### 方式二：直接使用二进制
+### 方式一：Rust CLI
 
 ```bash
 # 编译
 cargo build --release
 
-# 运行
+# 读取书籍列表
 ./target/release/apple-books-exporter list
-./target/release/apple-books-exporter export 1 -o ~/Desktop
+./target/release/apple-books-exporter doctor
 ```
 
-### 方式三：GUI 应用
+### 方式二：Read-only TUI
 
 ```bash
-# 开发模式
-npm install
-npm run tauri dev
-
-# 构建 macOS 应用
-npm run tauri build
-```
-
-### 方式四：TUI（只读）
-
-当前 TUI 第一阶段支持搜索书籍、打开详情，并查看高亮正文、笔记、章节、位置和时间；不执行导出、AI、卡片或配置写操作。
-
-```bash
-# 首次使用
 cargo build
-cd tui && bun install && cd ..
-
-# 启动
-npm run tui
-
-# 验证
-npm run test:tui
-npm run typecheck:tui
+bun install --cwd tui
+bun run --cwd tui start
 ```
 
-默认依次查找 `target/release/apple-books-exporter`、`target/debug/apple-books-exporter`
-和 `PATH`。也可通过 `APPLE_BOOKS_EXPORTER_BIN` 指定后端二进制。
+TUI 支持搜索书籍、打开详情，并查看高亮正文、笔记、章节、位置和时间；
+不执行导出、AI、卡片或配置写操作。验证命令：
+
+```bash
+bun run --cwd tui test
+bun run --cwd tui typecheck
+```
+
+### 方式三：Agent Data Skill
+
+```bash
+# 编译并安装 Skill
+cargo build --release
+cd skills/apple-books-export-rust/scripts
+./install.sh
+
+# 验证安装并读取机器 JSON
+~/.agents/skills/apple-books-export-rust/scripts/validate.sh --print-path
+~/.agents/skills/apple-books-export-rust/scripts/apple-books-exporter list --json
+```
+
+Skill 会刷新 `list --json`，通过 `asset_id` 读取标注或导出 Markdown，并
+验证生成的非空文件。它不解析人类表格、不修改 Apple Books、不自动下载
+binary，也不调用 AI。
+
+## Tauri Legacy GUI
+
+`src-tauri/` 和 Svelte 源码保留用于迁移、回滚和历史比较；Tauri GUI 不再
+作为 `main` 的默认入口或发布产物。正式 GUI 迁移由独立的 `appkit` 分支负责。
 
 ## CLI 命令
 
@@ -255,13 +245,13 @@ apple-books-export/
 │   ├── cache.rs                   # LLM 结果缓存
 │   ├── card.rs                    # 图片卡片生成
 │   └── ...
-├── src-tauri/                     # Tauri GUI
+├── src-tauri/                     # Tauri Legacy GUI（保留源码,不默认发布）
 │   ├── src/main.rs                # Tauri 入口
 │   └── tauri.conf.json            # Tauri 配置
 ├── tui/                           # OpenTUI 只读终端界面
 │   ├── src/                       # Core API 应用、后端协议与测试
 │   └── package.json               # Bun 脚本与 OpenTUI 依赖
-├── src/lib/                       # Svelte 前端
+├── src/lib/                       # Tauri Legacy GUI 的 Svelte 前端
 │   ├── pages/                     # 页面组件
 │   └── components/                # UI 组件
 ├── skills/                        # AI Agent Skill
@@ -286,8 +276,10 @@ Apple Books 的笔记数据存储在：
 
 ## 技术栈
 
-- **后端**: Rust + Tauri 2.0
-- **前端**: Svelte 5 + TypeScript
+- **后端**: Rust CLI + rusqlite (bundled)
+- **TUI**: Bun + OpenTUI
+- **Agent Data Skill**: 仓库内 `apple-books-export-rust` Skill
+- **Legacy GUI**: Tauri 2 + Svelte 5（源码保留,不默认构建/发布）
 - **数据库**: rusqlite (bundled)
 - **HTTP**: reqwest + tokio
 - **图片**: image + rusttype

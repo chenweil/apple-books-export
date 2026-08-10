@@ -1,12 +1,16 @@
 # Apple Books Exporter
 
-从 macOS Apple Books 导出笔记/标注为 Markdown 的工具,支持 CLI 和 GUI。
+从 macOS Apple Books 导出笔记/标注为 Markdown 的 Headless Mainline，默认提供 Rust CLI、Read-only TUI 和 Agent Data Skill。
+
+Tauri Legacy GUI 源码保留用于迁移和回滚，但不属于 `main` 的默认入口、构建或发布路径。
 
 ## 技术栈
 
 - **语言**: Rust (edition 2021)
 - **CLI**: 单文件二进制,依赖 `clap` + `rusqlite (bundled)` + `reqwest/rustls` + `chrono`
-- **GUI**: Tauri 2 + Svelte (src-tauri/, src/)
+- **TUI**: Bun + OpenTUI (`tui/`)
+- **Agent Data Skill**: `skills/apple-books-export-rust/`
+- **Tauri Legacy GUI**: Tauri 2 + Svelte (src-tauri/, src/),仅保留源码
 - **AI 增强**: 支持多 LLM provider (OpenAI 兼容),通过 `provider.rs` 调用
 - **图片卡片**: `card.rs` 生成 Markdown/图片卡片
 - **数据源**: Apple Books SQLite 数据库 (`~/Library/Containers/com.apple.iBooksX/`)
@@ -27,12 +31,12 @@ src/                    # CLI 核心
 ├── models.rs           # 数据结构
 └── utils.rs            # 工具函数
 
-src-tauri/              # Tauri GUI (macOS desktop)
+src-tauri/              # Tauri Legacy GUI (保留源码,不进入 main 默认发布)
 ├── src/lib.rs          # Tauri 命令注册
 ├── src/commands.rs     # 前端 ↔ Rust 命令
 └── tauri.conf.json
 
-src/                    # Svelte 前端 (Tauri)
+src/                    # Svelte 前端 (Tauri Legacy GUI)
 ├── App.svelte
 └── lib/pages/
     ├── Export.svelte
@@ -58,14 +62,19 @@ skills/
 cargo build --release
 ./target/release/apple-books-exporter list
 
+# Read-only TUI
+bun install --cwd tui
+bun run --cwd tui start
+
+# Agent Data Skill
+./skills/apple-books-export-rust/scripts/install.sh
+
 # 跨平台编译(本地)
 ./skills/apple-books-export-rust/scripts/build.sh
 
-# GUI 开发
+# Tauri Legacy GUI 开发（仅在明确迁移/回滚任务中使用）
 cd src-tauri && cargo tauri dev
 
-# 安装 Skill 到本地(供 AI agent 调用)
-./skills/apple-books-export-rust/scripts/install.sh
 ```
 
 ## 系统要求
@@ -73,7 +82,8 @@ cd src-tauri && cargo tauri dev
 - macOS only(Apple Books 数据仅存在于 macOS)
 - Full Disk Access 权限(系统设置 → 隐私与安全性)
 - Rust stable toolchain
-- Node.js(仅 GUI 开发需要)
+- Bun(仅 Read-only TUI 开发需要)
+- Node.js(仅 Tauri Legacy GUI 开发需要)
 
 ## 笔记分类
 
@@ -103,7 +113,7 @@ Apple CoreData 时间戳从 **2001-01-01 UTC** 开始(`APPLE_EPOCH`),转换时�
 ## 发布
 
 推送 `v*` tag 时,GitHub Actions (`.github/workflows/release.yml`) 自动:
-- 并行构建 macOS arm64 / Intel / Linux 三个平台
+- 并行构建 macOS arm64 / Intel CLI binary
 - 生成 SHA256SUMS
 - 创建/更新 GitHub Release
 
@@ -128,7 +138,7 @@ git tag v0.3.3 && git push --tags
 ## 常见问题
 
 - **Full Disk Access 缺失** → 数据库读不到,提示权限错误
-- **GUI 启动失败** → 检查 Full Disk Access(Tauri 进程也需要)
+- **Tauri Legacy GUI 启动失败** → 仅在明确使用 legacy GUI 时检查 Full Disk Access
 - **章节显示为原始 CFI** → 确认用 `cfi.rs` 里的解析函数,不要直接读 `ZANNOTATIONLOCATION`
 
 ## Agent skills
