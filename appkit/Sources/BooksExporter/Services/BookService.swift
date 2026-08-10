@@ -1,17 +1,21 @@
 import Foundation
 
 class BookService {
-    private let databaseService = DatabaseService()
+    private let rustCLIClient: RustCLIClient
     
     var isBusy = false
     var currentError: Error?
+
+    init(rustCLIClient: RustCLIClient = .makeForCurrentApp()) {
+        self.rustCLIClient = rustCLIClient
+    }
     
     func listBooks() async -> [Book] {
         isBusy = true
         currentError = nil
         
         do {
-            let books = try databaseService.getBooks()
+            let books = try await rustCLIClient.listBooks()
             isBusy = false
             return books
         } catch {
@@ -25,7 +29,7 @@ class BookService {
         currentError = nil
 
         do {
-            return try databaseService.getAnnotations(for: bookId)
+            return try await rustCLIClient.annotations(for: bookId)
         } catch {
             currentError = error
             return []
@@ -36,6 +40,21 @@ class BookService {
         isBusy = true
         defer { isBusy = false }
 
+        if annotations.count == book.totalAnnotations {
+            _ = try await rustCLIClient.export(
+                assetID: book.id,
+                outputDirectory: outputURL,
+                format: "obsidian",
+                overwrite: false
+            )
+            return
+        }
+
+        // The machine export contract currently exports a whole asset and
+        // intentionally has no annotation-selection argument.  Preserve the
+        // AppKit "current filter" action locally until that contract gains a
+        // selection form; full-book exports above still use the canonical Rust
+        // exporter and its overwrite/error semantics.
         let content = markdownContent(for: book, annotations: annotations)
         let fileURL = outputURL.appendingPathComponent("\(sanitizedTitle(book.title)).md")
         try content.write(to: fileURL, atomically: true, encoding: .utf8)
@@ -80,7 +99,8 @@ class BookService {
         return title.components(separatedBy: invalidChars).joined(separator: "-")
     }
     
-    private func formatDate(_ date: Date) -> String {
+    private func formatDate(_ date: Date?) -> String {
+        guard let date else { return "未知时间" }
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd HH:mm"
         return formatter.string(from: date)

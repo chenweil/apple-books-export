@@ -21,6 +21,7 @@ final class BookDetailView: NSView, NSTableViewDataSource, NSTableViewDelegate {
 
     private var book: Book?
     private var allAnnotations: [Annotation] = []
+    private var annotationDetailsLoaded = false
     private var filter: AnnotationFilter = .all
 
     /// 当前展示的(已按类型筛选的)笔记。导出与复制都以它为准 —— 所见即所导。
@@ -35,6 +36,10 @@ final class BookDetailView: NSView, NSTableViewDataSource, NSTableViewDelegate {
 
     func setAnnotations(_ annotations: [Annotation]) {
         allAnnotations = annotations
+        annotationDetailsLoaded = true
+        if let book {
+            updateFilterTitles(for: book)
+        }
         applyFilter()
     }
 
@@ -145,6 +150,7 @@ final class BookDetailView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         updateFilterTitles(for: book)
 
         allAnnotations = []
+        annotationDetailsLoaded = false
         tableView.deselectAll(nil)
         annotations = []
         statusLabel.stringValue = "正在读取笔记…"
@@ -152,9 +158,29 @@ final class BookDetailView: NSView, NSTableViewDataSource, NSTableViewDelegate {
 
     private func updateFilterTitles(for book: Book) {
         for (index, option) in AnnotationFilter.ordered.enumerated() {
-            typeFilter.setLabel(option.title(for: book), forSegment: index)
+            let count = annotationCount(for: option, book: book)
+            typeFilter.setLabel(title(for: option, count: count), forSegment: index)
             // 计数为 0 的分段点进去必然是空列表,置灰而不是留个死路。
-            typeFilter.setEnabled(option.count(in: book) > 0, forSegment: index)
+            typeFilter.setEnabled(count > 0, forSegment: index)
+        }
+    }
+
+    private func annotationCount(for option: AnnotationFilter, book: Book) -> Int {
+        guard annotationDetailsLoaded else { return option.count(in: book) }
+        switch option {
+        case .all:
+            return allAnnotations.count
+        case .type(let type):
+            return allAnnotations.count { $0.type == type }
+        }
+    }
+
+    private func title(for option: AnnotationFilter, count: Int) -> String {
+        switch option {
+        case .all:
+            return "全部 \(count)"
+        case .type(let type):
+            return "\(type.shortName) \(count)"
         }
     }
 
@@ -166,7 +192,9 @@ final class BookDetailView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     }
 
     func setError(_ error: Error) {
-        statusLabel.stringValue = "读取失败：\(error.localizedDescription)"
+        let description = (error as? RustCLIError)?.userFacingDescription
+            ?? error.localizedDescription
+        statusLabel.stringValue = "读取失败：\(description)"
     }
 
     func setExporting(_ exporting: Bool) {

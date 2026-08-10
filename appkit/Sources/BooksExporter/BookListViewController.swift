@@ -58,6 +58,11 @@ final class BookListViewController: NSViewController {
                    !hasShownPermissionAlert {
                     hasShownPermissionAlert = true
                     retry = presentFullDiskAccessAlertIfNeeded(for: window)
+                } else if let rustError = error as? RustCLIError,
+                          rustError.stableCode == "FULL_DISK_ACCESS_REQUIRED",
+                          !hasShownPermissionAlert {
+                    hasShownPermissionAlert = true
+                    retry = presentFullDiskAccessAlertIfNeeded(for: window)
                 } else {
                     retry = false
                 }

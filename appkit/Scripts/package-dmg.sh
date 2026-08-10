@@ -16,6 +16,7 @@ APP_NAME="Books Exporter.app"
 DMG_NAME="Books-Exporter-${APP_VERSION}-unsigned.dmg"
 DIST_DIR="${DIST_DIR:-$REPO_DIR/dist}"
 UPDATE_MANIFEST_NAME="latest.json"
+RUST_CLI_BIN="${RUST_CLI_BIN:-$REPO_DIR/target/release/apple-books-exporter}"
 
 BIN_DIR="$(swift build -c "$CONFIG" --show-bin-path)"
 BIN_PATH="$BIN_DIR/BooksExporter"
@@ -29,6 +30,11 @@ if [[ ! -d "$RESOURCE_BUNDLE" ]]; then
     echo "error: Share Card resource bundle not found: $RESOURCE_BUNDLE" >&2
     exit 1
 fi
+if [[ ! -x "$RUST_CLI_BIN" ]]; then
+    echo "error: Rust CLI binary not found or not executable: $RUST_CLI_BIN" >&2
+    echo "Build it with 'cargo build --release' from the Rust mainline, or set RUST_CLI_BIN to a native binary." >&2
+    exit 1
+fi
 
 STAGING_DIR="$(mktemp -d "${TMPDIR:-/tmp}/books-exporter-dmg.XXXXXX")"
 trap 'rm -rf "$STAGING_DIR"' EXIT
@@ -37,12 +43,14 @@ APP_DIR="$STAGING_DIR/$APP_NAME"
 mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
 cp "$BIN_PATH" "$APP_DIR/Contents/MacOS/BooksExporter"
 cp -R "$RESOURCE_BUNDLE" "$APP_DIR/Contents/"
+cp "$RUST_CLI_BIN" "$APP_DIR/Contents/Resources/apple-books-exporter"
 cp "$APPKIT_DIR/Resources/Info.plist" "$APP_DIR/Contents/Info.plist"
 cp "$APPKIT_DIR/Resources/AppIcon.icns" "$APP_DIR/Contents/Resources/AppIcon.icns"
 
 plutil -replace CFBundleShortVersionString -string "$APP_VERSION" "$APP_DIR/Contents/Info.plist"
 plutil -replace CFBundleVersion -string "$BUILD_VERSION" "$APP_DIR/Contents/Info.plist"
 chmod +x "$APP_DIR/Contents/MacOS/BooksExporter"
+chmod +x "$APP_DIR/Contents/Resources/apple-books-exporter"
 
 # Intentionally unsigned: no Developer ID signing or notarization is performed.
 ln -s /Applications "$STAGING_DIR/Applications"

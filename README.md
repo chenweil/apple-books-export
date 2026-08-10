@@ -14,18 +14,28 @@ DMG 未签名、未 notarization，仅适合本机安装验证。
 ## 系统要求
 
 - macOS 14.0+
-- Swift 5.5+(用于 `import SQLite3` 模块化)
+- Swift 5.9+
+- Rust stable toolchain(用于构建随 AppKit 打包的 canonical CLI binary)
 - Full Disk Access 权限(读取 Apple Books 数据库)
 
 ## 构建与运行
 
 ```bash
-cd appkit
-swift build               # 编译
-swift test                # Share Card、数据库并发/WAL 与设置偏好回归测试
-swift run BooksExporter   # 运行(会自动激活窗口)
+# 在 Rust mainline checkout 中构建 canonical Rust CLI
+cd /path/to/rust-mainline
+cargo build --release
+cd /path/to/books-exporter/appkit
+swift build               # 编译 AppKit
+swift test                # 协议桥接、Share Card 与回归测试
+APPLE_BOOKS_EXPORTER_BIN="/path/to/rust-mainline/target/release/apple-books-exporter" \
+  swift run BooksExporter # 运行(会自动激活窗口)
 ./Scripts/verify-ui.sh    # UI 回归验证
 ```
+
+AppKit 的书籍列表、标注详情和整本书 Markdown 导出都通过 Rust CLI 的 machine JSON
+协议完成。应用优先使用 `APPLE_BOOKS_EXPORTER_BIN`，打包后使用
+`Contents/Resources/apple-books-exporter`；不会自动下载 binary。当前筛选导出仍保留
+AppKit 本地 Markdown fallback，因为首期 Rust export 协议只接受整本书的 `asset_id`。
 
 或用 Xcode 打开 `appkit/Package.swift` 后按 Run。
 
@@ -37,6 +47,14 @@ swift run BooksExporter   # 运行(会自动激活窗口)
 cd appkit
 chmod +x Scripts/package-dmg.sh
 ./Scripts/package-dmg.sh
+```
+
+打包脚本默认读取仓库 Rust release binary
+`target/release/apple-books-exporter`；如果 binary 在另一个 Rust mainline checkout，显式传入：
+
+```bash
+RUST_CLI_BIN=/path/to/rust-mainline/target/release/apple-books-exporter \
+  ./Scripts/package-dmg.sh
 ```
 
 默认产物位于仓库根目录的 `dist/Books-Exporter-0.1.8-unsigned.dmg`，同时会生成供 Version Discovery 使用的 `dist/latest.json`。发布 stable 版本时，将这两个文件一起上传到对应的 GitHub Release。
@@ -82,7 +100,7 @@ appkit/
     ├── BookListSorter.swift            # 排序(纯函数)
     ├── BookColumn.swift                # 列标识
     ├── Models/                # Book / Annotation / AnnotationType
-    ├── Services/              # AppSettings / DatabaseService / BookService / ShareCardService / UpdateChecker
+    ├── Services/              # AppSettings / DatabaseService(迁移) / RustCLIClient / BookService / ShareCardService / UpdateChecker
     │   └── ShareCardService.swift # 生成、分页、PNG 导出的公共 seam
     ├── Resources/share-card-backgrounds/ # 十二个本地主题背景
     ├── Resources/fonts/       # Share Card 字体与对应许可证

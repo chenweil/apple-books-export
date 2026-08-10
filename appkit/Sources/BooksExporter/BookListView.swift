@@ -67,7 +67,9 @@ final class BookListView: NSView, NSTableViewDataSource, NSTableViewDelegate, NS
     }
 
     func setError(_ error: Error) {
-        statusLabel.stringValue = "读取失败：\(error.localizedDescription)"
+        let description = (error as? RustCLIError)?.userFacingDescription
+            ?? error.localizedDescription
+        statusLabel.stringValue = "读取失败：\(description)"
     }
 
     func setBooks(_ books: [Book]) {

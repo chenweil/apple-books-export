@@ -7,7 +7,7 @@ public struct Annotation: Identifiable, Codable, Hashable {
     public let locationInfo: String
     public let contentText: String?
     public let noteText: String?
-    public let createdAt: Date
+    public let createdAt: Date?
 
     public init(
         id: String,
@@ -16,7 +16,7 @@ public struct Annotation: Identifiable, Codable, Hashable {
         locationInfo: String,
         contentText: String?,
         noteText: String?,
-        createdAt: Date
+        createdAt: Date?
     ) {
         self.id = id
         self.type = type
