@@ -14,7 +14,7 @@ Headless Mainline、Rust machine protocol、TUI、Agent Data Skill 和 AppKit bu
 Rust CLI bridge 的本机证据已经完成。仍有两类不能由本次本机自动验证替代的事项：
 
 1. 实际撤销 Full Disk Access 后的 AppKit 负向 smoke；
-2. x86_64 AppKit/Rust 打包与运行产物，以及正式签名/notarization。
+2. x86_64 AppKit/Rust 在 Intel/CI 上的运行产物，以及正式签名/notarization。
 
 在这些事项关闭前，保留 `src-tauri/`，不要合并 `appkit`，不要删除 Tauri。
 
@@ -31,7 +31,7 @@ Rust CLI bridge 的本机证据已经完成。仍有两类不能由本次本机�
 | AppKit 真实数据正向 smoke | ✅ 通过（间接） | Rust canonical binary 已通过真实 list/annotations/export/doctor；挂载 DMG 的 AppKit 启动未输出用户数据。未把用户书名、正文或路径写入日志。 |
 | Full Disk Access 负向 smoke | ⏳ 待人工（模拟已通过） | Rust fixture/integration、TUI 和 AppKit stable-error tests 已覆盖 `FULL_DISK_ACCESS_REQUIRED`；使用 macOS `sandbox-exec` 对 Apple Books 容器做只读拒绝模拟，真实 CLI exit=1 且 stderr code=`FULL_DISK_ACCESS_REQUIRED`。本次没有自动修改系统隐私权限，因此尚未证明真实 TCC 拒权时 AppKit 弹出引导并可重试。 |
 | arm64 packaging | ✅ 通过（unsigned/local） | unsigned DMG 已生成、挂载成功，`Contents/Resources/apple-books-exporter` 存在且可执行；包内 binary `--help` exit=0。 |
-| x86_64 packaging | ⚠️ 交叉编译通过，打包待 CI/人工 | `cargo build --release --target x86_64-apple-darwin` 通过，`file` 确认为 Mach-O x86_64；在 `origin/appkit@9623496` 临时 worktree 执行 `swift build -c release --triple x86_64-apple-macosx14.0` 通过，AppKit executable 亦确认为 Mach-O x86_64。当前本机为 arm64，尚未用 Intel/CI 运行正式 DMG pipeline，也未证明包内两者可在 x86_64 macOS 启动。 |
+| x86_64 packaging | ⚠️ 本机交叉打包通过，运行待 CI/人工 | `cargo build --release --target x86_64-apple-darwin` 通过，`file` 确认为 Mach-O x86_64；在 `origin/appkit@9623496` 临时 worktree 以 `--triple x86_64-apple-macosx14.0` 构建 AppKit，并用临时 Swift wrapper 驱动现有 `package-dmg.sh`；挂载 DMG 后 AppKit executable 与 bundled Rust binary 均确认为 Mach-O x86_64。当前本机为 arm64，尚未在 Intel/CI 上启动该包。 |
 | 签名与 notarization | ⏳ 待发布流程 | 当前验证的是 unsigned/local DMG；没有 Developer ID、notarization、干净机器安装和 Gatekeeper 证据。 |
 | capability-gap decision | ✅ 已接受 | [`ADR 0006`](../adr/0006-appkit-initial-capability-boundary.md) 明确：AppKit 保留 Share Card；`enrich`、Rust `card`、`cache`、`config` 继续由 Rust CLI/Skill 提供；当前筛选导出 fallback 是已文档化的迁移期边界，后续如需统一另立协议 ticket。 |
 
