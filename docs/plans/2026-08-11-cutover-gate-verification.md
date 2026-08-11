@@ -2,7 +2,7 @@
 
 - 日期：2026-08-11
 - 关联：[`CONTEXT.md`](../../CONTEXT.md)、[`ADR 0005`](../adr/0005-headless-mainline-appkit-cutover.md)、[`Headless Mainline + AppKit Cutover Spec`](2026-08-07-headless-mainline-appkit-cutover-spec.md)
-- `main`：`a811b29`（与 `origin/main` 同步）
+- `main` Headless Mainline 基线：`a811b29`（本验收记录随后提交到 `main`）
 - `appkit`：`9623496`（与 `origin/appkit` 同步）
 - 本记录范围：本机 arm64 macOS、当前 Apple Books 数据源、fixture/contract、unsigned 本地 AppKit 包
 
@@ -11,11 +11,10 @@
 **Cutover Gate 当前为条件通过，尚不能执行最终合并和删除 Tauri。**
 
 Headless Mainline、Rust machine protocol、TUI、Agent Data Skill 和 AppKit bundled
-Rust CLI bridge 的本机证据已经完成。仍有三类不能由本次本机自动验证替代的事项：
+Rust CLI bridge 的本机证据已经完成。仍有两类不能由本次本机自动验证替代的事项：
 
 1. 实际撤销 Full Disk Access 后的 AppKit 负向 smoke；
-2. x86_64 AppKit/Rust 产物以及正式签名/notarization；
-3. 对 AppKit 当前筛选导出 fallback 和高级 Rust 能力缺口的最终发布决策。
+2. x86_64 AppKit/Rust 产物以及正式签名/notarization。
 
 在这些事项关闭前，保留 `src-tauri/`，不要合并 `appkit`，不要删除 Tauri。
 
@@ -30,11 +29,11 @@ Rust CLI bridge 的本机证据已经完成。仍有三类不能由本次本机�
 | Agent Data Skill | ✅ 通过（仓库副本） | `skills/apple-books-export-rust/tests/contract.sh` 通过；validator 解析当前 release binary 并通过 Mach-O/arm64/`--help` 校验；真实 list/annotations/export 走相同 machine protocol 并完成非空 Markdown 检查。未把安装到用户目录的副本当作额外生产证据。 |
 | AppKit Rust bridge | ✅ 通过（本机 arm64） | 对 `origin/appkit@9623496` 建临时 worktree：`swift test` 47 项通过、release build、`verify-ui.sh`、DMG 打包和包内 CLI `--help` 均通过；从挂载的 DMG 直接启动 AppKit，3 秒后以 SIGTERM 结束，证明 bundled resource 可解析。AppKit 的 stdout/stderr/exit code、schema、stable error 和权限提示有 seam tests。 |
 | AppKit 真实数据正向 smoke | ✅ 通过（间接） | Rust canonical binary 已通过真实 list/annotations/export/doctor；挂载 DMG 的 AppKit 启动未输出用户数据。未把用户书名、正文或路径写入日志。 |
-| Full Disk Access 负向 smoke | ⏳ 待人工 | Rust fixture/integration、TUI 和 AppKit stable-error tests 已覆盖 `FULL_DISK_ACCESS_REQUIRED`；本次没有自动修改系统隐私权限，因此尚未证明“真实 AppKit 在被拒权时弹出引导并可重试”。 |
+| Full Disk Access 负向 smoke | ⏳ 待人工（模拟已通过） | Rust fixture/integration、TUI 和 AppKit stable-error tests 已覆盖 `FULL_DISK_ACCESS_REQUIRED`；使用 macOS `sandbox-exec` 对 Apple Books 容器做只读拒绝模拟，真实 CLI exit=1 且 stderr code=`FULL_DISK_ACCESS_REQUIRED`。本次没有自动修改系统隐私权限，因此尚未证明真实 TCC 拒权时 AppKit 弹出引导并可重试。 |
 | arm64 packaging | ✅ 通过（unsigned/local） | unsigned DMG 已生成、挂载成功，`Contents/Resources/apple-books-exporter` 存在且可执行；包内 binary `--help` exit=0。 |
 | x86_64 packaging | ⏳ 待 CI/人工 | 当前本机为 arm64，仅确认 release workflow 声明 `aarch64-apple-darwin` 与 `x86_64-apple-darwin` CLI 构建矩阵；没有本机 x86_64 AppKit + bundled binary 产物证据。 |
 | 签名与 notarization | ⏳ 待发布流程 | 当前验证的是 unsigned/local DMG；没有 Developer ID、notarization、干净机器安装和 Gatekeeper 证据。 |
-| capability-gap decision | ⚠️ 已记录，需最终确认 | AppKit 首期保留 Share Card；`enrich`、Rust `card`、`cache`、`config` 继续由 Rust CLI/Skill 提供，不阻塞首期 GUI；当前筛选导出因 Rust export contract 只接受整本 `asset_id`，仍使用 AppKit 本地 Markdown fallback，这个边界需在正式合并前明确接受或另立 ticket。 |
+| capability-gap decision | ✅ 已接受 | [`ADR 0006`](../adr/0006-appkit-initial-capability-boundary.md) 明确：AppKit 保留 Share Card；`enrich`、Rust `card`、`cache`、`config` 继续由 Rust CLI/Skill 提供；当前筛选导出 fallback 是已文档化的迁移期边界，后续如需统一另立协议 ticket。 |
 
 ## 关闭条件
 
@@ -49,21 +48,15 @@ Rust CLI bridge 的本机证据已经完成。仍有三类不能由本次本机�
 
 不要为了本清单修改当前用户生产环境的隐私权限；应记录为真实 macOS smoke，而不是把 fixture 当作等价证据。
 
+本次 `sandbox-exec` 结果只证明 OS-level denied read 会保留稳定错误码，不等价于
+Full Disk Access/TCC 的真实负向验证。
+
 ### 2. Release architecture and trust
 
 - 在 CI 或对应 Intel Mac 构建并验证 x86_64 Rust binary；
 - 对 AppKit 和 bundled binary 分别执行目标架构检查；
 - 使用 Developer ID 签名、notarize、安装并验证 Gatekeeper；
 - 将产物、架构、签名和 notarization 结果写入发布证据。
-
-### 3. Capability sign-off
-
-在合并前明确接受以下首期边界：
-
-- AppKit 的 canonical 数据读取和整本 Markdown export 走 Rust CLI；
-- Share Card 继续是 AppKit 本地能力；
-- AI enrich、Rust card、cache、config 不复制到 AppKit；
-- 筛选导出 fallback 是暂时兼容路径，后续是否扩展 Rust selection export 另立需求。
 
 ## 允许的下一步
 
