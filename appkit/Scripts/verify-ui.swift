@@ -465,6 +465,22 @@ enum VerifyLayout {
               abs(firstButtonFrame.midY - firstCell.bounds.midY) <= 1
                   && abs(secondButtonFrame.midY - secondCell.bounds.midY) <= 1,
               "long.midY=\(firstButtonFrame.midY)/\(firstCell.bounds.midY) short.midY=\(secondButtonFrame.midY)/\(secondCell.bounds.midY)")
+
+        // 筛选会重新加载 rows；选中态必须按 Annotation identity 处理，
+        // 不能把原来选中的高亮按旧 row index 误投射到新的列表首行。
+        guard let filterControl = firstSegmentedControl(in: detail) else {
+            check("筛选移除已选标注后清除 Card Entry", false, "找不到类型筛选控件")
+            return
+        }
+        table.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+        detail.tableViewSelectionDidChange(Notification(name: NSTableView.selectionDidChangeNotification))
+        select(segment: 2, in: filterControl)
+        table.layoutSubtreeIfNeeded()
+        let filteredCell = table.view(atColumn: 0, row: 0, makeIfNecessary: true)
+        let filteredButton = filteredCell.flatMap { view(named: "share-card-entry", in: $0) as? NSButton }
+        check("筛选移除已选标注后清除 Card Entry",
+              table.selectedRow == -1 && (filteredButton?.isHidden ?? false),
+              "selectedRow=\(table.selectedRow) buttonHidden=\(filteredButton?.isHidden ?? false)")
     }
 
     private static func checkShareCardAlternativeLayout() {
@@ -786,6 +802,20 @@ enum VerifyLayout {
               "字号=\(fontSize.itemTitles)")
         check("复制菜单提供全部页面", copyMenu.itemTitles == ["复制全部页面"],
               "菜单=\(copyMenu.itemTitles)")
+
+        guard let textView = firstTextView(in: editor.view),
+              let textScrollView = scrollViews(in: editor.view).first(where: { $0.documentView === textView }) else {
+            check("正文编辑区配置为受边界的垂直滚动", false, "找不到 NSTextView 或其 NSScrollView")
+            return
+        }
+        check("正文编辑区配置为受边界的垂直滚动",
+              textScrollView.hasVerticalScroller
+                  && !textScrollView.hasHorizontalScroller
+                  && textScrollView.autohidesScrollers
+                  && textView.isVerticallyResizable
+                  && !textView.isHorizontallyResizable
+                  && textView.textContainer?.widthTracksTextView == true,
+              "vertical=\(textScrollView.hasVerticalScroller) horizontal=\(textScrollView.hasHorizontalScroller) autohide=\(textScrollView.autohidesScrollers) verticalResize=\(textView.isVerticallyResizable) horizontalResize=\(textView.isHorizontallyResizable) widthTracks=\(textView.textContainer?.widthTracksTextView ?? false)")
 
         sizeMode.selectItem(at: 1)
         invoke(sizeMode)

@@ -127,11 +127,17 @@ final class ShareCardEditorViewController: NSViewController, NSTextViewDelegate 
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
         textView.autoresizingMask = [.width]
+        textView.textContainer?.containerSize = NSSize(
+            width: CGFloat.greatestFiniteMagnitude,
+            height: CGFloat.greatestFiniteMagnitude
+        )
         textView.textContainer?.widthTracksTextView = true
 
         textScrollView.translatesAutoresizingMaskIntoConstraints = false
         textScrollView.documentView = textView
         textScrollView.hasVerticalScroller = true
+        textScrollView.hasHorizontalScroller = false
+        textScrollView.autohidesScrollers = true
         textScrollView.borderType = .bezelBorder
 
         noteCheckbox.target = self
