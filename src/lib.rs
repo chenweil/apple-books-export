@@ -11,6 +11,7 @@ pub mod machine;
 pub mod models;
 pub mod prompt;
 pub mod provider;
+pub mod speech;
 pub mod utils;
 
 pub use cache::LLMCache;

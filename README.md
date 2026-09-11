@@ -128,6 +128,36 @@ apple-books-exporter card 1 --all
 apple-books-exporter card 1 --all --style dark  # dark/light/minimal
 ```
 
+### 语音 Voice Profile
+
+管理全局 Voice Profile。所有命令都是纯本地操作：不联网，不读写 Apple Books 数据。
+
+```bash
+# 查看当前 Voice Profile
+apple-books-exporter speech profile show
+
+# 设置（--voice-id 必填，精确匹配音色 ID）
+apple-books-exporter speech profile set --voice-id male_0004_a --speed 1.0 --volume 1.0 --pitch 0
+
+# 恢复默认值（默认音色 male_0004_a，speed 1.0，volume 1.0，pitch 0，MP3/32000Hz）
+apple-books-exporter speech profile reset
+
+# 机器可读 JSON（成功只写 stdout，失败只写 stderr）
+apple-books-exporter speech profile show --json
+```
+
+- 配置文件位于 `~/Library/Application Support/books-exporter/speech/config.json`，与当前
+  工作目录、`--config` 和导出目录无关；
+- 该文件**只保存非秘密配置**和 API Key 的**环境变量名**（默认 `SENSEAUDIO_API_KEY`）。
+  密钥值只从环境变量读取，永远不落盘；
+- `speed` 取值 `0.5`–`2.0`，`volume` 取值 `0.01`–`10.0`，两者最多两位小数且不做四舍五入；
+  `pitch` 为 `-12`–`12` 的整数。非法、非有限、需要舍入或越界的值都返回稳定错误
+  `SPEECH_PROFILE_INVALID`（JSON 模式下带 `details.field` / `details.reason`）；
+- 无法核对当前 Voice Catalog 时，会保存为 Unverified Voice Profile
+  （`verification_status: "unverified"`）并返回结构化 warning
+  （`no_catalog` / `stale_catalog` / `other_provider`）。Unverified 只表示本地配置合法，
+  **不代表**当前账号可用，也不能授权语音生成。
+
 ## AI Agent Skill
 
 本项目提供 skill，支持 AI 助手直接调用。

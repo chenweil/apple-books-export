@@ -1,5 +1,9 @@
 //! Apple Books Exporter - CLI Entry Point
 
+use apple_books_exporter::speech::{
+    self, machine as speech_machine, NoCatalogSource, ProfileDraft, ProfileOutcome, SpeechError,
+    SpeechStore, SpeechStoreError,
+};
 use apple_books_exporter::{
     build_enrich_prompt, generate_card, load_config, parse_llm_result, sanitize_filename,
     save_config, Annotation, AnnotationResponse, BookListResponse, CardStyle, DoctorResponse,
@@ -138,6 +142,12 @@ enum Commands {
         book: usize,
     },
 
+    /// 语音功能（Voice Profile）
+    Speech {
+        #[command(subcommand)]
+        command: SpeechCommands,
+    },
+
     /// 配置 LLM 和输出选项
     Config {
         /// LLM Base URL
@@ -155,6 +165,77 @@ enum Commands {
         /// Provider name
         #[arg(long)]
         provider: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum SpeechCommands {
+    /// 管理全局 Voice Profile
+    Profile {
+        #[command(subcommand)]
+        command: SpeechProfileCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum SpeechProfileCommands {
+    /// 显示全局 Voice Profile（不联网，不写文件）
+    Show {
+        /// 以稳定的机器可读 JSON 输出
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// 设置全局 Voice Profile（本地校验，不联网）
+    Set {
+        /// Speech Provider（首版只支持 senseaudio）
+        #[arg(long)]
+        provider: Option<String>,
+
+        /// 模型名
+        #[arg(long)]
+        model: Option<String>,
+
+        /// 具体音色 ID（必填，精确匹配，不做模糊匹配）
+        #[arg(long)]
+        voice_id: Option<String>,
+
+        /// 情感展示标签（provider 拥有，不进入供应商请求）
+        #[arg(long)]
+        emotion_label: Option<String>,
+
+        /// 风格展示标签（provider 拥有，不进入供应商请求）
+        #[arg(long)]
+        style_label: Option<String>,
+
+        /// 语速，0.5-2.0，最多两位小数
+        // allow_hyphen_values 让负值和非法前缀进入本地校验，得到稳定结构化错误，
+        // 而不是被 clap 当成未知 flag。
+        #[arg(long, allow_hyphen_values = true)]
+        speed: Option<String>,
+
+        /// 音量，0.01-10.0，最多两位小数
+        #[arg(long, allow_hyphen_values = true)]
+        volume: Option<String>,
+
+        /// 声调，-12 到 12 的整数
+        #[arg(long, allow_hyphen_values = true)]
+        pitch: Option<String>,
+
+        /// API Key 环境变量名（只保存名字，不保存密钥）
+        #[arg(long)]
+        api_key_env: Option<String>,
+
+        /// 以稳定的机器可读 JSON 输出
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// 恢复默认全局 Voice Profile（不联网）
+    Reset {
+        /// 以稳定的机器可读 JSON 输出
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -239,6 +320,7 @@ async fn main() {
             output,
         } => cmd_card(&cli.config, book, single_index, all, &style, output),
         Commands::Cache { book } => cmd_cache(&cli.config, book),
+        Commands::Speech { command } => cmd_speech(command),
         Commands::Config {
             base_url,
             api_key,
@@ -266,6 +348,167 @@ fn finish_machine(result: Result<String, MachineError>) {
             }
             std::process::exit(1);
         }
+    }
+}
+
+fn cmd_speech(command: SpeechCommands) -> anyhow::Result<()> {
+    match command {
+        SpeechCommands::Profile { command } => match command {
+            SpeechProfileCommands::Show { json: true } => {
+                finish_machine(speech_profile_show_json());
+                Ok(())
+            }
+            SpeechProfileCommands::Show { json: false } => cmd_speech_profile_show(),
+            SpeechProfileCommands::Set {
+                provider,
+                model,
+                voice_id,
+                emotion_label,
+                style_label,
+                speed,
+                volume,
+                pitch,
+                api_key_env,
+                json,
+            } => {
+                let draft = ProfileDraft {
+                    provider,
+                    model,
+                    voice_id,
+                    emotion_label,
+                    style_label,
+                    speed,
+                    volume,
+                    pitch,
+                    api_key_env,
+                };
+                if json {
+                    finish_machine(speech_profile_set_json(draft));
+                    Ok(())
+                } else {
+                    cmd_speech_profile_set(draft)
+                }
+            }
+            SpeechProfileCommands::Reset { json: true } => {
+                finish_machine(speech_profile_reset_json());
+                Ok(())
+            }
+            SpeechProfileCommands::Reset { json: false } => cmd_speech_profile_reset(),
+        },
+    }
+}
+
+/// Speech 状态根只由用户主目录推导，不跟随当前工作目录、`--config` 或导出目录。
+fn speech_store() -> Result<SpeechStore, SpeechError> {
+    let home = apple_books_exporter::home_dir().ok_or(SpeechError::Storage(
+        SpeechStoreError::Unavailable {
+            path: std::path::PathBuf::from("~"),
+            message: "the user home directory is not available".to_string(),
+        },
+    ))?;
+    Ok(SpeechStore::from_home(&home))
+}
+
+fn speech_profile_show_json() -> Result<String, MachineError> {
+    let store = speech_store().map_err(|error| speech_machine::error_response(&error))?;
+    let outcome = speech::show_profile(&store).map_err(|error| speech_machine::error_response(&error))?;
+    serialize_profile_outcome(&outcome)
+}
+
+fn speech_profile_set_json(draft: ProfileDraft) -> Result<String, MachineError> {
+    let store = speech_store().map_err(|error| speech_machine::error_response(&error))?;
+    // profile 命令不联网：这一版没有可用的目录来源，因此结果必然是 unverified，
+    // 并带着稳定的 warning 原因。
+    let outcome = speech::set_profile(&store, &draft, &NoCatalogSource, chrono::Utc::now())
+        .map_err(|error| speech_machine::error_response(&error))?;
+    serialize_profile_outcome(&outcome)
+}
+
+fn speech_profile_reset_json() -> Result<String, MachineError> {
+    let store = speech_store().map_err(|error| speech_machine::error_response(&error))?;
+    let outcome = speech::reset_profile(&store).map_err(|error| speech_machine::error_response(&error))?;
+    serialize_profile_outcome(&outcome)
+}
+
+fn serialize_profile_outcome(outcome: &ProfileOutcome) -> Result<String, MachineError> {
+    serde_json::to_string(&outcome.to_machine_response())
+        .map_err(|error| MachineError::protocol_serialization_failed(error.to_string()))
+}
+
+fn cmd_speech_profile_show() -> anyhow::Result<()> {
+    let outcome = speech::show_profile(&speech_store().map_err(speech_error)?).map_err(speech_error)?;
+    print_profile_outcome("Voice Profile", &outcome);
+    Ok(())
+}
+
+fn cmd_speech_profile_set(draft: ProfileDraft) -> anyhow::Result<()> {
+    let outcome = speech::set_profile(
+        &speech_store().map_err(speech_error)?,
+        &draft,
+        &NoCatalogSource,
+        chrono::Utc::now(),
+    )
+    .map_err(speech_error)?;
+    print_profile_outcome("Voice Profile 已保存", &outcome);
+    Ok(())
+}
+
+fn cmd_speech_profile_reset() -> anyhow::Result<()> {
+    let outcome =
+        speech::reset_profile(&speech_store().map_err(speech_error)?).map_err(speech_error)?;
+    print_profile_outcome("Voice Profile 已恢复默认值", &outcome);
+    Ok(())
+}
+
+fn speech_error(error: SpeechError) -> anyhow::Error {
+    match error {
+        SpeechError::Storage(SpeechStoreError::Unavailable { path, message }) => anyhow::anyhow!(
+            "Speech 状态目录不可用（{}）：{message}",
+            path.display()
+        ),
+        SpeechError::Storage(SpeechStoreError::InvalidConfig(profile_error)) => {
+            anyhow::anyhow!("语音配置无效：{}", profile_error.message())
+        }
+        SpeechError::Storage(SpeechStoreError::UnsupportedSchemaVersion(version)) => {
+            anyhow::anyhow!("不支持的语音配置 schema 版本：{version}")
+        }
+        SpeechError::Profile(profile_error) => anyhow::anyhow!("{}", profile_error.message()),
+        SpeechError::VoiceUnavailable { provider, voice_id } => anyhow::anyhow!(
+            "voice '{voice_id}' 对 Speech Provider '{provider}' 不可用；请先刷新 Voice Catalog 后重新选择可用音色"
+        ),
+    }
+}
+
+/// 人类可读的 Profile 输出。只显示环境变量**名**，永远不显示密钥值。
+fn print_profile_outcome(verb: &str, outcome: &ProfileOutcome) {
+    let profile = &outcome.config.profile;
+    println!("{verb}");
+    println!("  Provider: {}", profile.provider);
+    println!("  Model: {}", profile.model);
+    println!("  Voice ID: {}", profile.voice_id);
+    println!(
+        "  Emotion: {}",
+        profile.emotion_label.as_deref().unwrap_or("-")
+    );
+    println!("  Style: {}", profile.style_label.as_deref().unwrap_or("-"));
+    println!("  Speed: {}", profile.speed);
+    println!("  Volume: {}", profile.volume);
+    println!("  Pitch: {}", profile.pitch);
+    println!(
+        "  Audio: {} {}Hz {}bps {}ch",
+        profile.audio.format, profile.audio.sample_rate, profile.audio.bitrate, profile.audio.channel
+    );
+    println!("  Verification: {}", profile.verification.status.as_str());
+    if let Some(verified_at) = profile.verification.verified_at.as_deref() {
+        println!("  Verified at: {verified_at}");
+    }
+    println!(
+        "  API Key: 来自环境变量 {}（不保存密钥）",
+        outcome.config.api_key_env
+    );
+    println!("  Config: {}", outcome.config_path.display());
+    for warning in &outcome.warnings {
+        println!("  Warning [{}]: {}", warning.reason, warning.message);
     }
 }
 

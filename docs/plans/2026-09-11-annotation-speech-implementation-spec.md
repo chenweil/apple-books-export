@@ -481,6 +481,35 @@ provider 成功但 MP3 校验或本地提交失败时，不允许普通 `generat
 不得根据当前工作目录、仓库路径或 `--config` 改变 Speech 根目录。测试通过显式注入的临时
 根目录隔离，不能写真实 Application Support。
 
+`config.json` 首版字段（issue #21 实现，`deny_unknown_fields`，未知字段视为损坏）：
+
+```json
+{
+  "schema_version": 1,
+  "api_key_env": "SENSEAUDIO_API_KEY",
+  "voice_profile": {
+    "provider": "senseaudio",
+    "model": "sensenova-tts-2.0",
+    "voice_id": "male_0004_a",
+    "emotion_label": null,
+    "style_label": null,
+    "speed_x100": 100,
+    "volume_x100": 100,
+    "pitch": 0,
+    "verification_status": "unverified",
+    "verified_at": null,
+    "audio": { "format": "mp3", "sample_rate": 32000, "bitrate": 128000, "channel": 2 }
+  }
+}
+```
+
+- `speed_x100` / `volume_x100` 是百分之一单位的整数，保证 `speed`/`volume` 精确往返，
+  不依赖浮点解析；JSON receipt 仍输出 `speed: 1.0` 这样的数值；
+- `api_key_env` 只保存环境变量名，密钥值永不落盘；
+- `verification_status=verified` 必须带 `verified_at`；`unverified` 不允许携带验证时间；
+- 其他 issue 新增顶层或 Profile 字段时必须同时更新本节，保持 schema 与 `deny_unknown_fields`
+  一致。
+
 ### 7.2 Clip state
 
 `state.json` 至少记录：
