@@ -4,6 +4,70 @@
 
 A reading record imported from Apple Books. An Annotation can contain a highlighted passage, a personal note, or both.
 
+## Speech Clip
+
+A generated reading of exactly one content part of an Annotation: either its highlighted passage or its personal note. Playing two Speech Clips in sequence does not turn them into one combined clip.
+
+## Voice Profile
+
+The reader's constrained choice of voice, supported emotion or style, speaking speed, volume, and other available speech controls. A Voice Profile must resolve to a combination the selected speech provider can actually produce.
+
+## Unverified Voice Profile
+
+A locally valid Voice Profile whose voice availability could not be checked against a current Voice Catalog. It may be saved for later but cannot authorize a Speech Attempt until generation-time validation succeeds.
+
+## Speech Provider
+
+An external service that turns selected Annotation content into a Speech Clip. Each Speech Provider owns its available voices and control vocabulary; the product does not promise that a Voice Profile is portable between providers.
+
+## Speech Text
+
+The exact highlighted passage or personal note chosen for a Speech Clip after line-ending and boundary-whitespace normalization. It remains ordinary content rather than provider control markup and is not automatically edited, translated, summarized, or paraphrased.
+
+## Voice Catalog
+
+The selected Speech Provider's current set of available voices and their supported emotion or style labels. A Voice Catalog constrains Voice Profiles for that provider; it is not a cross-provider vocabulary.
+
+## Speech Receipt
+
+The machine-readable record of a Speech Clip generation or export outcome. It identifies the source, resolved Voice Profile, cache behavior, audio artifact, and provider trace without repeating the Annotation text or embedding audio bytes.
+
+## Unknown Speech Result
+
+A speech generation attempt that may have reached the Speech Provider but did not return enough evidence to accept a Cached Speech Clip. It is neither a successful clip nor a safe signal for automatic retry.
+
+## Speech Attempt
+
+One request to a Speech Provider to generate a logical Speech Clip. Regenerating the same Speech Clip creates a new Speech Attempt without changing the clip's identity.
+
+## Speech Cache Entry
+
+The atomically accepted audio and metadata for one Cached Speech Clip. Partial, corrupt, or unverifiable files are not Speech Cache Entries.
+
+## Speech Cache Rehydration
+
+The local reconstruction of a Speech Cache Entry from a checksum-matching Exported Speech Clip. It does not contact a Speech Provider or create a Speech Attempt.
+
+## Speech Attempt History
+
+A time-bounded, metadata-only record of Speech Attempts used for billing and provider diagnosis. It excludes Annotation text, API keys, and audio bytes and has a lifecycle separate from the audio cache.
+
+## Cached Speech Clip
+
+A reusable local Speech Clip retained for preview and repeated playback. It remains application-managed and is not yet a user-owned exported file.
+
+## Exported Speech Clip
+
+A durable, user-owned copy created from a Cached Speech Clip for use outside the application, including linking from exported reading notes.
+
+## Active Exported Speech Clip
+
+The one Exported Speech Clip currently selected for a particular Annotation content part's generated note link. Older exported variants may remain user-owned files without being linked automatically.
+
+## Speech Export Manifest
+
+A provider-neutral record inside one exported book directory that identifies its Exported Speech Clips and the active clip for each Annotation content part. It uses relative paths so the exported book remains self-contained when moved.
+
 ## Share Card
 
 A fixed 3:4 visual representation of one Annotation. A short Annotation produces one Card Page; a long Annotation produces a Card Sequence whose pages can be previewed and exported together. Its primary content is the highlighted passage, while a personal note is optional supplementary content.
