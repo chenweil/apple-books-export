@@ -511,7 +511,13 @@ final class ShareCardServiceTests: XCTestCase {
         let renderedPages = try service.render(for: card)
         XCTAssertGreaterThanOrEqual(renderedPages.count, 3)
 
-        let pageColors: [NSColor] = [.systemRed, .systemBlue, .systemGreen]
+        // System colors vary by the active macOS color space; use calibrated
+        // fixtures so the page-scope assertions remain deterministic.
+        let pageColors: [NSColor] = [
+            NSColor(calibratedRed: 1, green: 0, blue: 0, alpha: 1),
+            NSColor(calibratedRed: 0, green: 0, blue: 1, alpha: 1),
+            NSColor(calibratedRed: 0, green: 1, blue: 0, alpha: 1)
+        ]
         let suppliedPages = Array(renderedPages.prefix(3)).enumerated().map { index, renderedPage in
             ShareCardRenderedPage(
                 page: renderedPage.page,
