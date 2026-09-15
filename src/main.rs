@@ -1,8 +1,9 @@
 //! Apple Books Exporter - CLI Entry Point
 
 use apple_books_exporter::speech::{
-    self, machine as speech_machine, NoCatalogSource, ProfileDraft, ProfileOutcome, SpeechError,
-    SpeechStore, SpeechStoreError,
+    self, machine as speech_machine, CachedVoiceCatalogSource, ProfileDraft, ProfileOutcome,
+    SpeechError, SpeechStore, SpeechStoreError, VoiceCatalogError, VoiceCatalogResponse,
+    SENSEAUDIO_PROVIDER,
 };
 use apple_books_exporter::{
     build_enrich_prompt, generate_card, load_config, parse_llm_result, sanitize_filename,
@@ -170,6 +171,17 @@ enum Commands {
 
 #[derive(Subcommand)]
 enum SpeechCommands {
+    /// 浏览并缓存当前账号可用的 SenseAudio Voice Catalog
+    Voices {
+        /// 忽略 24 小时缓存并显式刷新
+        #[arg(long)]
+        refresh: bool,
+
+        /// 以稳定的机器可读 JSON 输出
+        #[arg(long)]
+        json: bool,
+    },
+
     /// 管理全局 Voice Profile
     Profile {
         #[command(subcommand)]
@@ -320,7 +332,7 @@ async fn main() {
             output,
         } => cmd_card(&cli.config, book, single_index, all, &style, output),
         Commands::Cache { book } => cmd_cache(&cli.config, book),
-        Commands::Speech { command } => cmd_speech(command),
+        Commands::Speech { command } => cmd_speech(command).await,
         Commands::Config {
             base_url,
             api_key,
@@ -351,8 +363,16 @@ fn finish_machine(result: Result<String, MachineError>) {
     }
 }
 
-fn cmd_speech(command: SpeechCommands) -> anyhow::Result<()> {
+async fn cmd_speech(command: SpeechCommands) -> anyhow::Result<()> {
     match command {
+        SpeechCommands::Voices { refresh, json: true } => {
+            finish_machine(speech_voices_json(refresh).await);
+            Ok(())
+        }
+        SpeechCommands::Voices {
+            refresh,
+            json: false,
+        } => cmd_speech_voices(refresh).await,
         SpeechCommands::Profile { command } => match command {
             SpeechProfileCommands::Show { json: true } => {
                 finish_machine(speech_profile_show_json());
@@ -417,9 +437,10 @@ fn speech_profile_show_json() -> Result<String, MachineError> {
 
 fn speech_profile_set_json(draft: ProfileDraft) -> Result<String, MachineError> {
     let store = speech_store().map_err(|error| speech_machine::error_response(&error))?;
-    // profile 命令不联网：这一版没有可用的目录来源，因此结果必然是 unverified，
-    // 并带着稳定的 warning 原因。
-    let outcome = speech::set_profile(&store, &draft, &NoCatalogSource, chrono::Utc::now())
+    // Profile only reads the cache-backed source; it never refreshes or makes
+    // an implicit provider request.
+    let source = CachedVoiceCatalogSource::new(store.clone());
+    let outcome = speech::set_profile(&store, &draft, &source, chrono::Utc::now())
         .map_err(|error| speech_machine::error_response(&error))?;
     serialize_profile_outcome(&outcome)
 }
@@ -442,15 +463,52 @@ fn cmd_speech_profile_show() -> anyhow::Result<()> {
 }
 
 fn cmd_speech_profile_set(draft: ProfileDraft) -> anyhow::Result<()> {
+    let store = speech_store().map_err(speech_error)?;
+    let source = CachedVoiceCatalogSource::new(store.clone());
     let outcome = speech::set_profile(
-        &speech_store().map_err(speech_error)?,
+        &store,
         &draft,
-        &NoCatalogSource,
+        &source,
         chrono::Utc::now(),
     )
     .map_err(speech_error)?;
     print_profile_outcome("Voice Profile 已保存", &outcome);
     Ok(())
+}
+
+async fn speech_voices_json(refresh: bool) -> Result<String, MachineError> {
+    let outcome = load_speech_voice_catalog(refresh)
+        .await
+        .map_err(|error| speech_machine::error_response(&error))?;
+    serde_json::to_string(&VoiceCatalogResponse::new(&outcome))
+        .map_err(|error| MachineError::protocol_serialization_failed(error.to_string()))
+}
+
+async fn cmd_speech_voices(refresh: bool) -> anyhow::Result<()> {
+    let outcome = load_speech_voice_catalog(refresh)
+        .await
+        .map_err(speech_error)?;
+    print_voice_catalog(&outcome);
+    Ok(())
+}
+
+async fn load_speech_voice_catalog(
+    refresh: bool,
+) -> Result<speech::VoiceCatalogOutcome, SpeechError> {
+    let store = speech_store()?;
+    let config = store.load_config().map_err(SpeechError::Storage)?;
+    let client = speech::SenseAudioClient::from_environment(&config.api_key_env)
+        .map_err(|error| SpeechError::VoiceCatalog(VoiceCatalogError::Provider(error)))?;
+    let outcome = speech::load_or_refresh_voice_catalog(
+        &store,
+        SENSEAUDIO_PROVIDER,
+        chrono::Utc::now(),
+        refresh,
+        || client.fetch_catalog(),
+    )
+    .await
+    .map_err(SpeechError::VoiceCatalog)?;
+    Ok(outcome)
 }
 
 fn cmd_speech_profile_reset() -> anyhow::Result<()> {
@@ -473,9 +531,52 @@ fn speech_error(error: SpeechError) -> anyhow::Error {
             anyhow::anyhow!("不支持的语音配置 schema 版本：{version}")
         }
         SpeechError::Profile(profile_error) => anyhow::anyhow!("{}", profile_error.message()),
+        SpeechError::VoiceCatalog(error) => anyhow::anyhow!("{error}"),
         SpeechError::VoiceUnavailable { provider, voice_id } => anyhow::anyhow!(
             "voice '{voice_id}' 对 Speech Provider '{provider}' 不可用；请先刷新 Voice Catalog 后重新选择可用音色"
         ),
+    }
+}
+
+/// Human catalog output groups provider entries by their returned display name
+/// while retaining every concrete ID and provider-owned label.
+fn print_voice_catalog(outcome: &speech::VoiceCatalogOutcome) {
+    use std::collections::BTreeMap;
+
+    let catalog = &outcome.catalog;
+    println!(
+        "Voice Catalog ({}) — fetched at {}{}",
+        catalog.provider,
+        catalog
+            .fetched_at
+            .to_rfc3339(),
+        if outcome.stale { " [STALE]" } else { "" }
+    );
+
+    let mut groups: BTreeMap<&str, Vec<&speech::CatalogVoice>> = BTreeMap::new();
+    for voice in &catalog.voices {
+        groups
+            .entry(voice.voice_name.as_str())
+            .or_default()
+            .push(voice);
+    }
+    for (voice_name, voices) in groups {
+        println!("{voice_name}");
+        for voice in voices {
+            println!("  - [{}] {}", voice.source_type.as_str(), voice.voice_id);
+            if let Some(label) = voice.emotion_label.as_deref() {
+                println!("      Emotion: {label}");
+            }
+            if let Some(label) = voice.style_label.as_deref() {
+                println!("      Style: {label}");
+            }
+            if !voice.description.is_empty() {
+                println!("      Provider labels: {}", voice.description.join(", "));
+            }
+        }
+    }
+    for warning in &outcome.warnings {
+        println!("Warning [{}]: {}", warning.reason, warning.message);
     }
 }
 

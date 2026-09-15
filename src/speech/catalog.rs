@@ -1,19 +1,45 @@
-//! Voice Catalog seam 与 Voice Profile 可用性验证决策（issue #21 拥有）。
+//! Voice Catalog domain types 与 Voice Profile 可用性验证决策。
 //!
 //! 本模块只拥有「拿到的目录是否还新鲜」和「Profile 能不能被判定为 verified / unavailable」
-//! 这两个本地决策。真实的 SenseAudio `get_voice` 请求与 24 小时磁盘目录缓存由 issue #22
-//! 提供（`src/speech/senseaudio.rs` 与 catalog 持久化），它们通过 [`VoiceCatalogSource`]
-//! 注入，不能让 profile 命令自己联网。
+//! 这两个本地决策。真实的 SenseAudio `get_voice` 请求由 [`super::senseaudio`] 提供，
+//! 不能让 profile 命令自己联网。
 
 use crate::speech::profile::VoiceProfile;
 use chrono::{DateTime, Duration, Utc};
+use serde::{Deserialize, Serialize};
 
 /// Voice Catalog 的新鲜期：ADR 0007 规定本地缓存 24 小时。
 pub const CATALOG_FRESHNESS_HOURS: i64 = 24;
 
+/// Provider-neutral source group for a catalog entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CatalogSourceType {
+    /// Provider-owned/system voices.
+    System,
+    /// Voices cloned for the current account.
+    Cloned,
+    /// Voices generated for the current account.
+    Generated,
+}
+
+impl CatalogSourceType {
+    /// Stable machine-readable value.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::System => "system",
+            Self::Cloned => "cloned",
+            Self::Generated => "generated",
+        }
+    }
+}
+
 /// 目录里的一个具体音色。标签来自 provider 目录，不从 `voice_id` 后缀推断。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CatalogVoice {
+    /// Provider-neutral account response group.
+    pub source_type: CatalogSourceType,
     /// 供应商的精确音色 ID；用户选择的永远是它。
     pub voice_id: String,
     /// 供应商展示名。
@@ -22,10 +48,18 @@ pub struct CatalogVoice {
     pub emotion_label: Option<String>,
     /// provider 拥有的风格标签。
     pub style_label: Option<String>,
+    /// Provider-owned display descriptions. These are preserved verbatim and
+    /// are never synthesized from the voice ID.
+    #[serde(default)]
+    pub description: Vec<String>,
+    /// Provider creation timestamp, when returned by the account catalog.
+    #[serde(default)]
+    pub created_time: Option<String>,
 }
 
 /// 某个 Speech Provider 的当前 Voice Catalog。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct VoiceCatalog {
     /// 目录所属 provider。
     pub provider: String,
@@ -36,6 +70,30 @@ pub struct VoiceCatalog {
 }
 
 impl VoiceCatalog {
+    /// Validate the persisted catalog shape before it becomes permission
+    /// evidence or is written back to disk.
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.provider.trim().is_empty() {
+            return Err("provider is empty");
+        }
+        for voice in &self.voices {
+            if voice.voice_id.trim().is_empty() {
+                return Err("voice_id is empty");
+            }
+            if voice.voice_name.trim().is_empty() {
+                return Err("voice_name is empty");
+            }
+            if voice
+                .description
+                .iter()
+                .any(|description| description.trim().is_empty())
+            {
+                return Err("description contains an empty label");
+            }
+        }
+        Ok(())
+    }
+
     /// 只有“已经过去且不足 24 小时”的目录才算新鲜。
     ///
     /// 未来时间戳（时钟回拨或被篡改的文件）一律视为不新鲜，避免用它宣称当前权限。
@@ -157,10 +215,13 @@ mod tests {
 
     fn voice(voice_id: &str) -> CatalogVoice {
         CatalogVoice {
+            source_type: CatalogSourceType::System,
             voice_id: voice_id.to_string(),
             voice_name: "默认音色".to_string(),
             emotion_label: Some("平稳".to_string()),
             style_label: None,
+            description: vec!["平稳".to_string()],
+            created_time: None,
         }
     }
 

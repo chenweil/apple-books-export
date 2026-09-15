@@ -158,6 +158,30 @@ apple-books-exporter speech profile show --json
   （`no_catalog` / `stale_catalog` / `other_provider`）。Unverified 只表示本地配置合法，
   **不代表**当前账号可用，也不能授权语音生成。
 
+### 语音 Voice Catalog
+
+列出当前账号可用的 SenseAudio 音色。这是 `speech` 命令族里唯一会联网的浏览命令，
+`profile` 命令仍然是纯本地操作。
+
+```bash
+# 默认复用 24 小时缓存；缓存过期时自动刷新
+apple-books-exporter speech voices
+
+# 强制刷新，绕过缓存
+apple-books-exporter speech voices --refresh
+
+# 机器可读 JSON（成功只写 stdout，失败只写 stderr）
+apple-books-exporter speech voices --json
+```
+
+- 目录缓存在 `~/Library/Application Support/books-exporter/speech/voices/senseaudio.json`；
+  24 小时内直接复用，`--refresh` 强制绕过缓存；
+- 刷新失败且存在旧目录时，人类输出和 JSON 都会标记 `stale=true`、保留 `fetched_at`，
+  并返回 `stale_catalog` warning。旧目录**不是**当前账号权限的保证，不能授权语音生成；
+- 音色 ID 与情感/风格标签都来自供应商响应，不从 `voice_id` 后缀推断，也不生成目录里
+  不存在的标签组合；
+- 本地缓存文件损坏或 schema 不匹配不会阻断 `--refresh`：刷新成功后原子替换掉损坏文档。
+
 ## AI Agent Skill
 
 本项目提供 skill，支持 AI 助手直接调用。

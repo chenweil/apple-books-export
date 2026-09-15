@@ -7,6 +7,7 @@
 //! 配置文件只保存非秘密字段：Voice Profile 与 API Key 的**环境变量名**。
 //! 任何密钥值都不会进入这个文件。
 
+use crate::speech::catalog::VoiceCatalog;
 use crate::speech::profile::{
     parse_api_key_env, ProfileError, ProfileVerification, VerificationStatus, VoiceProfile,
     DEFAULT_API_KEY_ENV,
@@ -16,10 +17,14 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-/// `config.json` 的 schema 版本。
+/// config.json schema version.
 pub const SPEECH_CONFIG_SCHEMA_VERSION: u32 = 1;
+/// Voice Catalog cache schema version.
+pub const VOICE_CATALOG_SCHEMA_VERSION: u32 = 1;
 /// 配置文件文件名。
 const CONFIG_FILE_NAME: &str = "config.json";
+/// Voice Catalog directory name.
+const VOICE_CATALOG_DIR_NAME: &str = "voices";
 /// 同文件系统的临时文件；rename 保证提交是原子的。
 const CONFIG_TMP_FILE_NAME: &str = "config.json.tmp";
 
@@ -113,6 +118,22 @@ impl SpeechStore {
         self.root.join(CONFIG_FILE_NAME)
     }
 
+    /// Provider Voice Catalog cache path.
+    ///
+    /// Provider names are part of the application contract, not arbitrary
+    /// filesystem paths. Unknown path characters are collapsed to a safe
+    /// placeholder so a malformed caller can never escape the Speech root.
+    pub fn voice_catalog_path(&self, provider: &str) -> PathBuf {
+        let safe_provider = if is_safe_provider_name(provider) {
+            provider
+        } else {
+            "invalid-provider"
+        };
+        self.root
+            .join(VOICE_CATALOG_DIR_NAME)
+            .join(format!("{safe_provider}.json"))
+    }
+
     fn config_tmp_path(&self) -> PathBuf {
         self.root.join(CONFIG_TMP_FILE_NAME)
     }
@@ -143,6 +164,100 @@ impl SpeechStore {
         let file: ConfigFile = serde_json::from_str(&text)
             .map_err(|_| SpeechStoreError::InvalidConfig(ProfileError::stored_config_invalid()))?;
         file.into_config()
+    }
+
+    /// Read a provider Voice Catalog cache without creating the Speech root.
+    pub fn load_voice_catalog(
+        &self,
+        provider: &str,
+    ) -> Result<Option<VoiceCatalog>, SpeechStoreError> {
+        if !is_safe_provider_name(provider) {
+            return Err(SpeechStoreError::Unavailable {
+                path: self.voice_catalog_path(provider),
+                message: "the provider name is not a safe catalog identifier".to_string(),
+            });
+        }
+
+        let path = self.voice_catalog_path(provider);
+        let text = match fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(SpeechStoreError::unavailable(&path, error)),
+        };
+        #[derive(Deserialize)]
+        struct SchemaProbe {
+            schema_version: u32,
+        }
+        let probe: SchemaProbe = serde_json::from_str(&text).map_err(|_| {
+            SpeechStoreError::Unavailable {
+                path: path.clone(),
+                message: "the Voice Catalog cache is invalid".to_string(),
+            }
+        })?;
+        if probe.schema_version != VOICE_CATALOG_SCHEMA_VERSION {
+            return Err(SpeechStoreError::UnsupportedSchemaVersion(
+                probe.schema_version,
+            ));
+        }
+
+        let file: VoiceCatalogFile = serde_json::from_str(&text).map_err(|error| {
+            SpeechStoreError::Unavailable {
+                path: path.clone(),
+                message: format!("the Voice Catalog cache is invalid: {error}"),
+            }
+        })?;
+        let catalog = file.into_catalog();
+        if catalog.provider != provider {
+            return Err(SpeechStoreError::Unavailable {
+                path,
+                message: "the Voice Catalog cache belongs to a different provider".to_string(),
+            });
+        }
+        catalog.validate().map_err(|error| {
+            SpeechStoreError::Unavailable {
+                path,
+                message: format!("the Voice Catalog cache is invalid: {error}"),
+            }
+        })?;
+        Ok(Some(catalog))
+    }
+
+    /// Atomically persist a non-secret provider Voice Catalog cache.
+    pub fn save_voice_catalog(
+        &self,
+        catalog: &VoiceCatalog,
+    ) -> Result<(), SpeechStoreError> {
+        catalog
+            .validate()
+            .map_err(|error| SpeechStoreError::Unavailable {
+                path: self.voice_catalog_path(&catalog.provider),
+                message: format!("the Voice Catalog is invalid: {error}"),
+            })?;
+        if !is_safe_provider_name(&catalog.provider) {
+            return Err(SpeechStoreError::Unavailable {
+                path: self.voice_catalog_path(&catalog.provider),
+                message: "the provider name is not a safe catalog identifier".to_string(),
+            });
+        }
+
+        let directory = self.root.join(VOICE_CATALOG_DIR_NAME);
+        fs::create_dir_all(&directory)
+            .map_err(|error| SpeechStoreError::unavailable(&directory, error))?;
+        let path = self.voice_catalog_path(&catalog.provider);
+        let temporary = path.with_extension("json.tmp");
+        let mut json = serde_json::to_string_pretty(&VoiceCatalogFile::from(catalog))
+            .map_err(|error| SpeechStoreError::Unavailable {
+                path: directory.clone(),
+                message: format!("could not serialize the Voice Catalog: {error}"),
+            })?;
+        json.push('\n');
+        write_synced(&temporary, json.as_bytes())
+            .map_err(|error| SpeechStoreError::unavailable(&temporary, error))?;
+        fs::rename(&temporary, &path).map_err(|error| {
+            let _ = fs::remove_file(&temporary);
+            SpeechStoreError::unavailable(&path, error)
+        })?;
+        Ok(())
     }
 
     /// 原子写入配置：同目录临时文件 + fsync + rename。
@@ -179,6 +294,15 @@ fn write_synced(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let mut file = fs::File::create(path)?;
     file.write_all(bytes)?;
     file.sync_all()
+}
+
+fn is_safe_provider_name(provider: &str) -> bool {
+    !provider.is_empty()
+        && provider != "."
+        && provider != ".."
+        && provider
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_'))
 }
 
 /// `config.json` 的磁盘 schema。字段名就是文件字段名。
@@ -218,6 +342,36 @@ struct AudioFile {
     sample_rate: u32,
     bitrate: u32,
     channel: u32,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct VoiceCatalogFile {
+    schema_version: u32,
+    provider: String,
+    fetched_at: chrono::DateTime<chrono::Utc>,
+    voices: Vec<crate::speech::catalog::CatalogVoice>,
+}
+
+impl From<&VoiceCatalog> for VoiceCatalogFile {
+    fn from(catalog: &VoiceCatalog) -> Self {
+        Self {
+            schema_version: VOICE_CATALOG_SCHEMA_VERSION,
+            provider: catalog.provider.clone(),
+            fetched_at: catalog.fetched_at,
+            voices: catalog.voices.clone(),
+        }
+    }
+}
+
+impl VoiceCatalogFile {
+    fn into_catalog(self) -> VoiceCatalog {
+        VoiceCatalog {
+            provider: self.provider,
+            fetched_at: self.fetched_at,
+            voices: self.voices,
+        }
+    }
 }
 
 impl From<&SpeechConfig> for ConfigFile {
@@ -302,7 +456,9 @@ impl ProfileFile {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::speech::catalog::{CatalogSourceType, CatalogVoice};
     use crate::speech::profile::{Hundredths, ProfileErrorReason, VerificationStatus};
+    use chrono::Utc;
     use tempfile::TempDir;
 
     fn store() -> (TempDir, SpeechStore) {
@@ -637,5 +793,114 @@ mod tests {
         assert!(!raw.contains("sk-"));
         assert!(!raw.to_lowercase().contains("\"api_key\""));
         assert!(!raw.to_lowercase().contains("token"));
+    }
+
+    fn catalog(provider: &str, voice_id: &str) -> VoiceCatalog {
+        VoiceCatalog {
+            provider: provider.to_string(),
+            fetched_at: Utc::now(),
+            voices: vec![CatalogVoice {
+                source_type: CatalogSourceType::System,
+                voice_id: voice_id.to_string(),
+                voice_name: "Cached Voice".to_string(),
+                emotion_label: None,
+                style_label: None,
+                description: vec!["缓存标签".to_string()],
+                created_time: None,
+            }],
+        }
+    }
+
+    fn seed_catalog(store: &SpeechStore, provider: &str, body: &str) {
+        let path = store.voice_catalog_path(provider);
+        std::fs::create_dir_all(path.parent().expect("catalog directory"))
+            .expect("catalog dir");
+        std::fs::write(path, body).expect("seed catalog document");
+    }
+
+    #[test]
+    fn a_missing_catalog_cache_reads_as_absent_instead_of_an_error() {
+        let (_home, store) = store();
+
+        assert_eq!(store.load_voice_catalog("senseaudio").expect("load"), None);
+    }
+
+    #[test]
+    fn saving_a_catalog_is_atomic_and_round_trips_the_exact_voice_id() {
+        let (_home, store) = store();
+        store
+            .save_voice_catalog(&catalog("senseaudio", "exact-id"))
+            .expect("save catalog");
+        let temporary = store
+            .voice_catalog_path("senseaudio")
+            .with_extension("json.tmp");
+
+        assert!(!temporary.exists(), "rename 之后不应残留临时文件");
+        assert_eq!(
+            store
+                .load_voice_catalog("senseaudio")
+                .expect("load")
+                .expect("cache")
+                .voices[0]
+                .voice_id,
+            "exact-id"
+        );
+    }
+
+    #[test]
+    fn a_corrupt_catalog_document_is_rejected_instead_of_guessed() {
+        let (_home, store) = store();
+        seed_catalog(&store, "senseaudio", "{ not a catalog");
+
+        assert!(matches!(
+            store.load_voice_catalog("senseaudio"),
+            Err(SpeechStoreError::Unavailable { .. })
+        ));
+    }
+
+    #[test]
+    fn an_unknown_catalog_schema_version_is_rejected_instead_of_guessed() {
+        let (_home, store) = store();
+        seed_catalog(&store, "senseaudio", r#"{"schema_version": 99}"#);
+
+        assert!(matches!(
+            store.load_voice_catalog("senseaudio"),
+            Err(SpeechStoreError::UnsupportedSchemaVersion(99))
+        ));
+    }
+
+    #[test]
+    fn a_catalog_document_owned_by_another_provider_is_rejected() {
+        let (_home, store) = store();
+        seed_catalog(
+            &store,
+            "senseaudio",
+            r#"{
+  "schema_version": 1,
+  "provider": "other-provider",
+  "fetched_at": "2026-09-11T00:00:00Z",
+  "voices": []
+}"#,
+        );
+
+        assert!(matches!(
+            store.load_voice_catalog("senseaudio"),
+            Err(SpeechStoreError::Unavailable { .. })
+        ));
+    }
+
+    #[test]
+    fn an_unsafe_catalog_provider_name_can_never_escape_the_speech_root() {
+        let (_home, store) = store();
+
+        assert!(matches!(
+            store.load_voice_catalog("../escape"),
+            Err(SpeechStoreError::Unavailable { .. })
+        ));
+        assert!(matches!(
+            store.save_voice_catalog(&catalog("../escape", "exact-id")),
+            Err(SpeechStoreError::Unavailable { .. })
+        ));
+        assert!(!store.root().join("escape.json").exists());
     }
 }

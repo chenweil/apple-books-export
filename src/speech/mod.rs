@@ -1,25 +1,37 @@
 //! Annotation Speech 领域（ADR 0007）。
 //!
-//! 本模块拥有 Voice Profile 的领域类型、非秘密本地状态和 profile use case。
-//! 它不做任何网络调用：目录校验只通过 [`catalog::VoiceCatalogSource`] 注入。
-//! 真实 provider adapter 与目录缓存属于后续 issue，不属于 profile 命令。
+//! 本模块拥有 Voice Profile、Voice Catalog 与非秘密本地 Speech 状态。
+//! Profile 命令只读取注入的目录来源；真实网络请求只由显式的 speech voices
+//! use case 发起。
 
 pub mod catalog;
 pub mod machine;
 pub mod profile;
+pub mod senseaudio;
 pub mod store;
 
 pub use catalog::{
-    CatalogAvailability, CatalogVoice, NoCatalogSource, UnverifiedReason, VoiceCatalog,
-    VoiceCatalogSource, VoiceVerification, CATALOG_FRESHNESS_HOURS,
+    CatalogAvailability, CatalogSourceType, CatalogVoice, NoCatalogSource, UnverifiedReason,
+    VoiceCatalog, VoiceCatalogSource, VoiceVerification, CATALOG_FRESHNESS_HOURS,
 };
-pub use machine::{SpeechProfileDto, SpeechProfileResponse};
+pub use machine::{
+    SpeechProfileDto, SpeechProfileResponse, VoiceCatalogResponse, VoiceCatalogReceipt,
+    VoiceCatalogVoiceDto,
+};
 pub use profile::{
     AudioSettings, Hundredths, ProfileDraft, ProfileError, ProfileErrorReason, ProfileVerification,
     VerificationStatus, VoiceProfile, DEFAULT_API_KEY_ENV, DEFAULT_MODEL, DEFAULT_VOICE_ID,
     SENSEAUDIO_PROVIDER,
 };
-pub use store::{SpeechConfig, SpeechStore, SpeechStoreError, SPEECH_CONFIG_SCHEMA_VERSION};
+pub use senseaudio::{
+    load_or_refresh_voice_catalog, CachedVoiceCatalogSource, SenseAudioClient, SenseAudioError,
+    VoiceCatalogError, VoiceCatalogOutcome, SENSEAUDIO_API_BASE_URL_ENV,
+    SENSEAUDIO_DEFAULT_BASE_URL,
+};
+pub use store::{
+    SpeechConfig, SpeechStore, SpeechStoreError, SPEECH_CONFIG_SCHEMA_VERSION,
+    VOICE_CATALOG_SCHEMA_VERSION,
+};
 
 use chrono::{DateTime, SecondsFormat, Utc};
 use serde::Serialize;
@@ -61,6 +73,8 @@ pub struct SpeechWarning {
 impl SpeechWarning {
     /// 未验证 Voice Profile 的 warning code。
     pub const UNVERIFIED_CODE: &'static str = "SPEECH_VOICE_UNVERIFIED";
+    /// Refreshing a catalog failed and an older cached copy is being shown.
+    pub const STALE_CATALOG_CODE: &'static str = "SPEECH_VOICE_CATALOG_STALE";
 
     /// 构造未验证 warning；`reason` 为 `None` 表示磁盘上的 Voice Profile 本来就没被验证过。
     pub fn unverified(reason: Option<UnverifiedReason>) -> Self {
@@ -90,6 +104,18 @@ impl SpeechWarning {
             message: format!("{clause} {consequence}"),
         }
     }
+
+    /// Construct the honest warning used for stale Voice Catalog fallback.
+    pub fn stale_catalog(fetched_at: DateTime<Utc>, refresh_reason: &str) -> Self {
+        let fetched_at = fetched_at.to_rfc3339();
+        Self {
+            code: Self::STALE_CATALOG_CODE,
+            reason: "stale_catalog",
+            message: format!(
+                "Voice Catalog refresh failed ({refresh_reason}); showing the catalog fetched at {fetched_at}. It is stale and is not current permission evidence."
+            ),
+        }
+    }
 }
 
 /// profile use case 的错误。
@@ -99,6 +125,8 @@ pub enum SpeechError {
     Storage(SpeechStoreError),
     /// Profile 本地校验失败。
     Profile(ProfileError),
+    /// Voice Catalog cache or provider access failed.
+    VoiceCatalog(senseaudio::VoiceCatalogError),
     /// 新鲜 Voice Catalog 明确没有这个音色。
     VoiceUnavailable {
         /// Speech Provider。
@@ -113,6 +141,7 @@ impl std::fmt::Display for SpeechError {
         match self {
             Self::Storage(error) => write!(f, "{error}"),
             Self::Profile(error) => write!(f, "{}", error.message()),
+            Self::VoiceCatalog(error) => write!(f, "{error}"),
             Self::VoiceUnavailable { provider, voice_id } => write!(
                 f,
                 "voice '{voice_id}' is not available for provider '{provider}'"
@@ -254,10 +283,13 @@ mod tests {
             voices: voice_ids
                 .iter()
                 .map(|voice_id| CatalogVoice {
+                    source_type: catalog::CatalogSourceType::System,
                     voice_id: voice_id.to_string(),
                     voice_name: format!("voice {voice_id}"),
                     emotion_label: Some("平稳".to_string()),
                     style_label: None,
+                    description: vec!["平稳".to_string()],
+                    created_time: None,
                 })
                 .collect(),
         })

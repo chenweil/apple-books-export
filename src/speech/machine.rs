@@ -4,8 +4,12 @@
 //! 让机器消费者不用解析 message 就能知道是哪个字段、哪种原因。
 
 use crate::machine::{MachineError, SCHEMA_VERSION};
+use crate::speech::catalog::CatalogSourceType;
 use crate::speech::profile::{ProfileError, VoiceProfile};
-use crate::speech::{ProfileOperation, SpeechConfig, SpeechError, SpeechWarning};
+use crate::speech::{
+    ProfileOperation, SpeechConfig, SpeechError, SpeechStoreError, SpeechWarning,
+    VoiceCatalogError, VoiceCatalogOutcome,
+};
 use serde::Serialize;
 use serde_json::{json, Value};
 
@@ -71,6 +75,84 @@ pub struct SpeechAudioDto {
     pub bitrate: u32,
     /// 声道数。
     pub channel: u32,
+}
+
+/// Machine JSON response for speech voices.
+#[derive(Debug, Serialize)]
+pub struct VoiceCatalogResponse {
+    /// Shared Machine JSON schema version.
+    pub schema_version: u32,
+    /// Catalog receipt.
+    pub receipt: VoiceCatalogReceipt,
+}
+
+/// Speech voices receipt.
+#[derive(Debug, Serialize)]
+pub struct VoiceCatalogReceipt {
+    /// Stable operation name.
+    pub operation: &'static str,
+    /// Provider whose account catalog was queried.
+    pub provider: String,
+    /// Time the displayed catalog was fetched.
+    pub fetched_at: String,
+    /// Whether the displayed catalog is a stale fallback.
+    pub stale: bool,
+    /// Account-visible entries, preserving exact provider metadata.
+    pub voices: Vec<VoiceCatalogVoiceDto>,
+    /// Honest warnings, including stale fallback.
+    pub warnings: Vec<SpeechWarning>,
+}
+
+/// Provider-neutral machine representation of one catalog entry.
+#[derive(Debug, Serialize)]
+pub struct VoiceCatalogVoiceDto {
+    /// Provider name.
+    pub provider: String,
+    /// system, cloned, or generated.
+    pub source_type: CatalogSourceType,
+    /// Exact provider voice ID.
+    pub voice_id: String,
+    /// Provider display name.
+    pub voice_name: String,
+    /// Provider-owned emotion label, if explicitly returned.
+    pub emotion_label: Option<String>,
+    /// Provider-owned style label, if explicitly returned.
+    pub style_label: Option<String>,
+    /// Provider-owned display descriptions.
+    pub description: Vec<String>,
+    /// Provider creation time, if returned.
+    pub created_time: Option<String>,
+}
+
+impl VoiceCatalogResponse {
+    /// Convert a catalog outcome into the stable Machine JSON envelope.
+    pub fn new(outcome: &VoiceCatalogOutcome) -> Self {
+        let catalog = &outcome.catalog;
+        Self {
+            schema_version: SCHEMA_VERSION,
+            receipt: VoiceCatalogReceipt {
+                operation: "voices",
+                provider: catalog.provider.clone(),
+                fetched_at: catalog.fetched_at.to_rfc3339(),
+                stale: outcome.stale,
+                voices: catalog
+                    .voices
+                    .iter()
+                    .map(|voice| VoiceCatalogVoiceDto {
+                        provider: catalog.provider.clone(),
+                        source_type: voice.source_type,
+                        voice_id: voice.voice_id.clone(),
+                        voice_name: voice.voice_name.clone(),
+                        emotion_label: voice.emotion_label.clone(),
+                        style_label: voice.style_label.clone(),
+                        description: voice.description.clone(),
+                        created_time: voice.created_time.clone(),
+                    })
+                    .collect(),
+                warnings: outcome.warnings.clone(),
+            },
+        }
+    }
 }
 
 impl From<&VoiceProfile> for SpeechProfileDto {
@@ -154,6 +236,31 @@ pub fn voice_unavailable(provider: &str, voice_id: &str) -> MachineError {
     )
 }
 
+/// Map a Voice Catalog cache/provider failure without exposing credentials or
+/// the raw provider response.
+pub fn voice_catalog_error(error: &VoiceCatalogError) -> MachineError {
+    match error {
+        VoiceCatalogError::Storage(SpeechStoreError::Unavailable { path, message }) => {
+            storage_unavailable(path, message)
+        }
+        VoiceCatalogError::Storage(SpeechStoreError::InvalidConfig(error)) => {
+            profile_invalid(error)
+        }
+        VoiceCatalogError::Storage(SpeechStoreError::UnsupportedSchemaVersion(version)) => {
+            unsupported_schema_version(*version)
+        }
+        VoiceCatalogError::Provider(error) => machine_error(
+            error.machine_code(),
+            error.to_string(),
+            "Verify the SenseAudio API key and endpoint, then retry the Voice Catalog refresh.",
+            json!({
+                "provider": "senseaudio",
+                "reason": error.reason_code(),
+            }),
+        ),
+    }
+}
+
 /// 存储 schema 版本不受支持。
 pub fn unsupported_schema_version(version: u32) -> MachineError {
     MachineError::unsupported_schema_version(version)
@@ -172,6 +279,7 @@ pub fn error_response(error: &SpeechError) -> MachineError {
             }
         },
         SpeechError::Profile(error) => profile_invalid(error),
+        SpeechError::VoiceCatalog(error) => voice_catalog_error(error),
         SpeechError::VoiceUnavailable {
             provider,
             voice_id,
