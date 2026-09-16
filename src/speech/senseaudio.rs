@@ -1,8 +1,7 @@
-//! SenseAudio Voice Catalog adapter and cache use case.
+//! SenseAudio Voice Catalog 适配器与缓存 use case。
 //!
-//! This module owns the provider-specific HTTP shape. The cache is persisted
-//! through the existing SpeechStore so profile validation and catalog browsing
-//! share one state root and one catalog document.
+//! 本模块拥有供应商特有的 HTTP 形状。缓存通过现有 SpeechStore 落盘，
+//! 因此 Profile 校验和目录浏览共用一个状态根、一份目录文档。
 
 use super::catalog::{CatalogSourceType, CatalogVoice, VoiceCatalog, VoiceCatalogSource};
 use super::store::{SpeechStore, SpeechStoreError};
@@ -14,33 +13,31 @@ use std::env;
 use std::future::Future;
 use std::time::Duration;
 
-/// Environment variable used only as a non-secret local endpoint override for
-/// contract tests and controlled environments.
+/// 非秘密的本地 endpoint 覆盖；只给合同测试和受控环境用。
 pub const SENSEAUDIO_API_BASE_URL_ENV: &str = "SENSEAUDIO_API_BASE_URL";
-/// Default SenseAudio API origin.
+/// 默认 SenseAudio API origin。
 pub const SENSEAUDIO_DEFAULT_BASE_URL: &str = "https://api.senseaudio.cn";
 const VOICE_LIST_PATH: &str = "/v1/get_voice";
 
-/// Provider failures are intentionally coarse so diagnostics never echo an
-/// Authorization header or an untrusted response body.
+/// 供应商失败刻意保持粗粒度：诊断信息不得回显 Authorization 头或不受信的响应体。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SenseAudioError {
-    /// The configured API-key environment variable is absent or empty.
+    /// 配置的 API Key 环境变量缺失或为空。
     MissingApiKey,
-    /// The provider rejected the configured credentials.
+    /// 供应商拒绝了当前凭证。
     AuthenticationFailed,
-    /// The provider asked the caller to slow down.
+    /// 供应商要求调用方降速。
     RateLimited,
-    /// The request could not obtain a response.
+    /// 请求未能拿到响应。
     Transport,
-    /// The provider response did not match the accepted catalog contract.
+    /// 供应商响应不符合已接受的目录合同。
     InvalidResponse,
-    /// The provider returned a non-success status or provider error status.
+    /// 供应商返回了非成功状态或明确的失败状态。
     ProviderFailed,
 }
 
 impl SenseAudioError {
-    /// Stable Machine JSON error code.
+    /// 稳定的 Machine JSON 错误码。
     pub const fn machine_code(&self) -> &'static str {
         match self {
             Self::MissingApiKey | Self::AuthenticationFailed => "SPEECH_AUTH_FAILED",
@@ -51,7 +48,7 @@ impl SenseAudioError {
         }
     }
 
-    /// Short, non-sensitive reason used only in a stale warning.
+    /// 短且不含秘密的原因码；只进入 stale warning。
     pub const fn reason_code(&self) -> &'static str {
         match self {
             Self::MissingApiKey => "missing_api_key",
@@ -80,17 +77,17 @@ impl std::fmt::Display for SenseAudioError {
     }
 }
 
-/// Errors from the cache boundary or the SenseAudio provider.
+/// 缓存边界或 SenseAudio 供应商失败。
 #[derive(Debug)]
 pub enum VoiceCatalogError {
-    /// Local catalog state could not be read or written.
+    /// 本地目录状态读不到或写不了。
     Storage(SpeechStoreError),
-    /// The provider request or response failed.
+    /// 供应商请求或响应失败。
     Provider(SenseAudioError),
 }
 
 impl VoiceCatalogError {
-    /// Stable Machine JSON error code.
+    /// 稳定的 Machine JSON 错误码。
     pub const fn machine_code(&self) -> &'static str {
         match self {
             Self::Storage(_) => "SPEECH_STORAGE_UNAVAILABLE",
@@ -98,7 +95,7 @@ impl VoiceCatalogError {
         }
     }
 
-    /// Provider error, if this failure came from the remote adapter.
+    /// 远程适配器失败时的供应商错误。
     pub fn provider_error(&self) -> Option<&SenseAudioError> {
         match self {
             Self::Storage(_) => None,
@@ -128,7 +125,7 @@ impl std::fmt::Display for VoiceCatalogError {
     }
 }
 
-/// Small provider adapter for the explicit Voice Catalog operation.
+/// 显式 Voice Catalog 操作的小型供应商适配器。
 #[derive(Clone)]
 pub struct SenseAudioClient {
     client: reqwest::Client,
@@ -146,8 +143,7 @@ impl std::fmt::Debug for SenseAudioClient {
 }
 
 impl SenseAudioClient {
-    /// Construct a client with an explicit endpoint and environment variable
-    /// name. No key is read or retained until a request is explicitly made.
+    /// 用显式 endpoint 和环境变量名构造客户端。在真正发起请求前不读、不保留密钥。
     pub fn new(
         base_url: impl Into<String>,
         api_key_env: impl Into<String>,
@@ -168,8 +164,7 @@ impl SenseAudioClient {
         })
     }
 
-    /// Construct a client using the documented default endpoint unless a
-    /// controlled endpoint override is present.
+    /// 使用文档默认 endpoint；仅当存在受控覆盖时改走本地地址。
     pub fn from_environment(api_key_env: impl Into<String>) -> Result<Self, SenseAudioError> {
         let base_url = env::var(SENSEAUDIO_API_BASE_URL_ENV)
             .ok()
@@ -178,9 +173,8 @@ impl SenseAudioClient {
         Self::new(base_url, api_key_env)
     }
 
-    /// Fetch the account-visible Voice Catalog from the explicit all-voices
-    /// endpoint. The key is read only for this request and never enters an
-    /// error value or a returned catalog.
+    /// 从显式的全部音色 endpoint 拉取账号可见目录。密钥只为这次请求读取，
+    /// 永不进入错误值或返回的目录。
     pub async fn fetch_catalog(&self) -> Result<Vec<CatalogVoice>, SenseAudioError> {
         let api_key = env::var(&self.api_key_env)
             .ok()
@@ -215,8 +209,7 @@ impl SenseAudioClient {
     }
 }
 
-/// Parse a successful or failed provider response without retaining its raw
-/// JSON. This is a public pure seam for fixture and contract tests.
+/// 解析成功或失败的供应商响应，不保留原始 JSON。这是给 fixture 和合同测试用的纯函数缝。
 pub fn parse_voice_catalog_response(
     http_status: u16,
     body: &[u8],
@@ -348,26 +341,25 @@ struct BaseResponse {
     status_code: i64,
 }
 
-/// Result of reading a fresh catalog or showing a stale fallback.
+/// 读到新鲜目录，或展示 stale 回退时的结果。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VoiceCatalogOutcome {
-    /// Account-visible catalog entries.
+    /// 账号可见的目录条目。
     pub catalog: VoiceCatalog,
-    /// True only when the latest refresh was requested or required and failed.
+    /// 仅当最近一次刷新被请求或必须刷新且失败时为 true。
     pub stale: bool,
-    /// Honest warning(s) accompanying a stale fallback.
+    /// 伴随 stale 回退或空目录的诚实 warning。
     pub warnings: Vec<SpeechWarning>,
 }
 
-/// Read the fresh cache, or explicitly refresh it through an injected fetcher.
+/// 读取新鲜缓存，或通过注入的 fetcher 显式刷新。
 ///
 /// 缓存文档不可读（缺失、损坏、schema 不匹配、读取失败）一律按“没有可用缓存”处理，
 /// 不能在刷新前短路，否则 `--refresh` 会卡在损坏文件上。只有真的读到可用旧目录时，
 /// 刷新失败才回退到 stale；否则如实返回供应商失败。
 ///
-/// The injected future is the public mock seam: tests can exercise cache,
-/// stale fallback and provider failures without putting credentials or network
-/// calls into the store.
+/// 注入的 future 是公开 mock 缝：测试可以覆盖缓存、stale 回退和供应商失败，
+/// 而不把凭证或网络调用放进 store。
 pub async fn load_or_refresh_voice_catalog<F, Fut>(
     store: &SpeechStore,
     provider: &str,
@@ -386,10 +378,16 @@ where
         Err(_) => None,
     };
     if !force_refresh && cached.as_ref().is_some_and(|catalog| catalog.is_fresh(now)) {
+        let catalog = cached.expect("fresh cache exists");
+        let warnings = if catalog.voices.is_empty() {
+            vec![SpeechWarning::empty_catalog()]
+        } else {
+            Vec::new()
+        };
         return Ok(VoiceCatalogOutcome {
-            catalog: cached.expect("fresh cache exists"),
+            catalog,
             stale: false,
-            warnings: Vec::new(),
+            warnings,
         });
     }
 
@@ -404,35 +402,45 @@ where
                 .validate()
                 .map_err(|_| SenseAudioError::InvalidResponse)?;
             store.save_voice_catalog(&catalog)?;
+            let warnings = if catalog.voices.is_empty() {
+                vec![SpeechWarning::empty_catalog()]
+            } else {
+                Vec::new()
+            };
             Ok(VoiceCatalogOutcome {
                 catalog,
                 stale: false,
-                warnings: Vec::new(),
+                warnings,
             })
         }
         Err(error) => match cached {
-            Some(catalog) => Ok(VoiceCatalogOutcome {
-                warnings: vec![SpeechWarning::stale_catalog(
+            Some(catalog) => {
+                let mut warnings = vec![SpeechWarning::stale_catalog(
                     catalog.fetched_at,
                     error.reason_code(),
-                )],
-                catalog,
-                stale: true,
-            }),
+                )];
+                if catalog.voices.is_empty() {
+                    warnings.push(SpeechWarning::empty_catalog());
+                }
+                Ok(VoiceCatalogOutcome {
+                    warnings,
+                    catalog,
+                    stale: true,
+                })
+            }
             None => Err(VoiceCatalogError::Provider(error)),
         },
     }
 }
 
-/// Read-only catalog source used by Profile validation. It never refreshes or
-/// performs network I/O; an absent or invalid cache remains unavailable.
+/// Profile 校验用的只读目录来源。从不刷新，也不做网络 I/O；缺失或无效缓存保持不可用。
 #[derive(Debug, Clone)]
 pub struct CachedVoiceCatalogSource {
     store: SpeechStore,
 }
 
 impl CachedVoiceCatalogSource {
-    /// Create a cache-backed source from the existing SpeechStore.
+    /// 用现有 SpeechStore 构造缓存目录来源。
     pub fn new(store: SpeechStore) -> Self {
         Self { store }
     }
@@ -599,6 +607,26 @@ mod tests {
             ),
             Err(SenseAudioError::InvalidResponse)
         );
+    }
+
+    #[tokio::test]
+    async fn an_empty_provider_catalog_is_valid_and_warns() {
+        let (_home, store) = store();
+        let now = timestamp("2026-09-11T12:00:00Z");
+
+        let outcome =
+            load_or_refresh_voice_catalog(&store, SENSEAUDIO_PROVIDER, now, false, || async {
+                Ok(Vec::new())
+            })
+            .await
+            .expect("empty catalog");
+
+        assert!(!outcome.stale);
+        assert!(outcome.catalog.voices.is_empty());
+        assert_eq!(outcome.warnings.len(), 1);
+        assert_eq!(outcome.warnings[0].code, SpeechWarning::EMPTY_CATALOG_CODE);
+        assert_eq!(outcome.warnings[0].reason, "empty_catalog");
+        assert!(outcome.warnings[0].message.contains("账号未返回音色"));
     }
 
     #[tokio::test]

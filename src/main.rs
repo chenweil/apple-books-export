@@ -437,8 +437,7 @@ fn speech_profile_show_json() -> Result<String, MachineError> {
 
 fn speech_profile_set_json(draft: ProfileDraft) -> Result<String, MachineError> {
     let store = speech_store().map_err(|error| speech_machine::error_response(&error))?;
-    // Profile only reads the cache-backed source; it never refreshes or makes
-    // an implicit provider request.
+    // Profile 只读缓存目录来源；不会刷新，也不会隐式请求供应商。
     let source = CachedVoiceCatalogSource::new(store.clone());
     let outcome = speech::set_profile(&store, &draft, &source, chrono::Utc::now())
         .map_err(|error| speech_machine::error_response(&error))?;
@@ -538,8 +537,7 @@ fn speech_error(error: SpeechError) -> anyhow::Error {
     }
 }
 
-/// Human catalog output groups provider entries by their returned display name
-/// while retaining every concrete ID and provider-owned label.
+/// 人类可读的目录输出：按供应商展示名分组，同时保留每条精确 ID 和供应商标签。
 fn print_voice_catalog(outcome: &speech::VoiceCatalogOutcome) {
     use std::collections::BTreeMap;
 
@@ -552,6 +550,9 @@ fn print_voice_catalog(outcome: &speech::VoiceCatalogOutcome) {
             .to_rfc3339(),
         if outcome.stale { " [STALE]" } else { "" }
     );
+    if catalog.voices.is_empty() {
+        println!("账号未返回音色");
+    }
 
     let mut groups: BTreeMap<&str, Vec<&speech::CatalogVoice>> = BTreeMap::new();
     for voice in &catalog.voices {

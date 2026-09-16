@@ -1,8 +1,7 @@
-//! Voice Catalog CLI contract tests for Issue #22.
+//! Issue #22 的 Voice Catalog CLI 合同测试。
 //!
-//! The mock server records only the request shape and authorization header
-//! presence. The tests never persist or print the test key as application
-//! output.
+//! mock server 只记录请求形状和 Authorization 头是否存在。测试从不把测试密钥
+//! 作为应用程序输出持久化或打印。
 
 use chrono::{Duration, Utc};
 use serde_json::{json, Value};
@@ -10,8 +9,10 @@ use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::process::{Command, Output};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
+use std::time::Duration as StdDuration;
 use tempfile::TempDir;
 
 const TEST_KEY: &str = "issue-22-test-key";
@@ -25,41 +26,77 @@ struct RequestRecord {
 struct MockServer {
     url: String,
     records: Arc<Mutex<Vec<RequestRecord>>>,
+    stop: Arc<AtomicBool>,
     join: Option<JoinHandle<()>>,
 }
 
 impl MockServer {
     fn one_response(status: u16, body: impl Into<Vec<u8>>) -> Self {
+        Self::serve(Some((status, body.into())))
+    }
+
+    /// 计数 mock：CLI 结束后再停 listen。缺 key 必须零连接，不靠固定超时。
+    fn expect_no_connections() -> Self {
+        Self::serve(None)
+    }
+
+    fn serve(response: Option<(u16, Vec<u8>)>) -> Self {
         let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind mock server");
         let address = listener.local_addr().expect("mock address");
         let records = Arc::new(Mutex::new(Vec::new()));
         let captured = Arc::clone(&records);
-        let body = body.into();
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_flag = Arc::clone(&stop);
         let join = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().expect("accept request");
-            let (headers, request_body) = read_request(&mut stream);
-            captured.lock().expect("records").push(RequestRecord {
-                authorization: header_value(&headers, "authorization"),
-                body: request_body,
-            });
-            let reason = if status == 200 { "OK" } else { "Error" };
-            let response = format!(
-                "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                body.len()
-            );
-            stream
-                .write_all(response.as_bytes())
-                .expect("write response headers");
-            stream.write_all(&body).expect("write response");
+            if response.is_none() {
+                listener
+                    .set_nonblocking(true)
+                    .expect("nonblocking accept");
+            }
+            loop {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        let (headers, request_body) = read_request(&mut stream);
+                        captured.lock().expect("records").push(RequestRecord {
+                            authorization: header_value(&headers, "authorization"),
+                            body: request_body,
+                        });
+                        if let Some((status, body)) = response.as_ref() {
+                            let reason = if *status == 200 { "OK" } else { "Error" };
+                            let header = format!(
+                                "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                                body.len()
+                            );
+                            stream
+                                .write_all(header.as_bytes())
+                                .expect("write response headers");
+                            stream.write_all(body).expect("write response");
+                            return;
+                        }
+                    }
+                    Err(error)
+                        if error.kind() == std::io::ErrorKind::WouldBlock
+                            && response.is_none() =>
+                    {
+                        if stop_flag.load(Ordering::SeqCst) {
+                            return;
+                        }
+                        thread::sleep(StdDuration::from_millis(10));
+                    }
+                    Err(error) => panic!("accept request: {error}"),
+                }
+            }
         });
         Self {
             url: format!("http://{address}"),
             records,
+            stop,
             join: Some(join),
         }
     }
 
     fn finish(mut self) -> Vec<RequestRecord> {
+        self.stop.store(true, Ordering::SeqCst);
         self.join.take().expect("mock thread").join().expect("mock");
         self.records.lock().expect("records").clone()
     }
@@ -425,15 +462,19 @@ fn malformed_provider_response_is_a_secret_safe_provider_error() {
 #[test]
 fn missing_api_key_fails_before_network_with_secret_safe_error() {
     let fixture = Fixture::new();
+    let server = MockServer::expect_no_connections();
     let output = fixture
         .command()
+        .env("SENSEAUDIO_API_BASE_URL", &server.url)
         .args(["speech", "voices", "--json"])
         .output()
         .expect("run CLI");
     let value = failure_json(&output);
+    let records = server.finish();
 
     assert_eq!(value["error"]["code"], "SPEECH_AUTH_FAILED");
     assert!(!String::from_utf8_lossy(&output.stderr).contains(TEST_KEY));
+    assert_eq!(records.len(), 0, "缺 key 不得发起任何供应商连接");
 }
 
 #[test]
@@ -456,6 +497,59 @@ fn stale_human_fallback_displays_warning_and_exact_cached_id() {
     assert!(text.contains("Warning [stale_catalog]"));
     assert!(text.contains(&fetched_at));
     assert!(text.contains("not current permission evidence"));
+}
+
+#[test]
+fn empty_account_catalog_warns_and_human_output_says_no_voices() {
+    let fixture = Fixture::new();
+    let server = MockServer::one_response(
+        200,
+        br#"{"base_resp":{"status_code":0,"status_msg":"success"}}"#.to_vec(),
+    );
+
+    let json_output = fixture.run_with_server(&["speech", "voices", "--json"], &server);
+    let value = success_json(&json_output);
+    let records = server.finish();
+    assert_eq!(records.len(), 1);
+    assert_eq!(value["receipt"]["voices"].as_array().expect("voices").len(), 0);
+    assert_eq!(
+        value["receipt"]["warnings"][0]["code"],
+        "SPEECH_VOICE_CATALOG_EMPTY"
+    );
+    assert_eq!(value["receipt"]["warnings"][0]["reason"], "empty_catalog");
+
+    let human_fixture = Fixture::new();
+    let human_server = MockServer::one_response(
+        200,
+        br#"{"base_resp":{"status_code":0,"status_msg":"success"}}"#.to_vec(),
+    );
+    let human = human_fixture.run_with_server(&["speech", "voices"], &human_server);
+    human_server.finish();
+    assert!(human.status.success());
+    let text = String::from_utf8(human.stdout).expect("human output");
+    assert!(text.contains("账号未返回音色"));
+    assert!(text.contains("Warning [empty_catalog]"));
+}
+
+#[test]
+fn catalog_cache_directory_occupied_by_a_file_uses_file_remediation() {
+    let fixture = Fixture::new();
+    let voices_dir = fixture.speech_root().join("voices");
+    std::fs::create_dir_all(fixture.speech_root()).expect("speech root");
+    std::fs::write(&voices_dir, "not a directory").expect("occupy catalog dir");
+    let server = MockServer::one_response(200, catalog_response());
+
+    let output = fixture.run_with_server(&["speech", "voices", "--json"], &server);
+    let value = failure_json(&output);
+    server.finish();
+
+    assert_eq!(value["error"]["code"], "SPEECH_STORAGE_UNAVAILABLE");
+    let remediation = value["error"]["remediation"].as_str().expect("remediation");
+    assert!(
+        remediation.contains("file, not a directory"),
+        "catalog 路径是文件时应区分 remediation: {remediation}"
+    );
+    assert!(!remediation.contains("Verify that this directory exists"));
 }
 
 #[test]

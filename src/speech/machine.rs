@@ -77,55 +77,55 @@ pub struct SpeechAudioDto {
     pub channel: u32,
 }
 
-/// Machine JSON response for speech voices.
+/// `speech voices` 的 Machine JSON 响应。
 #[derive(Debug, Serialize)]
 pub struct VoiceCatalogResponse {
-    /// Shared Machine JSON schema version.
+    /// 与现有 Machine JSON 协议一致的 schema 版本。
     pub schema_version: u32,
-    /// Catalog receipt.
+    /// 目录收据。
     pub receipt: VoiceCatalogReceipt,
 }
 
-/// Speech voices receipt.
+/// `speech voices` 的收据。
 #[derive(Debug, Serialize)]
 pub struct VoiceCatalogReceipt {
-    /// Stable operation name.
+    /// 稳定操作名。
     pub operation: &'static str,
-    /// Provider whose account catalog was queried.
+    /// 被查询的 Speech Provider。
     pub provider: String,
-    /// Time the displayed catalog was fetched.
+    /// 当前展示目录的获取时间。
     pub fetched_at: String,
-    /// Whether the displayed catalog is a stale fallback.
+    /// 是否为刷新失败后的 stale 回退。
     pub stale: bool,
-    /// Account-visible entries, preserving exact provider metadata.
+    /// 账号可见条目，保留供应商返回的精确元数据。
     pub voices: Vec<VoiceCatalogVoiceDto>,
-    /// Honest warnings, including stale fallback.
+    /// 诚实 warning，包括 stale 回退和空目录。
     pub warnings: Vec<SpeechWarning>,
 }
 
-/// Provider-neutral machine representation of one catalog entry.
+/// 与供应商无关的单条目录条目机器表示。
 #[derive(Debug, Serialize)]
 pub struct VoiceCatalogVoiceDto {
-    /// Provider name.
+    /// Speech Provider 名。
     pub provider: String,
-    /// system, cloned, or generated.
+    /// system、cloned 或 generated。
     pub source_type: CatalogSourceType,
-    /// Exact provider voice ID.
+    /// 供应商的精确音色 ID。
     pub voice_id: String,
-    /// Provider display name.
+    /// 供应商展示名。
     pub voice_name: String,
-    /// Provider-owned emotion label, if explicitly returned.
+    /// 供应商明确返回的情感标签。
     pub emotion_label: Option<String>,
-    /// Provider-owned style label, if explicitly returned.
+    /// 供应商明确返回的风格标签。
     pub style_label: Option<String>,
-    /// Provider-owned display descriptions.
+    /// 供应商拥有的展示描述。
     pub description: Vec<String>,
-    /// Provider creation time, if returned.
+    /// 供应商返回的创建时间。
     pub created_time: Option<String>,
 }
 
 impl VoiceCatalogResponse {
-    /// Convert a catalog outcome into the stable Machine JSON envelope.
+    /// 把目录 use case 结果转成稳定的 Machine JSON envelope。
     pub fn new(outcome: &VoiceCatalogOutcome) -> Self {
         let catalog = &outcome.catalog;
         Self {
@@ -222,6 +222,27 @@ pub fn storage_unavailable(path: &std::path::Path, message: &str) -> MachineErro
     )
 }
 
+/// catalog 场景的存储失败：错误码仍是 `SPEECH_STORAGE_UNAVAILABLE`，但 remediation
+/// 按路径的文件系统类型区分。不嗅探 OS 错误字符串。
+fn catalog_storage_unavailable(path: &std::path::Path, message: &str) -> MachineError {
+    // 只看路径的文件系统类型：无扩展名却是文件，说明本该是目录的路径被文件占了。
+    // 合法的 `.json` 缓存文件写失败不得走这条文案。不嗅探 OS 错误字符串。
+    let remediation = if path.is_file() && path.extension().is_none() {
+        "This Voice Catalog cache path is a file, not a directory. Remove or replace the file, then retry."
+    } else {
+        "Verify that this Voice Catalog cache path exists and is writable, then retry."
+    };
+    machine_error(
+        "SPEECH_STORAGE_UNAVAILABLE",
+        format!(
+            "The Speech state directory is not usable at {}: {message}",
+            path.display()
+        ),
+        remediation,
+        json!({ "reason": "storage_unavailable", "path": path.to_string_lossy() }),
+    )
+}
+
 /// 新鲜 Voice Catalog 明确没有这个音色；此时不得替用户静默换音色，也不得落盘。
 pub fn voice_unavailable(provider: &str, voice_id: &str) -> MachineError {
     machine_error(
@@ -236,12 +257,14 @@ pub fn voice_unavailable(provider: &str, voice_id: &str) -> MachineError {
     )
 }
 
-/// Map a Voice Catalog cache/provider failure without exposing credentials or
-/// the raw provider response.
+/// 映射 Voice Catalog 缓存/供应商失败；不暴露凭证或原始响应。
+///
+/// catalog 路径可能是文件而不是目录。这里按路径的文件系统类型区分 remediation，
+/// 不嗅探 OS 错误文案，也不改共用的 `storage_unavailable`。
 pub fn voice_catalog_error(error: &VoiceCatalogError) -> MachineError {
     match error {
         VoiceCatalogError::Storage(SpeechStoreError::Unavailable { path, message }) => {
-            storage_unavailable(path, message)
+            catalog_storage_unavailable(path, message)
         }
         VoiceCatalogError::Storage(SpeechStoreError::InvalidConfig(error)) => {
             profile_invalid(error)
@@ -434,5 +457,66 @@ mod tests {
         ));
 
         assert_eq!(error.code, "UNSUPPORTED_SCHEMA_VERSION");
+    }
+
+    #[test]
+    fn catalog_storage_unavailable_distinguishes_a_file_path_without_sniffing_os_text() {
+        let home = tempfile::tempdir().expect("home");
+        let file_path = home.path().join("voices");
+        std::fs::write(&file_path, "not a directory").expect("occupy catalog dir");
+        let error = voice_catalog_error(&VoiceCatalogError::Storage(
+            crate::speech::SpeechStoreError::Unavailable {
+                path: file_path.clone(),
+                message: "not a directory".to_string(),
+            },
+        ));
+        let json = serde_json::to_value(&error).expect("serialize error");
+
+        assert_eq!(json["code"], "SPEECH_STORAGE_UNAVAILABLE");
+        assert_eq!(json["details"]["reason"], "storage_unavailable");
+        assert_eq!(json["details"]["path"], file_path.to_string_lossy().as_ref());
+        assert!(json["remediation"]
+            .as_str()
+            .expect("remediation")
+            .contains("file, not a directory"));
+        assert!(!json["remediation"]
+            .as_str()
+            .expect("remediation")
+            .contains("Verify that this directory exists"));
+    }
+
+    #[test]
+    fn catalog_storage_unavailable_does_not_treat_a_json_cache_file_as_a_directory_collision() {
+        let home = tempfile::tempdir().expect("home");
+        let file_path = home.path().join("senseaudio.json");
+        std::fs::write(&file_path, "{}").expect("cache file");
+        let error = voice_catalog_error(&VoiceCatalogError::Storage(
+            crate::speech::SpeechStoreError::Unavailable {
+                path: file_path,
+                message: "permission denied".to_string(),
+            },
+        ));
+
+        assert!(!error
+            .remediation
+            .as_deref()
+            .expect("remediation")
+            .contains("file, not a directory"));
+        assert_eq!(
+            error.remediation.as_deref(),
+            Some("Verify that this Voice Catalog cache path exists and is writable, then retry.")
+        );
+    }
+
+    #[test]
+    fn shared_storage_unavailable_keeps_the_directory_remediation() {
+        let error = storage_unavailable(
+            std::path::Path::new("/tmp/speech"),
+            "permission denied",
+        );
+        assert_eq!(
+            error.remediation.as_deref(),
+            Some("Verify that this directory exists and is writable, then retry.")
+        );
     }
 }

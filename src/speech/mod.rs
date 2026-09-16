@@ -73,8 +73,10 @@ pub struct SpeechWarning {
 impl SpeechWarning {
     /// 未验证 Voice Profile 的 warning code。
     pub const UNVERIFIED_CODE: &'static str = "SPEECH_VOICE_UNVERIFIED";
-    /// Refreshing a catalog failed and an older cached copy is being shown.
+    /// 刷新失败、正在展示旧缓存目录时的 warning code。
     pub const STALE_CATALOG_CODE: &'static str = "SPEECH_VOICE_CATALOG_STALE";
+    /// 账号目录三组全缺、当前没有任何可用音色时的 warning code。
+    pub const EMPTY_CATALOG_CODE: &'static str = "SPEECH_VOICE_CATALOG_EMPTY";
 
     /// 构造未验证 warning；`reason` 为 `None` 表示磁盘上的 Voice Profile 本来就没被验证过。
     pub fn unverified(reason: Option<UnverifiedReason>) -> Self {
@@ -105,7 +107,7 @@ impl SpeechWarning {
         }
     }
 
-    /// Construct the honest warning used for stale Voice Catalog fallback.
+    /// 构造 stale Voice Catalog 回退时的诚实 warning。
     pub fn stale_catalog(fetched_at: DateTime<Utc>, refresh_reason: &str) -> Self {
         let fetched_at = fetched_at.to_rfc3339();
         Self {
@@ -114,6 +116,15 @@ impl SpeechWarning {
             message: format!(
                 "Voice Catalog refresh failed ({refresh_reason}); showing the catalog fetched at {fetched_at}. It is stale and is not current permission evidence."
             ),
+        }
+    }
+
+    /// 账号可见目录为空：合法，但不能当成任何音色的权限证据。
+    pub fn empty_catalog() -> Self {
+        Self {
+            code: Self::EMPTY_CATALOG_CODE,
+            reason: "empty_catalog",
+            message: "账号未返回音色。This catalog contains no voices and cannot authorize a Speech Attempt.".to_string(),
         }
     }
 }
@@ -125,7 +136,7 @@ pub enum SpeechError {
     Storage(SpeechStoreError),
     /// Profile 本地校验失败。
     Profile(ProfileError),
-    /// Voice Catalog cache or provider access failed.
+    /// Voice Catalog 缓存或供应商访问失败。
     VoiceCatalog(senseaudio::VoiceCatalogError),
     /// 新鲜 Voice Catalog 明确没有这个音色。
     VoiceUnavailable {
