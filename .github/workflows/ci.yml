@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    name: Rust contracts
+    runs-on: macos-14
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Check Rust formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run Rust tests
+        run: cargo test --all-targets --locked
+
+      - name: Check all Rust targets
+        run: cargo check --all-targets --locked
+
+      - name: Build release binary
+        run: cargo build --release --locked
+
+      - name: Validate headless mainline
+        run: bash tests/headless_mainline.sh
+
+      - name: Validate Agent Data Skill contract
+        run: bash skills/apple-books-export-rust/tests/contract.sh
+
+      - name: Validate bundled arm64 binaries
+        run: |
+          for binary in \
+            skills/apple-books-export-rust/scripts/apple-books-exporter \
+            skills/apple-books-export-rust/scripts/apple-books-exporter-aarch64-apple-darwin; do
+            APPLE_BOOKS_EXPORTER_BIN="$binary" \
+              skills/apple-books-export-rust/scripts/validate.sh --print-path
+          done
+
+  tui:
+    name: Read-only TUI
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install TUI dependencies
+        run: bun install --cwd tui --frozen-lockfile
+
+      - name: Run TUI tests
+        run: bun --cwd tui test
+
+      - name: Typecheck TUI
+        run: bun run --cwd tui typecheck

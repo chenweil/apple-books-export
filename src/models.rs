@@ -59,7 +59,7 @@ pub struct LLMConfig {
 /// API 配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiConfig {
-    pub name: String,           // 配置名称（如 "默认"、"画图"）
+    pub name: String, // 配置名称（如 "默认"、"画图"）
     pub base_url: String,
     pub api_key: String,
     pub model: String,
@@ -79,8 +79,8 @@ impl Default for ApiConfig {
 /// 卡片生成配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CardGenConfig {
-    pub enrich_prompt: String,      // AI 增强的 prompt 模板
-    pub enrich_api: String,         // AI 增强使用的 API 配置名（空则用默认）
+    pub enrich_prompt: String, // AI 增强的 prompt 模板
+    pub enrich_api: String,    // AI 增强使用的 API 配置名（空则用默认）
 }
 
 impl Default for CardGenConfig {
@@ -110,7 +110,7 @@ impl Default for LLMConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub llm: LLMConfig,
-    pub api_configs: Vec<ApiConfig>,  // 多个 API 配置
+    pub api_configs: Vec<ApiConfig>, // 多个 API 配置
     pub card_gen: CardGenConfig,
     pub output_format: String,
     pub card_style: String,

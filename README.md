@@ -140,6 +140,7 @@ skills/apple-books-export-rust/
 └── scripts/
     ├── apple-books-exporter              # 默认二进制
     ├── apple-books-exporter-aarch64-apple-darwin  # macOS ARM
+    ├── apple-books-exporter-x86_64-apple-darwin   # macOS Intel
     ├── validate.sh                        # binary/架构/协议能力校验
     ├── build.sh                          # 编译脚本
     └── install.sh                        # 安装脚本

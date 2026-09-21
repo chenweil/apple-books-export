@@ -60,9 +60,9 @@ BINARY_NAME="apple-books-exporter"
 # 优先使用仓库 release binary；否则使用平台特定版本或通用版本。
 if [ -x "$REPOSITORY_ROOT/target/release/$BINARY_NAME" ]; then
     BINARY="$REPOSITORY_ROOT/target/release/$BINARY_NAME"
-elif [ -f "$SCRIPT_DIR/${BINARY_NAME}-${PLATFORM}" ]; then
+elif [ -x "$SCRIPT_DIR/${BINARY_NAME}-${PLATFORM}" ]; then
     BINARY="$SCRIPT_DIR/${BINARY_NAME}-${PLATFORM}"
-elif [ -f "$SCRIPT_DIR/${BINARY_NAME}" ]; then
+elif [ -x "$SCRIPT_DIR/${BINARY_NAME}" ]; then
     BINARY="$SCRIPT_DIR/${BINARY_NAME}"
 else
     echo "❌ 找不到二进制文件: ${BINARY_NAME} 或 ${BINARY_NAME}-${PLATFORM}"

@@ -48,22 +48,30 @@ ARCH=$(uname -m)
 echo "当前系统: $OS $ARCH"
 echo ""
 
-# macOS ARM (当前系统)
-if [ "$OS" = "Darwin" ] && [ "$ARCH" = "arm64" ]; then
-    echo "编译 macOS ARM (当前系统)..."
-    build_target "aarch64-apple-darwin" "apple-books-exporter-aarch64-apple-darwin"
-    
-    # 也创建默认版本
-    cp "$SCRIPT_DIR/apple-books-exporter-aarch64-apple-darwin" "$SCRIPT_DIR/apple-books-exporter"
-    chmod +x "$SCRIPT_DIR/apple-books-exporter"
-    echo "  ✅ apple-books-exporter (默认)"
+if [ "$OS" != "Darwin" ]; then
+    echo "❌ Apple Books binary 只支持 macOS"
+    exit 1
 fi
 
-# macOS Intel (交叉编译需要额外配置)
-# build_target "x86_64-apple-darwin" "apple-books-exporter-x86_64-apple-darwin"
+case "$ARCH" in
+    arm64)
+        TARGET="aarch64-apple-darwin"
+        OUTPUT_NAME="apple-books-exporter-aarch64-apple-darwin"
+        ;;
+    x86_64)
+        TARGET="x86_64-apple-darwin"
+        OUTPUT_NAME="apple-books-exporter-x86_64-apple-darwin"
+        ;;
+    *)
+        echo "❌ 不支持的 macOS 架构: $ARCH"
+        exit 1
+        ;;
+esac
 
-# Linux (需要在 Linux 上编译或使用交叉编译工具链)
-# build_target "x86_64-unknown-linux-gnu" "apple-books-exporter-x86_64-unknown-linux-gnu"
+build_target "$TARGET" "$OUTPUT_NAME"
+cp "$SCRIPT_DIR/$OUTPUT_NAME" "$SCRIPT_DIR/apple-books-exporter"
+chmod +x "$SCRIPT_DIR/apple-books-exporter"
+echo "  ✅ apple-books-exporter (默认)"
 
 echo ""
 echo "📊 编译结果:"

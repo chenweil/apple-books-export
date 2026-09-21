@@ -51,6 +51,7 @@ skills/
     └── scripts/
         ├── apple-books-exporter        # 平台无关默认二进制
         ├── apple-books-exporter-aarch64-apple-darwin
+        ├── apple-books-exporter-x86_64-apple-darwin
         ├── validate.sh                  # binary/架构/协议能力预检
         └── install.sh / build.sh
 ```

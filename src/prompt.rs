@@ -50,12 +50,14 @@ pub fn build_enrich_prompt(highlight: &str, context: Option<&str>) -> String {
 }
 
 /// 使用自定义模板构建 LLM 提示词
-pub fn build_enrich_prompt_with_template(highlight: &str, context: Option<&str>, template: &str) -> String {
+pub fn build_enrich_prompt_with_template(
+    highlight: &str,
+    context: Option<&str>,
+    template: &str,
+) -> String {
     // 构建笔记部分（如果有）
     let note_section = match context {
-        Some(note) if !note.trim().is_empty() => {
-            NOTE_SECTION_TEMPLATE.replace("{note}", note)
-        }
+        Some(note) if !note.trim().is_empty() => NOTE_SECTION_TEMPLATE.replace("{note}", note),
         _ => String::new(),
     };
 
