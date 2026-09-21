@@ -64,17 +64,45 @@ pub struct SpeechProfileDto {
     pub audio: SpeechAudioDto,
 }
 
-/// 首版固定音频规格。
+/// 首版固定音频规格；`path`/`sha256`/`size_bytes`/`duration_ms` 只在生成收据里出现。
 #[derive(Debug, Serialize)]
 pub struct SpeechAudioDto {
+    /// 本地音频绝对路径。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// 音频字节的 SHA-256。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sha256: Option<String>,
     /// 格式。
     pub format: String,
+    /// 音频字节数。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size_bytes: Option<u64>,
+    /// 时长（毫秒）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
     /// 采样率。
     pub sample_rate: u32,
     /// 码率。
     pub bitrate: u32,
     /// 声道数。
     pub channel: u32,
+}
+
+impl SpeechAudioDto {
+    /// Profile 收据里的固定规格视图：只含格式参数，不含本地产物信息。
+    pub fn specification(audio: &crate::speech::profile::AudioSettings) -> Self {
+        Self {
+            path: None,
+            sha256: None,
+            format: audio.format.clone(),
+            size_bytes: None,
+            duration_ms: None,
+            sample_rate: audio.sample_rate,
+            bitrate: audio.bitrate,
+            channel: audio.channel,
+        }
+    }
 }
 
 /// `speech voices` 的 Machine JSON 响应。
@@ -168,12 +196,7 @@ impl From<&VoiceProfile> for SpeechProfileDto {
             pitch: profile.pitch,
             verification_status: profile.verification.status.as_str(),
             verified_at: profile.verification.verified_at.clone(),
-            audio: SpeechAudioDto {
-                format: profile.audio.format.clone(),
-                sample_rate: profile.audio.sample_rate,
-                bitrate: profile.audio.bitrate,
-                channel: profile.audio.channel,
-            },
+            audio: SpeechAudioDto::specification(&profile.audio),
         }
     }
 }
@@ -197,6 +220,141 @@ impl SpeechProfileResponse {
             },
         }
     }
+}
+
+/// `speech generate` 的成功响应。
+#[derive(Debug, Serialize)]
+pub struct SpeechGenerateResponse {
+    /// 与现有 Machine JSON 协议一致的 schema 版本。
+    pub schema_version: u32,
+    /// 结构化收据。
+    pub receipt: SpeechGenerateReceipt,
+}
+
+/// `speech generate` 的收据（实施 spec 6.1）。
+///
+/// 永远不包含 Speech Text、API Key、音频 hex 或供应商完整原始响应。
+#[derive(Debug, Serialize)]
+pub struct SpeechGenerateReceipt {
+    /// 稳定操作名。
+    pub operation: &'static str,
+    /// 完整 clip ID（64 位 sha256）。
+    pub clip_id: String,
+    /// 本次 Speech Attempt ID；cache hit 为 `null`。
+    pub attempt_id: Option<String>,
+    /// `cache` 或 `provider`。
+    pub source: &'static str,
+    /// 是否真的向供应商发起请求。
+    pub provider_called: bool,
+    /// 书籍稳定 ID。
+    pub asset_id: String,
+    /// Annotation 稳定 ID。
+    pub annotation_id: String,
+    /// 内容部分。
+    pub content_kind: &'static str,
+    /// 规范化文本的 SHA-256；原文永不出现。
+    pub text_sha256: String,
+    /// 本地 Unicode 字符数。
+    pub unicode_characters: usize,
+    /// 计费字符估算；不是最终账单。
+    pub estimated_billing_characters: usize,
+    /// 计费估算规则版本。
+    pub billing_estimator_version: String,
+    /// 解析后的 Voice Profile。
+    pub profile: SpeechProfileDto,
+    /// 本地音频元数据。
+    pub audio: SpeechAudioDto,
+    /// 供应商 trace 与用量。
+    pub provider: SpeechProviderUsageDto,
+    /// 结构化 warning。
+    pub warnings: Vec<SpeechWarning>,
+}
+
+/// 供应商 trace 与用量；只保留诊断字段。
+#[derive(Debug, Serialize)]
+pub struct SpeechProviderUsageDto {
+    /// 供应商 trace ID。
+    pub trace_id: Option<String>,
+    /// 供应商返回的用量字符数；只作记录。
+    pub usage_characters: Option<u64>,
+}
+
+impl SpeechGenerateResponse {
+    /// 由 use case 结果构造响应。
+    pub fn new(receipt: SpeechGenerateReceipt) -> Self {
+        Self {
+            schema_version: SCHEMA_VERSION,
+            receipt,
+        }
+    }
+}
+
+impl SpeechGenerateReceipt {
+    /// 由生成结果构造收据。
+    pub fn from_outcome(outcome: &crate::speech::GenerateOutcome) -> Self {
+        Self {
+            operation: "generate",
+            clip_id: outcome.clip_id.clone(),
+            attempt_id: outcome.attempt_id.clone(),
+            source: outcome.source.as_str(),
+            provider_called: outcome.source.provider_called(),
+            asset_id: outcome.asset_id.clone(),
+            annotation_id: outcome.annotation_id.clone(),
+            content_kind: outcome.content_kind.as_str(),
+            text_sha256: outcome.text_sha256.clone(),
+            unicode_characters: outcome.billing.unicode_characters,
+            estimated_billing_characters: outcome.billing.estimated_billing_characters,
+            billing_estimator_version: outcome.billing.billing_estimator_version.to_string(),
+            profile: SpeechProfileDto::from(&outcome.profile),
+            audio: SpeechAudioDto {
+                path: Some(outcome.audio_path.to_string_lossy().into_owned()),
+                sha256: Some(outcome.audio_sha256.clone()),
+                format: outcome.audio_format.clone(),
+                size_bytes: Some(outcome.audio_size_bytes),
+                duration_ms: Some(outcome.audio_duration_ms),
+                sample_rate: outcome.sample_rate,
+                bitrate: outcome.bitrate,
+                channel: outcome.channel,
+            },
+            provider: SpeechProviderUsageDto {
+                trace_id: outcome.trace_id.clone(),
+                usage_characters: outcome.usage_characters,
+            },
+            warnings: outcome.warnings.clone(),
+        }
+    }
+}
+
+/// 把生成失败映射成稳定的 Machine JSON envelope。
+///
+/// 供应商 code、trace ID、attempt ID 与 outcome 进入可选 `details`；原始响应体
+/// 与 Speech Text 永远不进入稳定协议。
+pub fn generate_error_response(error: &crate::speech::GenerationError) -> MachineError {
+    // Profile 错误沿用字段级 details，机器消费者不必解析 message。
+    if let crate::speech::GenerationError::Profile(profile_error) = error {
+        return profile_invalid(profile_error);
+    }
+    let mut details = serde_json::Map::new();
+    details.insert("provider".to_string(), json!("senseaudio"));
+    details.insert("reason".to_string(), json!(error.reason_code()));
+    if let Some(trace_id) = error.trace_id() {
+        details.insert("trace_id".to_string(), json!(trace_id));
+    }
+    if let Some(attempt_id) = error.attempt_id() {
+        details.insert("attempt_id".to_string(), json!(attempt_id));
+    }
+    details.insert("outcome".to_string(), json!(error.outcome()));
+    if let crate::speech::GenerationError::VoiceUnavailable { voice_id, reason } = error {
+        details.insert("field".to_string(), json!("voice_id"));
+        details.insert("value".to_string(), json!(voice_id));
+        details.insert("voice_reason".to_string(), json!(reason.as_str()));
+    }
+    machine_error(
+        error.machine_code(),
+        error.message(),
+        error.remediation(),
+        Value::Object(details),
+    )
 }
 
 /// profile 校验失败：`SPEECH_PROFILE_INVALID` + 字段级 `details`。

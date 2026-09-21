@@ -4,33 +4,59 @@
 //! Profile 命令只读取注入的目录来源；真实网络请求只由显式的 speech voices
 //! use case 发起。
 
+pub mod audio;
+pub mod cache;
 pub mod catalog;
+pub mod clip;
+pub mod generate;
 pub mod machine;
 pub mod profile;
 pub mod senseaudio;
 pub mod store;
+pub mod text;
 
+pub use audio::{decode_audio_hex, inspect_mp3, validate_audio, AudioDecodeError, AudioFacts};
+pub use cache::{
+    AttemptRecord, AttemptStatus, ClipCache, ClipCacheError, ClipCacheStatus, ClipLock,
+    ClipLockError, ClipState, ClipVersionMetadata, ReadyClip, ATTEMPT_HISTORY_RETENTION_DAYS,
+    ATTEMPT_SCHEMA_VERSION, CLIP_LOCK_TIMEOUT, CLIP_STATE_SCHEMA_VERSION,
+    CLIP_VERSION_SCHEMA_VERSION,
+};
 pub use catalog::{
     CatalogAvailability, CatalogSourceType, CatalogVoice, NoCatalogSource, UnverifiedReason,
     VoiceCatalog, VoiceCatalogSource, VoiceVerification, CATALOG_FRESHNESS_HOURS,
 };
+pub use clip::{
+    clip_id, select_speech_content, ClipFingerprint, SpeechContentError, SpeechContentKind,
+    SpeechContentSelection, FINGERPRINT_VERSION,
+};
+pub use generate::{
+    generate_clip, to_adapter_request, GenerateOutcome, GenerationError, GenerationInput,
+    GenerationOverrides, GenerationRequest, SpeechClipSource, SpeechSynthesisOutcome,
+    SpeechSynthesisRequest,
+};
 pub use machine::{
-    SpeechProfileDto, SpeechProfileResponse, VoiceCatalogResponse, VoiceCatalogReceipt,
-    VoiceCatalogVoiceDto,
+    SpeechGenerateReceipt, SpeechGenerateResponse, SpeechProfileDto, SpeechProfileResponse,
+    VoiceCatalogResponse, VoiceCatalogReceipt, VoiceCatalogVoiceDto,
 };
 pub use profile::{
-    AudioSettings, Hundredths, ProfileDraft, ProfileError, ProfileErrorReason, ProfileVerification,
-    VerificationStatus, VoiceProfile, DEFAULT_API_KEY_ENV, DEFAULT_MODEL, DEFAULT_VOICE_ID,
-    SENSEAUDIO_PROVIDER,
+    resolve_generation_profile, AudioSettings, Hundredths, ProfileDraft, ProfileError,
+    ProfileErrorReason, ProfileVerification, VerificationStatus, VoiceProfile, DEFAULT_API_KEY_ENV,
+    DEFAULT_MODEL, DEFAULT_VOICE_ID, SENSEAUDIO_PROVIDER,
 };
 pub use senseaudio::{
     load_or_refresh_voice_catalog, CachedVoiceCatalogSource, SenseAudioClient, SenseAudioError,
-    VoiceCatalogError, VoiceCatalogOutcome, SENSEAUDIO_API_BASE_URL_ENV,
-    SENSEAUDIO_DEFAULT_BASE_URL,
+    SynthesisRequest, SynthesisResponse, VoiceCatalogError, VoiceCatalogOutcome,
+    SENSEAUDIO_API_BASE_URL_ENV, SENSEAUDIO_DEFAULT_BASE_URL,
 };
 pub use store::{
     SpeechConfig, SpeechStore, SpeechStoreError, SPEECH_CONFIG_SCHEMA_VERSION,
     VOICE_CATALOG_SCHEMA_VERSION,
+};
+pub use text::{
+    escape_provider_control_markup, estimate_billing_characters, normalize_speech_text,
+    sha256_hex, BillingEstimate, SpeechText, SpeechTextError, BILLING_ESTIMATOR_VERSION,
+    CONTROL_MARKUP_GUARD, MAX_SPEECH_TEXT_CHARS, SPEECH_TEXT_POLICY_VERSION,
 };
 
 use chrono::{DateTime, SecondsFormat, Utc};
