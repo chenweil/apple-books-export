@@ -105,18 +105,24 @@ impl DB {
     }
 }
 
+const ANNOTATION_DIR: &str = "Library/Containers/com.apple.iBooksX/Data/Documents/AEAnnotation";
+const LIBRARY_DIR: &str = "Library/Containers/com.apple.iBooksX/Data/Documents/BKLibrary";
+
 fn find_annotation_db() -> std::result::Result<PathBuf, DatabaseAccessError> {
-    find_latest_database("Library/Containers/com.apple.iBooksX/Data/Documents/AEAnnotation")
+    find_latest_database(
+        &crate::utils::home_dir().unwrap_or_default(),
+        ANNOTATION_DIR,
+    )
 }
 
 fn find_library_db() -> std::result::Result<PathBuf, DatabaseAccessError> {
-    find_latest_database("Library/Containers/com.apple.iBooksX/Data/Documents/BKLibrary")
+    find_latest_database(&crate::utils::home_dir().unwrap_or_default(), LIBRARY_DIR)
 }
 
 fn find_latest_database(
+    home: &Path,
     relative_directory: &str,
 ) -> std::result::Result<PathBuf, DatabaseAccessError> {
-    let home = crate::utils::home_dir().unwrap_or_default();
     let base_path = home.join(relative_directory);
     let entries =
         std::fs::read_dir(&base_path).map_err(|error| classify_io_error(&base_path, error))?;
@@ -272,16 +278,61 @@ mod tests {
         conn
     }
 
-    #[test]
-    fn test_find_annotation_db() {
-        let path = find_annotation_db();
-        assert!(path.is_ok());
+    fn write_sqlite(path: &Path, modified: std::time::SystemTime) {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(path, []).unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(modified)
+            .unwrap();
     }
 
     #[test]
-    fn test_find_library_db() {
-        let path = find_library_db();
-        assert!(path.is_ok());
+    fn find_annotation_db_selects_the_newest_sqlite() {
+        let home = tempfile::tempdir().unwrap();
+        let dir = home.path().join(ANNOTATION_DIR);
+        let older = dir.join("AEAnnotation_v1.sqlite");
+        let newer = dir.join("AEAnnotation_v2.sqlite");
+        let now = std::time::SystemTime::now();
+        write_sqlite(&older, now - std::time::Duration::from_secs(60));
+        write_sqlite(&newer, now);
+
+        let path = find_latest_database(home.path(), ANNOTATION_DIR).unwrap();
+
+        assert_eq!(path, newer);
+    }
+
+    #[test]
+    fn find_library_db_selects_the_newest_sqlite() {
+        let home = tempfile::tempdir().unwrap();
+        let dir = home.path().join(LIBRARY_DIR);
+        let older = dir.join("BKLibrary_v1.sqlite");
+        let newer = dir.join("BKLibrary_v2.sqlite");
+        let now = std::time::SystemTime::now();
+        write_sqlite(&older, now - std::time::Duration::from_secs(60));
+        write_sqlite(&newer, now);
+
+        let path = find_latest_database(home.path(), LIBRARY_DIR).unwrap();
+
+        assert_eq!(path, newer);
+    }
+
+    #[test]
+    fn find_latest_database_reports_missing_apple_books_directory() {
+        let home = tempfile::tempdir().unwrap();
+
+        let error = find_latest_database(home.path(), ANNOTATION_DIR).unwrap_err();
+
+        match error {
+            DatabaseAccessError::NotFound { path } => {
+                assert_eq!(path, home.path().join(ANNOTATION_DIR));
+            }
+            other => panic!("expected NotFound, got {other:?}"),
+        }
     }
 
     /// 列表里的数字必须跟真正能导出的条数一致。既无正文也无批注的空壳标注
