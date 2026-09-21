@@ -1,9 +1,9 @@
 //! Apple Books Exporter - CLI Entry Point
 
 use apple_books_exporter::speech::{
-    self, machine as speech_machine, CachedVoiceCatalogSource, ProfileDraft, ProfileOutcome,
-    SpeechError, SpeechStore, SpeechStoreError, VoiceCatalogError, VoiceCatalogResponse,
-    SENSEAUDIO_PROVIDER,
+    self, machine as speech_machine, CachedVoiceCatalogSource, GenerateRequest, ProfileDraft,
+    ProfileOutcome, SpeechContentKind, SpeechError, SpeechGenerateResponse, SpeechStore,
+    SpeechStoreError, VoiceCatalogError, VoiceCatalogResponse, SENSEAUDIO_PROVIDER,
 };
 use apple_books_exporter::{
     build_enrich_prompt, generate_card, load_config, parse_llm_result, sanitize_filename,
@@ -186,6 +186,53 @@ enum SpeechCommands {
     Profile {
         #[command(subcommand)]
         command: SpeechProfileCommands,
+    },
+
+    /// 生成一条 Annotation 高亮或笔记的语音（唯一会产生付费供应商请求的命令）
+    Generate {
+        /// 人类模式：书籍显示序号（1-based，来自 list）
+        #[arg()]
+        book: Option<usize>,
+
+        /// 人类模式：Annotation 显示序号（1-based，来自 annotations）
+        #[arg(long)]
+        annotation: Option<usize>,
+
+        /// 机器模式：书籍稳定 ID（--json 必须）
+        #[arg(long)]
+        asset_id: Option<String>,
+
+        /// 机器模式：Annotation 稳定 ID（--json 必须）
+        #[arg(long)]
+        annotation_id: Option<String>,
+
+        /// 内容种类：highlight 或 note
+        #[arg(long)]
+        content: String,
+
+        /// 覆盖音色 ID（精确匹配，不用时沿用全局 Profile）
+        #[arg(long)]
+        voice_id: Option<String>,
+
+        /// 覆盖语速，0.5-2.0，最多两位小数
+        #[arg(long, allow_hyphen_values = true)]
+        speed: Option<String>,
+
+        /// 覆盖音量，0.01-10.0，最多两位小数
+        #[arg(long, allow_hyphen_values = true)]
+        volume: Option<String>,
+
+        /// 覆盖声调，-12 到 12 的整数
+        #[arg(long, allow_hyphen_values = true)]
+        pitch: Option<String>,
+
+        /// 显式重新生成：越过 unknown gate 并原子替换有效缓存
+        #[arg(long)]
+        regenerate: bool,
+
+        /// 以稳定的机器可读 JSON 输出（只接受稳定 ID）
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -415,7 +462,209 @@ async fn cmd_speech(command: SpeechCommands) -> anyhow::Result<()> {
             }
             SpeechProfileCommands::Reset { json: false } => cmd_speech_profile_reset(),
         },
+        SpeechCommands::Generate {
+            book,
+            annotation,
+            asset_id,
+            annotation_id,
+            content,
+            voice_id,
+            speed,
+            volume,
+            pitch,
+            regenerate,
+            json,
+        } => {
+            let overrides = GenerateOverrides {
+                voice_id,
+                speed,
+                volume,
+                pitch,
+                regenerate,
+            };
+            if json {
+                finish_machine(
+                    speech_generate_json(book, annotation, asset_id, annotation_id, content, overrides)
+                        .await,
+                );
+                Ok(())
+            } else {
+                cmd_speech_generate(book, annotation, asset_id, annotation_id, content, overrides).await
+            }
+        }
     }
+}
+
+/// `speech generate` 的 Profile 覆盖项。
+#[derive(Debug, Clone)]
+struct GenerateOverrides {
+    /// 覆盖音色 ID。
+    voice_id: Option<String>,
+    /// 覆盖语速。
+    speed: Option<String>,
+    /// 覆盖音量。
+    volume: Option<String>,
+    /// 覆盖声调。
+    pitch: Option<String>,
+    /// 是否显式重新生成。
+    regenerate: bool,
+}
+
+/// 打开数据库、Speech 状态根与 SenseAudio 客户端，执行一次生成。
+async fn run_speech_generate(
+    asset_id: String,
+    annotation_id: String,
+    content: SpeechContentKind,
+    overrides: GenerateOverrides,
+) -> Result<speech::GenerateOutcome, speech::GenerateError> {
+    let db = DB::open_apple_books().map_err(|error| speech::GenerateError::Database {
+        message: error.to_string(),
+    })?;
+    let store = speech_store().map_err(|error| match error {
+        SpeechError::Storage(store_error) => speech::GenerateError::Storage(store_error),
+        other => speech::GenerateError::Database {
+            message: other.to_string(),
+        },
+    })?;
+    let config = store
+        .load_config()
+        .map_err(speech::GenerateError::Storage)?;
+    let client = speech::SenseAudioClient::from_environment(&config.api_key_env).map_err(|kind| {
+        speech::GenerateError::Provider(speech::generate::ProviderFailure {
+            kind,
+            clip_id: String::new(),
+            attempt_id: None,
+            trace_id: None,
+        })
+    })?;
+    let request = GenerateRequest {
+        asset_id,
+        annotation_id,
+        content_kind: content,
+        voice_id: overrides.voice_id,
+        speed: overrides.speed,
+        volume: overrides.volume,
+        pitch: overrides.pitch,
+        regenerate: overrides.regenerate,
+    };
+    speech::generate_clip(&db, &store, &client, &request, chrono::Utc::now()).await
+}
+
+/// 机器模式：把人类显示序号解析成稳定 ID，或直接使用传入的稳定 ID。
+fn resolve_generate_target(
+    book: Option<usize>,
+    annotation: Option<usize>,
+    asset_id: Option<String>,
+    annotation_id: Option<String>,
+    json: bool,
+) -> Result<(String, String), MachineError> {
+    if json {
+        if book.is_some() || annotation.is_some() {
+            return Err(MachineError::invalid_argument(
+                "The JSON generate command does not accept a positional book index or --annotation index.",
+            ));
+        }
+        match (asset_id, annotation_id) {
+            (Some(asset_id), Some(annotation_id)) => Ok((asset_id, annotation_id)),
+            _ => Err(MachineError::invalid_argument(
+                "The JSON generate command requires both --asset-id and --annotation-id.",
+            )),
+        }
+    } else {
+        if asset_id.is_some() || annotation_id.is_some() {
+            return Err(MachineError::invalid_argument(
+                "The human generate command does not accept --asset-id or --annotation-id.",
+            ));
+        }
+        let book = book
+            .ok_or_else(|| MachineError::invalid_argument("Provide a book index for the human generate command."))?;
+        let annotation = annotation.ok_or_else(|| {
+            MachineError::invalid_argument("Provide --annotation <index> for the human generate command.")
+        })?;
+        let db = DB::open_apple_books().map_err(MachineError::from_database_error)?;
+        let books = db
+            .list_books()
+            .map_err(|error| MachineError::database_unreadable(error.to_string()))?;
+        let book = books
+            .get(book - 1)
+            .ok_or_else(|| MachineError::invalid_argument(format!("No book at index {book}.")))?;
+        let annotations = db
+            .get_annotations(&book.asset_id)
+            .map_err(|error| MachineError::database_unreadable(error.to_string()))?;
+        let annotation = annotations.get(annotation - 1).ok_or_else(|| {
+            MachineError::invalid_argument(format!("No annotation at index {annotation}."))
+        })?;
+        Ok((book.asset_id.clone(), annotation.id.clone()))
+    }
+}
+
+fn parse_content_kind(content: &str) -> Result<SpeechContentKind, MachineError> {
+    SpeechContentKind::parse(content)
+        .ok_or_else(|| MachineError::invalid_argument("--content must be either highlight or note."))
+}
+
+async fn speech_generate_json(
+    book: Option<usize>,
+    annotation: Option<usize>,
+    asset_id: Option<String>,
+    annotation_id: Option<String>,
+    content: String,
+    overrides: GenerateOverrides,
+) -> Result<String, MachineError> {
+    let (asset_id, annotation_id) =
+        resolve_generate_target(book, annotation, asset_id, annotation_id, true)?;
+    let content = parse_content_kind(&content)?;
+    let outcome = run_speech_generate(asset_id, annotation_id, content, overrides)
+        .await
+        .map_err(|error| speech_machine::generate_error_response(&error))?;
+    serde_json::to_string(&SpeechGenerateResponse::new(&outcome))
+        .map_err(|error| MachineError::protocol_serialization_failed(error.to_string()))
+}
+
+async fn cmd_speech_generate(
+    book: Option<usize>,
+    annotation: Option<usize>,
+    asset_id: Option<String>,
+    annotation_id: Option<String>,
+    content: String,
+    overrides: GenerateOverrides,
+) -> anyhow::Result<()> {
+    let (asset_id, annotation_id) =
+        resolve_generate_target(book, annotation, asset_id, annotation_id, false)
+            .map_err(|error| anyhow::anyhow!("{}", error.message))?;
+    let content = parse_content_kind(&content).map_err(|error| anyhow::anyhow!("{}", error.message))?;
+    let outcome = run_speech_generate(asset_id, annotation_id, content, overrides)
+        .await
+        .map_err(generate_error_to_anyhow)?;
+    print_generate_outcome(&outcome);
+    Ok(())
+}
+
+/// 把生成错误转换成人类可读的 anyhow 错误（不泄露密钥或原文）。
+fn generate_error_to_anyhow(error: speech::GenerateError) -> anyhow::Error {
+    anyhow::anyhow!("{error}")
+}
+
+/// 人类可读的生成输出：只显示内容种类、音色与字符估算，绝不输出完整 Speech Text。
+fn print_generate_outcome(outcome: &speech::GenerateOutcome) {
+    let profile = &outcome.profile;
+    println!(
+        "Speech Clip 已生成（{}）",
+        match outcome.source {
+            speech::GenerateSource::Cache => "缓存命中",
+            speech::GenerateSource::Provider => "供应商生成",
+        }
+    );
+    println!("  Clip ID: {}", outcome.clip_id);
+    println!("  Content: {}", outcome.content_kind.as_str());
+    println!("  Voice: {}", profile.voice_id);
+    println!("  Speed: {}  Volume: {}  Pitch: {}", profile.speed, profile.volume, profile.pitch);
+    println!(
+        "  Characters: {} (estimated billing: {})",
+        outcome.text_summary.unicode_characters, outcome.text_summary.estimated_billing_characters
+    );
+    println!("  Provider called: {}", outcome.provider_called);
+    println!("  Audio: {}", outcome.audio_path.display());
 }
 
 /// Speech 状态根只由用户主目录推导，不跟随当前工作目录、`--config` 或导出目录。

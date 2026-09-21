@@ -452,6 +452,452 @@ impl ProfileFile {
     }
 }
 
+/// `state.json` 的 schema 版本。
+pub const CLIP_STATE_SCHEMA_VERSION: u32 = 1;
+/// 不可变 version `metadata.json` 的 schema 版本。
+pub const CLIP_VERSION_SCHEMA_VERSION: u32 = 1;
+/// attempt 记录的 schema 版本。
+pub const ATTEMPT_SCHEMA_VERSION: u32 = 1;
+/// clip 目录名。
+const CLIPS_DIR_NAME: &str = "clips";
+/// attempt 目录名。
+const ATTEMPTS_DIR_NAME: &str = "attempts";
+/// 跨进程锁目录名。
+const LOCKS_DIR_NAME: &str = "locks";
+/// 同文件系统临时目录名；保证 rename 原子性。
+const TMP_DIR_NAME: &str = "tmp";
+/// clip 内不可变音频版本目录名。
+const VERSIONS_DIR_NAME: &str = "versions";
+/// 当前指针 / unknown gate 文件名。
+const STATE_FILE_NAME: &str = "state.json";
+/// 不可变版本音频文件名。
+const AUDIO_FILE_NAME: &str = "audio.mp3";
+/// 不可变版本元数据文件名。
+const VERSION_METADATA_FILE_NAME: &str = "metadata.json";
+
+/// clip 当前缓存状态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CurrentCacheStatus {
+    /// 有已验证、可播放/导出的当前音频。
+    Ready,
+    /// 没有当前音频。
+    Absent,
+    /// 当前音频校验不一致。
+    Corrupt,
+}
+
+impl CurrentCacheStatus {
+    /// 稳定的机器可读取值。
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Ready => "ready",
+            Self::Absent => "absent",
+            Self::Corrupt => "corrupt",
+        }
+    }
+}
+
+/// Speech Attempt 的终态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AttemptStatus {
+    /// 成功并接受了产物。
+    Succeeded,
+    /// 供应商明确失败。
+    Failed,
+    /// 请求可能已处理但结果不确定。
+    Unknown,
+    /// 发送前取消。
+    CancelledBeforeSend,
+    /// 供应商成功但本地无法形成有效音频。
+    ProviderSucceededArtifactMissing,
+}
+
+impl AttemptStatus {
+    /// 稳定的机器可读取值。
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Succeeded => "succeeded",
+            Self::Failed => "failed",
+            Self::Unknown => "unknown",
+            Self::CancelledBeforeSend => "cancelled_before_send",
+            Self::ProviderSucceededArtifactMissing => "provider_succeeded_artifact_missing",
+        }
+    }
+
+    /// 该终态是否阻塞普通 `generate`（无现有 cache 的 unknown / artifact-missing）。
+    pub const fn blocks_generation(self) -> bool {
+        matches!(self, Self::Unknown | Self::ProviderSucceededArtifactMissing)
+    }
+}
+
+/// clip 的原子 current state / unknown gate。只保存身份与摘要，不保存原文、密钥或音频。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClipState {
+    /// schema 版本。
+    pub schema_version: u32,
+    /// 完整 clip ID。
+    pub clip_id: String,
+    /// 书籍稳定 ID。
+    pub asset_id: String,
+    /// Annotation 稳定 ID。
+    pub annotation_id: String,
+    /// 内容种类：`highlight` / `note`。
+    pub content_kind: String,
+    /// 规范化文本 SHA-256。
+    pub text_sha256: String,
+    /// 当前缓存状态。
+    pub current_cache_status: CurrentCacheStatus,
+    /// 当前音频 version 的 SHA-256；无音频时为 `null`。
+    #[serde(default)]
+    pub current_audio_sha256: Option<String>,
+    /// 最近一次 attempt ID。
+    #[serde(default)]
+    pub latest_attempt_id: Option<String>,
+    /// 最近一次 attempt 终态。
+    #[serde(default)]
+    pub latest_attempt_status: Option<AttemptStatus>,
+    /// 最近一次产品错误码。
+    #[serde(default)]
+    pub latest_error_code: Option<String>,
+    /// 无现有 cache 的 unknown / artifact-missing 时为 true。
+    pub generation_blocked: bool,
+    /// 最近更新时间（RFC 3339）。
+    pub updated_at: String,
+}
+
+/// 不可变音频 version 的元数据。一旦可见就不可原地修改；不含原文、密钥或音频 hex。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClipVersionMetadata {
+    /// schema 版本。
+    pub schema_version: u32,
+    /// 完整 clip ID。
+    pub clip_id: String,
+    /// 生成该 version 的 attempt ID。
+    pub attempt_id: String,
+    /// 音频字节 SHA-256。
+    pub audio_sha256: String,
+    /// 音频格式。
+    pub format: String,
+    /// 采样率。
+    pub sample_rate: u32,
+    /// 码率。
+    pub bitrate: u32,
+    /// 声道数。
+    pub channel: u32,
+    /// 音频字节大小。
+    pub size_bytes: u64,
+    /// 估算时长（毫秒）。
+    pub duration_ms: u64,
+    /// 规范化文本 SHA-256（不是原文）。
+    pub text_sha256: String,
+    /// 解析后的音色 ID。
+    pub voice_id: String,
+    /// 创建时间（RFC 3339）。
+    pub created_at: String,
+}
+
+/// 一次真实供应商请求的 attempt 元数据。不保存原文、请求体、响应体、密钥或音频。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AttemptRecord {
+    /// schema 版本。
+    pub schema_version: u32,
+    /// 独立 opaque attempt ID。
+    pub attempt_id: String,
+    /// 完整 clip ID。
+    pub clip_id: String,
+    /// Speech Provider。
+    pub provider: String,
+    /// 供应商模型。
+    pub model: String,
+    /// 解析后的音色 ID。
+    pub voice_id: String,
+    /// 开始时间（RFC 3339）。
+    pub started_at: String,
+    /// 结束时间（RFC 3339）。
+    #[serde(default)]
+    pub finished_at: Option<String>,
+    /// 终态。
+    pub status: AttemptStatus,
+    /// Unicode 字符数。
+    pub unicode_characters: u64,
+    /// 估算计费字符数。
+    pub estimated_billing_characters: u64,
+    /// 供应商返回的实际用量字符数。
+    #[serde(default)]
+    pub provider_usage_characters: Option<u64>,
+    /// 产品错误码。
+    #[serde(default)]
+    pub product_error_code: Option<String>,
+    /// 供应商原始错误码（进入 attempt 历史，不进入稳定协议 message）。
+    #[serde(default)]
+    pub provider_code: Option<String>,
+    /// 供应商 trace ID。
+    #[serde(default)]
+    pub trace_id: Option<String>,
+}
+
+impl SpeechStore {
+    /// 同文件系统临时目录；所有临时文件都在这里，保证 rename 原子性。
+    pub fn tmp_dir(&self) -> PathBuf {
+        self.root.join(TMP_DIR_NAME)
+    }
+
+    /// clip 目录。
+    pub fn clip_dir(&self, clip_id: &str) -> PathBuf {
+        self.root.join(CLIPS_DIR_NAME).join(clip_id)
+    }
+
+    /// clip 的 current state 路径。
+    pub fn clip_state_path(&self, clip_id: &str) -> PathBuf {
+        self.clip_dir(clip_id).join(STATE_FILE_NAME)
+    }
+
+    /// clip 的不可变版本目录。
+    pub fn clip_version_dir(&self, clip_id: &str, audio_sha256: &str) -> PathBuf {
+        self.clip_dir(clip_id)
+            .join(VERSIONS_DIR_NAME)
+            .join(audio_sha256)
+    }
+
+    /// clip 的不可变版本音频路径。
+    pub fn clip_version_audio_path(&self, clip_id: &str, audio_sha256: &str) -> PathBuf {
+        self.clip_version_dir(clip_id, audio_sha256)
+            .join(AUDIO_FILE_NAME)
+    }
+
+    /// 跨进程 clip 锁路径。clip ID 是 64 位小写 hex，可安全用作文件名。
+    pub fn clip_lock_path(&self, clip_id: &str) -> PathBuf {
+        self.root.join(LOCKS_DIR_NAME).join(format!("{clip_id}.lock"))
+    }
+
+    fn attempts_dir(&self) -> PathBuf {
+        self.root.join(ATTEMPTS_DIR_NAME)
+    }
+
+    /// 某天（`YYYY-MM-DD`）的 attempt 目录。
+    pub fn attempts_day_dir(&self, day: &str) -> PathBuf {
+        self.attempts_dir().join(day)
+    }
+
+    /// 读取 clip 的 current state。不存在或不可解析时返回 `None`（当作没有可信缓存）。
+    pub fn load_clip_state(&self, clip_id: &str) -> Option<ClipState> {
+        let path = self.clip_state_path(clip_id);
+        let text = fs::read_to_string(&path).ok()?;
+        serde_json::from_str(&text).ok()
+    }
+
+    /// 原子写入 clip current state：同文件系统临时文件 + fsync + rename。
+    pub fn save_clip_state(&self, state: &ClipState) -> Result<(), SpeechStoreError> {
+        let clip_dir = self.clip_dir(&state.clip_id);
+        fs::create_dir_all(&clip_dir)
+            .map_err(|error| SpeechStoreError::unavailable(&clip_dir, error))?;
+        fs::create_dir_all(self.tmp_dir())
+            .map_err(|error| SpeechStoreError::unavailable(&self.tmp_dir(), error))?;
+        let path = self.clip_state_path(&state.clip_id);
+        let mut json = serde_json::to_string_pretty(state).map_err(|error| {
+            SpeechStoreError::unavailable(&clip_dir, std::io::Error::other(error.to_string()))
+        })?;
+        json.push('\n');
+        let tmp = self.unique_tmp_path(&format!("{}-state.json", state.clip_id));
+        write_synced(&tmp, json.as_bytes())
+            .map_err(|error| SpeechStoreError::unavailable(&tmp, error))?;
+        fs::rename(&tmp, &path).map_err(|error| {
+            let _ = fs::remove_file(&tmp);
+            SpeechStoreError::unavailable(&path, error)
+        })?;
+        Ok(())
+    }
+
+    /// 读取一个不可变 version 的元数据；不存在或不可解析时返回 `None`。
+    pub fn load_clip_version_metadata(
+        &self,
+        clip_id: &str,
+        audio_sha256: &str,
+    ) -> Option<ClipVersionMetadata> {
+        let path = self
+            .clip_version_dir(clip_id, audio_sha256)
+            .join(VERSION_METADATA_FILE_NAME);
+        let text = fs::read_to_string(&path).ok()?;
+        serde_json::from_str(&text).ok()
+    }
+
+    /// 若 version 目录含非空音频与一致 metadata，返回可验证的音频路径；否则 `None`。
+    pub fn valid_cache_audio_path(&self, clip_id: &str, audio_sha256: &str) -> Option<PathBuf> {
+        let metadata = self.load_clip_version_metadata(clip_id, audio_sha256)?;
+        if metadata.audio_sha256 != audio_sha256 || metadata.clip_id != clip_id {
+            return None;
+        }
+        let audio_path = self.clip_version_audio_path(clip_id, audio_sha256);
+        let is_non_empty = fs::metadata(&audio_path)
+            .map(|meta| meta.is_file() && meta.len() > 0)
+            .unwrap_or(false);
+        is_non_empty.then_some(audio_path)
+    }
+
+    /// 提交一个不可变音频 version：先在 tmp 写音频与 metadata，再原子放置 version 目录。
+    ///
+    /// 内容寻址：`audio_sha256` 相同则幂等返回既有 metadata，绝不原地改写已可见的 version。
+    /// 该方法只放置 version，不切换 current pointer；调用方成功后自行 [`Self::save_clip_state`]。
+    pub fn commit_audio_version(
+        &self,
+        clip_id: &str,
+        attempt_id: &str,
+        text_sha256: &str,
+        voice_id: &str,
+        audio_bytes: &[u8],
+        sample_rate: u32,
+        bitrate: u32,
+        channel: u32,
+        duration_ms: u64,
+        created_at: &str,
+    ) -> Result<ClipVersionMetadata, SpeechStoreError> {
+        let audio_sha256 = crate::speech::clip::hex_sha256(audio_bytes);
+        let version_dir = self.clip_version_dir(clip_id, &audio_sha256);
+        // 幂等：相同内容已经落成不可变 version。
+        if let Some(existing) = self.load_clip_version_metadata(clip_id, &audio_sha256) {
+            return Ok(existing);
+        }
+
+        let metadata = ClipVersionMetadata {
+            schema_version: CLIP_VERSION_SCHEMA_VERSION,
+            clip_id: clip_id.to_string(),
+            attempt_id: attempt_id.to_string(),
+            audio_sha256: audio_sha256.clone(),
+            format: crate::speech::profile::AUDIO_FORMAT.to_string(),
+            sample_rate,
+            bitrate,
+            channel,
+            size_bytes: audio_bytes.len() as u64,
+            duration_ms,
+            text_sha256: text_sha256.to_string(),
+            voice_id: voice_id.to_string(),
+            created_at: created_at.to_string(),
+        };
+
+        fs::create_dir_all(self.tmp_dir())
+            .map_err(|error| SpeechStoreError::unavailable(&self.tmp_dir(), error))?;
+        let staging = self.tmp_dir().join(format!("{attempt_id}-{audio_sha256}"));
+        if staging.exists() {
+            fs::remove_dir_all(&staging)
+                .map_err(|error| SpeechStoreError::unavailable(&staging, error))?;
+        }
+        fs::create_dir_all(&staging)
+            .map_err(|error| SpeechStoreError::unavailable(&staging, error))?;
+
+        let metadata_json = {
+            let mut json = serde_json::to_string_pretty(&metadata).map_err(|error| {
+                SpeechStoreError::unavailable(&staging, std::io::Error::other(error.to_string()))
+            })?;
+            json.push('\n');
+            json
+        };
+        write_synced(&staging.join(VERSION_METADATA_FILE_NAME), metadata_json.as_bytes())
+            .map_err(|error| SpeechStoreError::unavailable(&staging, error))?;
+        write_synced(&staging.join(AUDIO_FILE_NAME), audio_bytes)
+            .map_err(|error| SpeechStoreError::unavailable(&staging, error))?;
+
+        fs::create_dir_all(version_dir.parent().expect("versions dir"))
+            .map_err(|error| SpeechStoreError::unavailable(&staging, error))?;
+        // 原子放置：同文件系统 rename。并发下 version 可能已被放置，此时清理 staging。
+        match fs::rename(&staging, &version_dir) {
+            Ok(()) => {}
+            Err(_) if version_dir.exists() => {
+                let _ = fs::remove_dir_all(&staging);
+            }
+            Err(error) => {
+                let _ = fs::remove_dir_all(&staging);
+                return Err(SpeechStoreError::unavailable(&version_dir, error));
+            }
+        }
+        Ok(metadata)
+    }
+
+    /// 原子写入一条 attempt 记录到 `attempts/<day>/<attempt_id>.json`。
+    pub fn save_attempt(&self, record: &AttemptRecord) -> Result<(), SpeechStoreError> {
+        let day = record
+            .started_at
+            .get(..10)
+            .unwrap_or("1970-01-01")
+            .to_string();
+        let dir = self.attempts_day_dir(&day);
+        fs::create_dir_all(&dir)
+            .map_err(|error| SpeechStoreError::unavailable(&dir, error))?;
+        fs::create_dir_all(self.tmp_dir())
+            .map_err(|error| SpeechStoreError::unavailable(&self.tmp_dir(), error))?;
+        let path = dir.join(format!("{}.json", record.attempt_id));
+        let mut json = serde_json::to_string_pretty(record).map_err(|error| {
+            SpeechStoreError::unavailable(&dir, std::io::Error::other(error.to_string()))
+        })?;
+        json.push('\n');
+        let tmp = self.unique_tmp_path(&format!("attempt-{}.json", record.attempt_id));
+        write_synced(&tmp, json.as_bytes())
+            .map_err(|error| SpeechStoreError::unavailable(&tmp, error))?;
+        fs::rename(&tmp, &path).map_err(|error| {
+            let _ = fs::remove_file(&tmp);
+            SpeechStoreError::unavailable(&path, error)
+        })?;
+        Ok(())
+    }
+
+    /// 在 tmp 目录生成一个唯一临时路径（带纳秒时间戳与计数器），避免并发踩踏。
+    fn unique_tmp_path(&self, label: &str) -> PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_nanos())
+            .unwrap_or(0);
+        self.tmp_dir()
+            .join(format!("{label}.{nanos}.{unique}.tmp"))
+    }
+
+    /// 尝试获取跨进程 clip 锁。
+    ///
+    /// 返回 `Ok(Some(guard))` 表示拿到锁；`Ok(None)` 表示在 `timeout` 内一直被别人持有
+    /// （映射到 `SPEECH_IN_PROGRESS`）。锁用 `create_new`（O_EXCL）实现，guard drop 时释放。
+    pub fn try_acquire_clip_lock(
+        &self,
+        clip_id: &str,
+        timeout: std::time::Duration,
+    ) -> Result<Option<ClipLock>, SpeechStoreError> {
+        let locks_dir = self.root.join(LOCKS_DIR_NAME);
+        fs::create_dir_all(&locks_dir)
+            .map_err(|error| SpeechStoreError::unavailable(&locks_dir, error))?;
+        let path = self.clip_lock_path(clip_id);
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            match fs::OpenOptions::new().write(true).create_new(true).open(&path) {
+                Ok(_) => return Ok(Some(ClipLock { path })),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    if std::time::Instant::now() >= deadline {
+                        return Ok(None);
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                Err(error) => return Err(SpeechStoreError::unavailable(&path, error)),
+            }
+        }
+    }
+}
+
+/// 跨进程 clip 锁 guard。drop 时删除锁文件；单进程内也可用于串行化同一 clip 的生成。
+#[derive(Debug)]
+pub struct ClipLock {
+    path: PathBuf,
+}
+
+impl Drop for ClipLock {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -901,5 +1347,176 @@ mod tests {
             Err(SpeechStoreError::Unavailable { .. })
         ));
         assert!(!store.root().join("escape.json").exists());
+    }
+
+    fn sample_audio() -> Vec<u8> {
+        // 一个合法的 MPEG1 Layer III 128kbps 32kHz 立体声帧（576 字节）：FF FB 98 00.
+        let mut frame = vec![0xFF, 0xFB, 0x98, 0x00];
+        frame.resize(576, 0);
+        frame
+    }
+
+    fn ready_state(clip_id: &str, audio_sha256: &str) -> ClipState {
+        ClipState {
+            schema_version: CLIP_STATE_SCHEMA_VERSION,
+            clip_id: clip_id.to_string(),
+            asset_id: "book-1".to_string(),
+            annotation_id: "annotation-41".to_string(),
+            content_kind: "highlight".to_string(),
+            text_sha256: "deadbeef".to_string(),
+            current_cache_status: CurrentCacheStatus::Ready,
+            current_audio_sha256: Some(audio_sha256.to_string()),
+            latest_attempt_id: Some("attempt-1".to_string()),
+            latest_attempt_status: Some(AttemptStatus::Succeeded),
+            latest_error_code: None,
+            generation_blocked: false,
+            updated_at: "2026-09-11T00:00:00Z".to_string(),
+        }
+    }
+
+    #[test]
+    fn clip_state_round_trips_and_missing_state_loads_as_none() {
+        let (_home, store) = store();
+        assert!(store.load_clip_state("clip-x").is_none());
+
+        let audio = sample_audio();
+        let sha = crate::speech::clip::hex_sha256(&audio);
+        store.save_clip_state(&ready_state("clip-x", &sha)).expect("save state");
+        let loaded = store.load_clip_state("clip-x").expect("load state");
+        assert_eq!(loaded.current_cache_status, CurrentCacheStatus::Ready);
+        assert_eq!(loaded.current_audio_sha256.as_deref(), Some(sha.as_str()));
+        // state.json 不得保存原文或密钥（这里只存摘要）。
+        let text = std::fs::read_to_string(store.clip_state_path("clip-x")).expect("read state");
+        assert!(text.contains("deadbeef"));
+        assert!(!text.contains("Bearer"));
+    }
+
+    #[test]
+    fn committing_an_audio_version_is_idempotent_and_content_addressed() {
+        let (_home, store) = store();
+        let audio = sample_audio();
+        let meta = store
+            .commit_audio_version("clip-x", "attempt-1", "deadbeef", "male_0004_a", &audio, 32_000, 128_000, 2, 36, "2026-09-11T00:00:00Z")
+            .expect("commit");
+        assert_eq!(meta.audio_sha256, crate::speech::clip::hex_sha256(&audio));
+        assert_eq!(meta.size_bytes, audio.len() as u64);
+
+        // 相同内容再次提交返回既有 metadata，且不改变音频字节。
+        let again = store
+            .commit_audio_version("clip-x", "attempt-2", "deadbeef", "male_0004_a", &audio, 32_000, 128_000, 2, 36, "2026-09-11T01:00:00Z")
+            .expect("idempotent commit");
+        assert_eq!(again, meta);
+        assert_eq!(
+            std::fs::read(store.clip_version_audio_path("clip-x", &meta.audio_sha256)).expect("audio"),
+            audio
+        );
+
+        // version metadata 不含音频 hex 或密钥。
+        let meta_text = std::fs::read_to_string(
+            store.clip_version_dir("clip-x", &meta.audio_sha256).join("metadata.json"),
+        )
+        .expect("read metadata");
+        assert!(!meta_text.contains("Bearer"));
+        assert!(!meta_text.contains("fffb"));
+    }
+
+    #[test]
+    fn valid_cache_audio_path_requires_matching_metadata_and_non_empty_audio() {
+        let (_home, store) = store();
+        let audio = sample_audio();
+        let sha = crate::speech::clip::hex_sha256(&audio);
+        store
+            .commit_audio_version("clip-x", "attempt-1", "deadbeef", "male_0004_a", &audio, 32_000, 128_000, 2, 36, "2026-09-11T00:00:00Z")
+            .expect("commit");
+
+        assert_eq!(
+            store.valid_cache_audio_path("clip-x", &sha),
+            Some(store.clip_version_audio_path("clip-x", &sha))
+        );
+        // 未提交的 sha 没有有效缓存。
+        assert!(store.valid_cache_audio_path("clip-x", &"0".repeat(64)).is_none());
+
+        // 破坏音频字节后不再算有效缓存。
+        std::fs::write(store.clip_version_audio_path("clip-x", &sha), b"").expect("truncate audio");
+        assert!(store.valid_cache_audio_path("clip-x", &sha).is_none());
+    }
+
+    #[test]
+    fn switching_the_current_pointer_is_atomic_and_replaceable() {
+        let (_home, store) = store();
+        let first = sample_audio();
+        let second = {
+            let mut frame = vec![0xFF, 0xFB, 0x90, 0x00];
+            frame.resize(576, 0);
+            frame[4] = 1; // 不同内容 → 不同 sha
+            frame
+        };
+        let sha1 = crate::speech::clip::hex_sha256(&first);
+        let sha2 = crate::speech::clip::hex_sha256(&second);
+        for (attempt, audio) in [("attempt-1", &first), ("attempt-2", &second)] {
+            store
+                .commit_audio_version("clip-x", attempt, "deadbeef", "male_0004_a", audio, 32_000, 128_000, 2, 36, "2026-09-11T00:00:00Z")
+                .expect("commit");
+        }
+
+        store.save_clip_state(&ready_state("clip-x", &sha1)).expect("state 1");
+        assert_eq!(
+            store.load_clip_state("clip-x").expect("load").current_audio_sha256.as_deref(),
+            Some(sha1.as_str())
+        );
+        store.save_clip_state(&ready_state("clip-x", &sha2)).expect("state 2");
+        let loaded = store.load_clip_state("clip-x").expect("load 2");
+        assert_eq!(loaded.current_audio_sha256.as_deref(), Some(sha2.as_str()));
+        // 旧 version 仍在磁盘上（新 pointer 提交后才可能被 GC）。
+        assert!(store.clip_version_audio_path("clip-x", &sha1).exists());
+        assert!(store.clip_version_audio_path("clip-x", &sha2).exists());
+    }
+
+    #[test]
+    fn attempts_are_persisted_without_text_or_secrets() {
+        let (_home, store) = store();
+        let record = AttemptRecord {
+            schema_version: ATTEMPT_SCHEMA_VERSION,
+            attempt_id: "attempt-1".to_string(),
+            clip_id: "clip-x".to_string(),
+            provider: "senseaudio".to_string(),
+            model: "sensenova-tts-2.0".to_string(),
+            voice_id: "male_0004_a".to_string(),
+            started_at: "2026-09-11T00:00:00Z".to_string(),
+            finished_at: Some("2026-09-11T00:00:02Z".to_string()),
+            status: AttemptStatus::Succeeded,
+            unicode_characters: 4,
+            estimated_billing_characters: 8,
+            provider_usage_characters: Some(30),
+            product_error_code: None,
+            provider_code: None,
+            trace_id: Some("trace-abc".to_string()),
+        };
+        store.save_attempt(&record).expect("save attempt");
+        let path = store.attempts_day_dir("2026-09-11").join("attempt-1.json");
+        assert!(path.exists());
+        let text = std::fs::read_to_string(&path).expect("read attempt");
+        assert!(text.contains("trace-abc"));
+        assert!(!text.contains("Bearer"));
+    }
+
+    #[test]
+    fn clip_lock_is_exclusive_and_released_on_drop() {
+        let (_home, store) = store();
+        let first = store
+            .try_acquire_clip_lock("clip-x", std::time::Duration::from_millis(50))
+            .expect("acquire")
+            .expect("first lock");
+        // 已被持有时，短超时内拿不到第二个锁。
+        let second = store
+            .try_acquire_clip_lock("clip-x", std::time::Duration::from_millis(50))
+            .expect("second acquire");
+        assert!(second.is_none(), "a held clip lock must not be re-acquired");
+        drop(first);
+        // 释放后可以再次获取。
+        let third = store
+            .try_acquire_clip_lock("clip-x", std::time::Duration::from_millis(50))
+            .expect("third acquire");
+        assert!(third.is_some());
     }
 }

@@ -7,7 +7,7 @@ use crate::machine::{MachineError, SCHEMA_VERSION};
 use crate::speech::catalog::CatalogSourceType;
 use crate::speech::profile::{ProfileError, VoiceProfile};
 use crate::speech::{
-    ProfileOperation, SpeechConfig, SpeechError, SpeechStoreError, SpeechWarning,
+    GenerateError, ProfileOperation, SpeechConfig, SpeechError, SpeechStoreError, SpeechWarning,
     VoiceCatalogError, VoiceCatalogOutcome,
 };
 use serde::Serialize;
@@ -307,6 +307,143 @@ pub fn error_response(error: &SpeechError) -> MachineError {
             provider,
             voice_id,
         } => voice_unavailable(provider, voice_id),
+    }
+}
+
+/// 把生成 use case 错误映射成稳定的 Machine JSON envelope。
+///
+/// 供应商失败按 `SenseAudioError` 类型区分明确失败（`SPEECH_PROVIDER_FAILED`）、
+/// 不确定结果（`SPEECH_RESULT_UNKNOWN`）与产物缺失（`SPEECH_AUDIO_INVALID`），
+/// 并在 `details` 里带 provider、trace ID、attempt ID 与 outcome，绝不回显原文或密钥。
+pub fn generate_error_response(error: &GenerateError) -> MachineError {
+    match error {
+        GenerateError::Database { message } => MachineError::database_unreadable(message.clone()),
+        GenerateError::AssetMissing { asset_id } => MachineError::invalid_asset_id(asset_id),
+        GenerateError::AnnotationMissing {
+            asset_id,
+            annotation_id,
+        } => machine_error(
+            "INVALID_ANNOTATION_ID",
+            format!("Annotation '{annotation_id}' was not found for asset_id '{asset_id}'."),
+            "Run `apple-books-exporter annotations --asset-id <id> --json` and use an annotation id from that book.",
+            json!({ "asset_id": asset_id, "annotation_id": annotation_id }),
+        ),
+        GenerateError::ContentUnavailable { content_kind } => machine_error(
+            "SPEECH_CONTENT_UNAVAILABLE",
+            format!(
+                "The requested {} content is empty for this annotation.",
+                content_kind.as_str()
+            ),
+            "Choose a content kind that has text, or pick another annotation.",
+            json!({ "content_kind": content_kind.as_str() }),
+        ),
+        GenerateError::TextTooLong { characters } => machine_error(
+            "SPEECH_TEXT_TOO_LONG",
+            format!(
+                "Normalized speech text is {characters} characters, over the 10000-character limit."
+            ),
+            "Speech text is never truncated or summarized. Choose a shorter highlight or note.",
+            json!({ "characters": characters, "limit": crate::speech::SPEECH_TEXT_LIMIT }),
+        ),
+        GenerateError::Profile(error) => profile_invalid(error),
+        GenerateError::VoiceUnavailable { provider, voice_id } => {
+            voice_unavailable(provider, voice_id)
+        }
+        GenerateError::Storage(error) => match error {
+            crate::speech::SpeechStoreError::Unavailable { path, message } => {
+                storage_unavailable(path, message)
+            }
+            crate::speech::SpeechStoreError::InvalidConfig(error) => profile_invalid(error),
+            crate::speech::SpeechStoreError::UnsupportedSchemaVersion(version) => {
+                unsupported_schema_version(*version)
+            }
+        },
+        GenerateError::InProgress { clip_id } => machine_error(
+            "SPEECH_IN_PROGRESS",
+            format!("Another generation for clip '{clip_id}' is already in progress."),
+            "Wait for the in-progress generation to finish, then retry.",
+            json!({ "clip_id": clip_id }),
+        ),
+        GenerateError::Blocked {
+            clip_id,
+            attempt_id,
+            status,
+            error_code,
+        } => {
+            let (code, outcome) = match status {
+                crate::speech::store::AttemptStatus::ProviderSucceededArtifactMissing => {
+                    ("SPEECH_AUDIO_INVALID", "provider_succeeded_artifact_missing")
+                }
+                _ => ("SPEECH_RESULT_UNKNOWN", "unknown"),
+            };
+            machine_error(
+                code,
+                format!("Clip '{clip_id}' is blocked by an earlier uncertain outcome."),
+                "Retry with --regenerate only if another billed generation is acceptable.",
+                json!({
+                    "provider": "senseaudio",
+                    "clip_id": clip_id,
+                    "attempt_id": attempt_id,
+                    "product_error_code": error_code,
+                    "outcome": outcome,
+                }),
+            )
+        }
+        GenerateError::Provider(failure) => {
+            let code = generate_provider_code(&failure.kind);
+            let remediation = match &failure.kind {
+                crate::speech::senseaudio::SenseAudioError::Transport => {
+                    "The request may have reached the provider. Retry with --regenerate only if another billed generation is acceptable."
+                }
+                crate::speech::senseaudio::SenseAudioError::MissingApiKey => {
+                    "Set the API key in the environment variable named by the Voice Profile, then retry."
+                }
+                crate::speech::senseaudio::SenseAudioError::AuthenticationFailed => {
+                    "Verify the SenseAudio API key in the configured environment variable, then retry."
+                }
+                crate::speech::senseaudio::SenseAudioError::RateLimited => {
+                    "Slow down and retry the generation later."
+                }
+                crate::speech::senseaudio::SenseAudioError::InvalidAudio => {
+                    "The provider reported success but the audio could not be validated. Retry with --regenerate."
+                }
+                _ => "Check the SenseAudio status and trace id, then retry the generation.",
+            };
+            machine_error(
+                code,
+                failure.kind.to_string(),
+                remediation,
+                json!({
+                    "provider": "senseaudio",
+                    "reason": failure.kind.reason_code(),
+                    "trace_id": failure.trace_id,
+                    "attempt_id": failure.attempt_id,
+                    "outcome": provider_outcome(&failure.kind),
+                }),
+            )
+        }
+    }
+}
+
+/// 生成场景的供应商失败 → 稳定产品错误码（与计费语义一致：transport 是结果未知）。
+fn generate_provider_code(kind: &crate::speech::senseaudio::SenseAudioError) -> &'static str {
+    use crate::speech::senseaudio::SenseAudioError;
+    match kind {
+        SenseAudioError::MissingApiKey | SenseAudioError::AuthenticationFailed => "SPEECH_AUTH_FAILED",
+        SenseAudioError::RateLimited => "SPEECH_RATE_LIMITED",
+        SenseAudioError::Transport => "SPEECH_RESULT_UNKNOWN",
+        SenseAudioError::InvalidAudio => "SPEECH_AUDIO_INVALID",
+        SenseAudioError::InvalidResponse | SenseAudioError::ProviderFailed => "SPEECH_PROVIDER_FAILED",
+    }
+}
+
+/// 生成场景的供应商失败 → `details.outcome` 稳定值。
+fn provider_outcome(kind: &crate::speech::senseaudio::SenseAudioError) -> &'static str {
+    use crate::speech::senseaudio::SenseAudioError;
+    match kind {
+        SenseAudioError::Transport => "unknown",
+        SenseAudioError::InvalidAudio => "provider_succeeded_artifact_missing",
+        _ => "failed",
     }
 }
 

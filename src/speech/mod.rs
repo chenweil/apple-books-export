@@ -4,7 +4,10 @@
 //! Profile 命令只读取注入的目录来源；真实网络请求只由显式的 speech voices
 //! use case 发起。
 
+pub mod audio;
 pub mod catalog;
+pub mod clip;
+pub mod generate;
 pub mod machine;
 pub mod profile;
 pub mod senseaudio;
@@ -13,6 +16,16 @@ pub mod store;
 pub use catalog::{
     CatalogAvailability, CatalogSourceType, CatalogVoice, NoCatalogSource, UnverifiedReason,
     VoiceCatalog, VoiceCatalogSource, VoiceVerification, CATALOG_FRESHNESS_HOURS,
+};
+pub use clip::{
+    estimate_billing_characters, escape_control_markup, normalize_speech_text,
+    validate_speech_text_length, BILLING_ESTIMATOR_VERSION, FINGERPRINT_VERSION,
+    SPEECH_TEXT_LIMIT, SPEECH_TEXT_POLICY_VERSION, SpeechContentKind, SpeechTextError,
+    SpeechTextSummary,
+};
+pub use generate::{
+    generate_clip, GenerateError, GenerateOutcome, GenerateRequest, GenerateSource,
+    SpeechGenerateResponse,
 };
 pub use machine::{
     SpeechProfileDto, SpeechProfileResponse, VoiceCatalogResponse, VoiceCatalogReceipt,
