@@ -86,9 +86,10 @@ impl DB {
 
     /// 获取书籍信息
     pub fn get_book_info(&self, asset_id: &str) -> Result<Option<Book>> {
-        let mut stmt = self
-            .library_conn
-            .prepare("SELECT ZTITLE, ZAUTHOR FROM ZBKLIBRARYASSET WHERE ZASSETID = ? LIMIT 1")?;
+        let mut stmt = self.library_conn.prepare(
+            "SELECT COALESCE(ZTITLE, ''), COALESCE(ZAUTHOR, '')
+                 FROM ZBKLIBRARYASSET WHERE ZASSETID = ? LIMIT 1",
+        )?;
         match stmt.query_row([asset_id], |row| {
             Ok(Book {
                 asset_id: asset_id.to_string(),

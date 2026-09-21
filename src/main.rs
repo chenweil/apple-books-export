@@ -379,7 +379,11 @@ fn cmd_export_json(
             .unwrap_or_default()
             .join("books-exported")
     });
-    let export_format = ExportFormat::from(format);
+    let export_format = ExportFormat::parse(format).ok_or_else(|| {
+        MachineError::invalid_argument(format!(
+            "Unsupported export format '{format}'. Choose obsidian or markdown."
+        ))
+    })?;
     let llm_results = vec![None; annotations.len()];
     let generated_files = apple_books_exporter::export_book_checked(
         &book,
@@ -432,11 +436,8 @@ fn cmd_export(index: usize, output: Option<PathBuf>, format: &str) -> anyhow::Re
     std::fs::create_dir_all(&output_dir)?;
 
     // 解析格式
-    let export_format = match format.to_lowercase().as_str() {
-        "obsidian" => ExportFormat::Obsidian,
-        "markdown" => ExportFormat::Markdown,
-        _ => ExportFormat::Obsidian,
-    };
+    let export_format = ExportFormat::parse(format)
+        .ok_or_else(|| anyhow::anyhow!("不支持的导出格式：{format}，可选 obsidian 或 markdown"))?;
 
     // 导出
     let llm_results: Vec<Option<apple_books_exporter::LLMResult>> = vec![None; annotations.len()];
@@ -646,11 +647,8 @@ async fn cmd_enrich(
     std::fs::create_dir_all(&output_dir)?;
 
     // 解析格式
-    let export_format = match format.to_lowercase().as_str() {
-        "obsidian" => ExportFormat::Obsidian,
-        "markdown" => ExportFormat::Markdown,
-        _ => ExportFormat::Obsidian,
-    };
+    let export_format = ExportFormat::parse(format)
+        .ok_or_else(|| anyhow::anyhow!("不支持的导出格式：{format}，可选 obsidian 或 markdown"))?;
 
     // 导出
     apple_books_exporter::export_book(
@@ -727,7 +725,8 @@ fn cmd_card(
     std::fs::create_dir_all(&output_dir)?;
 
     // 解析样式
-    let card_style = CardStyle::from_str(style);
+    let card_style = CardStyle::parse(style)
+        .ok_or_else(|| anyhow::anyhow!("不支持的卡片样式：{style}，可选 dark、light 或 minimal"))?;
     println!("样式：{:?}\n", card_style);
 
     // 加载缓存（获取 LLM 增强结果）

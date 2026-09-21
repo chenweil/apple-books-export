@@ -33,12 +33,10 @@ pub fn save_config(config: &Config, path: Option<&Path>) -> Result<()> {
 
     // 确保目录存在
     if let Some(parent) = config_path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("无法创建配置目录: {:?}", parent))?;
+        fs::create_dir_all(parent).with_context(|| format!("无法创建配置目录: {:?}", parent))?;
     }
 
-    let content = serde_json::to_string_pretty(config)
-        .with_context(|| "无法序列化配置")?;
+    let content = serde_json::to_string_pretty(config).with_context(|| "无法序列化配置")?;
 
     fs::write(config_path, content)
         .with_context(|| format!("无法写入配置文件: {:?}", config_path))?;
@@ -50,7 +48,6 @@ pub fn save_config(config: &Config, path: Option<&Path>) -> Result<()> {
 mod tests {
     use super::*;
     use tempfile::NamedTempFile;
-    
 
     #[test]
     fn test_load_default_config() {

@@ -16,10 +16,16 @@ pub enum ExportFormat {
 
 impl From<&str> for ExportFormat {
     fn from(s: &str) -> Self {
+        Self::parse(s).unwrap_or(Self::Obsidian)
+    }
+}
+
+impl ExportFormat {
+    pub fn parse(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
-            "obsidian" => ExportFormat::Obsidian,
-            "markdown" => ExportFormat::Markdown,
-            _ => ExportFormat::Obsidian,
+            "obsidian" => Some(Self::Obsidian),
+            "markdown" => Some(Self::Markdown),
+            _ => None,
         }
     }
 }
@@ -235,6 +241,7 @@ mod tests {
         assert_eq!(ExportFormat::from("obsidian"), ExportFormat::Obsidian);
         assert_eq!(ExportFormat::from("markdown"), ExportFormat::Markdown);
         assert_eq!(ExportFormat::from("unknown"), ExportFormat::Obsidian);
+        assert_eq!(ExportFormat::parse("unknown"), None);
     }
 
     #[test]

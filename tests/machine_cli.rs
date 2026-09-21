@@ -467,6 +467,51 @@ fn export_json_defaults_to_home_books_exported_and_obsidian() {
 }
 
 #[test]
+fn export_json_rejects_unknown_format_with_structured_error() {
+    let fixture = Fixture::new();
+
+    let output = fixture.run(&[
+        "export",
+        "--asset-id",
+        "book-1",
+        "--json",
+        "--format",
+        "unknown",
+    ]);
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let value: Value = serde_json::from_slice(&output.stderr).expect("structured error JSON");
+    assert_eq!(value["error"]["code"], "INVALID_ARGUMENT");
+    assert!(value["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("Unsupported export format"));
+}
+
+#[test]
+fn list_json_normalizes_missing_author_to_empty_string() {
+    let fixture = Fixture::new();
+    let library_path = fixture
+        .home()
+        .join("Library/Containers/com.apple.iBooksX/Data/Documents/BKLibrary/library.sqlite");
+    let connection = Connection::open(library_path).expect("open library fixture");
+    connection
+        .execute(
+            "UPDATE ZBKLIBRARYASSET SET ZAUTHOR = NULL WHERE ZASSETID = 'book-1'",
+            [],
+        )
+        .expect("clear author");
+
+    let output = fixture.run(&["list", "--json"]);
+
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    let value: Value = serde_json::from_slice(&output.stdout).expect("stdout is JSON only");
+    assert_eq!(value["books"][0]["author"], "");
+}
+
+#[test]
 fn human_list_and_positional_export_remain_compatible() {
     let fixture = Fixture::new();
     let list = fixture.run(&["list"]);

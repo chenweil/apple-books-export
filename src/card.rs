@@ -14,11 +14,17 @@ pub enum CardStyle {
 }
 
 impl CardStyle {
-    pub fn from_str(s: &str) -> Self {
+    pub fn parse(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
-            "light" | "minimal" => CardStyle::Minimal,
-            _ => CardStyle::Dark,
+            "dark" => Some(CardStyle::Dark),
+            "light" => Some(CardStyle::Light),
+            "minimal" => Some(CardStyle::Minimal),
+            _ => None,
         }
+    }
+
+    pub fn from_str(s: &str) -> Self {
+        Self::parse(s).unwrap_or(Self::Dark)
     }
 
     /// 背景色
@@ -180,8 +186,15 @@ fn truncate_to_lines(
         text.to_string()
     } else {
         let truncated: String = lines[..max_lines].join("\n");
-        format!("{}...", &truncated[..truncated.len().saturating_sub(3)])
+        truncate_with_ellipsis(&truncated)
     }
+}
+
+fn truncate_with_ellipsis(text: &str) -> String {
+    let keep_chars = text.chars().count().saturating_sub(3);
+    let mut result: String = text.chars().take(keep_chars).collect();
+    result.push_str("...");
+    result
 }
 
 /// 生成卡片图片
@@ -208,7 +221,9 @@ pub fn generate_card(
 
     // 截断高亮文本（最多 8 行）
     let highlight_truncated = truncate_to_lines(highlight, &font_manager, text_width, 8);
-    let highlight_lines = font_manager.wrap_text(&highlight_truncated, text_width).len() as f32;
+    let highlight_lines = font_manager
+        .wrap_text(&highlight_truncated, text_width)
+        .len() as f32;
     let highlight_height = highlight_lines * font_manager.scale.y;
 
     // 截断解释文本（最多 10 行）
@@ -347,4 +362,25 @@ fn draw_footer(
 pub fn card_filename(highlight: &str, index: usize) -> String {
     let safe = crate::utils::sanitize_filename(highlight);
     format!("card_{:02}_{}.png", index, safe)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_card_styles_without_aliasing_light_to_minimal() {
+        assert_eq!(CardStyle::parse("dark"), Some(CardStyle::Dark));
+        assert_eq!(CardStyle::parse("light"), Some(CardStyle::Light));
+        assert_eq!(CardStyle::parse("minimal"), Some(CardStyle::Minimal));
+        assert_eq!(CardStyle::parse("unknown"), None);
+    }
+
+    #[test]
+    fn truncates_mixed_unicode_without_splitting_utf8() {
+        let result = truncate_with_ellipsis("a界a界");
+
+        assert_eq!(result, "a...");
+        assert!(std::str::from_utf8(result.as_bytes()).is_ok());
+    }
 }
