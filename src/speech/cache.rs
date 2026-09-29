@@ -718,7 +718,11 @@ impl ClipCache {
                     removed_in_day += 1;
                 }
             }
-            if removed_in_day > 0 && fs::read_dir(day.path()).ok().is_some_and(|mut left| left.next().is_none()) {
+            if removed_in_day > 0
+                && fs::read_dir(day.path())
+                    .ok()
+                    .is_some_and(|mut left| left.next().is_none())
+            {
                 let _ = fs::remove_dir(day.path());
             }
         }
@@ -1534,5 +1538,258 @@ mod tests {
 
         let again = cache.clear_history(now()).expect("clear history again");
         assert_eq!(again.removed_attempts, 0);
+    }
+
+    /// 构造一条 attempt 记录；`attempt_id` 用于让 clip state 指向它。
+    fn attempt(
+        attempt_id: &str,
+        clip_id: &str,
+        at: DateTime<Utc>,
+        status: AttemptStatus,
+    ) -> AttemptRecord {
+        AttemptRecord {
+            schema_version: ATTEMPT_SCHEMA_VERSION,
+            attempt_id: attempt_id.to_string(),
+            clip_id: clip_id.to_string(),
+            provider: "senseaudio".to_string(),
+            model: "sensenova-tts-2.0".to_string(),
+            voice_id: "male_0004_a".to_string(),
+            started_at: at.to_rfc3339(),
+            finished_at: Some(at.to_rfc3339()),
+            status,
+            unicode_characters: 4,
+            estimated_billing_characters: 8,
+            provider_usage_characters: None,
+            product_error_code: None,
+            provider_code: None,
+            trace_id: None,
+        }
+    }
+
+    /// 90 天保留窗口是自动维护：写新 attempt 时过期的旧 metadata 必须被删掉。
+    #[test]
+    fn attempt_history_older_than_the_retention_window_is_pruned_automatically() {
+        let (_home, cache) = cache();
+        let clip_id = "4".repeat(64);
+        let expired_at = now() - chrono::Duration::days(ATTEMPT_HISTORY_RETENTION_DAYS + 10);
+        cache
+            .record_attempt(
+                &attempt(
+                    "attempt-expired",
+                    &clip_id,
+                    expired_at,
+                    AttemptStatus::Succeeded,
+                ),
+                expired_at,
+            )
+            .expect("record the expired attempt");
+        assert_eq!(
+            cache.load_attempt("attempt-expired").expect("load"),
+            Some(attempt(
+                "attempt-expired",
+                &clip_id,
+                expired_at,
+                AttemptStatus::Succeeded
+            ))
+        );
+
+        // 新 attempt 的写入就是「正常维护」：过期记录不能继续留在历史里。
+        cache
+            .record_attempt(
+                &attempt("attempt-fresh", &clip_id, now(), AttemptStatus::Succeeded),
+                now(),
+            )
+            .expect("record the fresh attempt");
+
+        assert_eq!(
+            cache.load_attempt("attempt-expired").expect("load expired"),
+            None,
+            "an attempt older than the retention window must be pruned automatically"
+        );
+        assert!(
+            cache
+                .load_attempt("attempt-fresh")
+                .expect("load fresh")
+                .is_some(),
+            "an attempt inside the retention window must survive"
+        );
+        // 空的按天目录一起回收，不留垃圾。
+        assert_eq!(
+            fs::read_dir(cache.attempts_dir())
+                .expect("attempts dir")
+                .count(),
+            1,
+            "the emptied retention day directory must be removed"
+        );
+
+        let report = cache
+            .prune_attempt_history(now(), ATTEMPT_HISTORY_RETENTION_DAYS)
+            .expect("prune again");
+        assert_eq!(
+            report,
+            AttemptPruneReport::default(),
+            "pruning must be idempotent"
+        );
+    }
+
+    /// 清理只删 attempt metadata：缓存、generation gate 与 current pointer 都不动，
+    /// 只有指向已删除 attempt 的 `latest_attempt_id` 被纠正。
+    #[test]
+    fn pruning_reconciles_a_dangling_latest_attempt_id_without_touching_the_gate() {
+        let (_home, cache) = cache();
+        let clip_id = "5".repeat(64);
+        let audio = silent_mp3(1);
+        let audio_sha256 = sha256_hex(&audio);
+        let metadata = metadata(&clip_id, &audio_sha256, &audio);
+        cache
+            .commit_version(&state(&clip_id), &metadata, &audio, now())
+            .expect("commit");
+
+        let expired_at = now() - chrono::Duration::days(ATTEMPT_HISTORY_RETENTION_DAYS + 10);
+        cache
+            .record_attempt(
+                &attempt(
+                    "attempt-expired",
+                    &clip_id,
+                    expired_at,
+                    AttemptStatus::Unknown,
+                ),
+                expired_at,
+            )
+            .expect("record the expired attempt");
+        // gate 与 latest attempt 在提交音频之后写：unknown gate 不随 attempt history 到期。
+        let mut gated = cache.load_state(&clip_id).expect("load").expect("state");
+        gated.latest_attempt_id = Some("attempt-expired".to_string());
+        gated.latest_attempt_status = Some(AttemptStatus::Unknown);
+        gated.generation_blocked = true;
+        cache.save_state(&gated).expect("save the gated state");
+
+        let report = cache
+            .prune_attempt_history(now(), ATTEMPT_HISTORY_RETENTION_DAYS)
+            .expect("prune");
+
+        assert_eq!(report.removed_attempts, 1);
+        assert_eq!(
+            report.reconciled_clip_states, 1,
+            "clip state must never keep naming a pruned attempt"
+        );
+        let kept = cache.load_state(&clip_id).expect("load").expect("state");
+        assert_eq!(
+            kept.latest_attempt_id, None,
+            "a pruned attempt must not stay referenced by state.json"
+        );
+        assert_eq!(
+            kept.latest_attempt_status,
+            Some(AttemptStatus::Unknown),
+            "the recorded outcome still explains the surviving gate"
+        );
+        assert!(
+            kept.generation_blocked,
+            "pruning must never lift a generation gate"
+        );
+        assert_eq!(
+            kept.current_audio_sha256.as_deref(),
+            Some(audio_sha256.as_str()),
+            "pruning must never move the current pointer"
+        );
+        assert_eq!(kept.current_cache_status, ClipCacheStatus::Ready);
+        let ready = cache
+            .load_ready_clip(&clip_id)
+            .expect("load")
+            .expect("ready");
+        assert_eq!(fs::read(ready.audio_path).expect("audio"), audio);
+    }
+
+    /// 同一个 attempt 的终态更新必须落在同一个文件里：按 attempt 自己的开始时间归档，
+    /// 跨天也不会留下两条记录。
+    #[test]
+    fn an_attempt_record_is_updated_in_place_across_a_day_boundary() {
+        let (_home, cache) = cache();
+        let clip_id = "6".repeat(64);
+        let started_at = DateTime::parse_from_rfc3339("2026-09-11T23:30:00Z")
+            .expect("timestamp")
+            .with_timezone(&Utc);
+        let mut record = attempt(
+            "attempt-overnight",
+            &clip_id,
+            started_at,
+            AttemptStatus::InProgress,
+        );
+        record.finished_at = None;
+        cache
+            .record_attempt(&record, started_at)
+            .expect("record the in-progress attempt");
+        assert_eq!(record.status, AttemptStatus::InProgress);
+        assert_eq!(record.finished_at, None);
+
+        // provider 返回后按同一 attempt_id 更新；`now` 已经跨过午夜。
+        let finished_at = started_at + chrono::Duration::minutes(45);
+        record.status = AttemptStatus::Succeeded;
+        record.finished_at = Some(finished_at.to_rfc3339());
+        cache
+            .record_attempt(&record, finished_at)
+            .expect("update the attempt in place");
+
+        let days: Vec<String> = fs::read_dir(cache.attempts_dir())
+            .expect("attempts dir")
+            .flatten()
+            .map(|day| day.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            days,
+            vec!["2026-09-11".to_string()],
+            "an attempt must stay in the day it started"
+        );
+        let files: Vec<String> = fs::read_dir(cache.attempts_dir().join("2026-09-11"))
+            .expect("day dir")
+            .flatten()
+            .map(|file| file.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            files,
+            vec!["attempt-overnight.json".to_string()],
+            "one attempt must stay one record"
+        );
+        let stored = cache
+            .load_attempt("attempt-overnight")
+            .expect("load")
+            .expect("record");
+        assert_eq!(stored.status, AttemptStatus::Succeeded);
+        assert_eq!(
+            stored.finished_at.as_deref(),
+            Some(finished_at.to_rfc3339().as_str())
+        );
+    }
+
+    /// 为同一 clip 排过队的调用方拿到的锁必须知道自己等过：它要在锁内重新检查首个终态。
+    #[test]
+    fn a_queued_writer_lock_reports_that_it_waited() {
+        let (_home, cache) = cache();
+        let clip_id = "7".repeat(64);
+        let holder = {
+            let cache = cache.clone();
+            let clip_id = clip_id.clone();
+            std::thread::spawn(move || {
+                let lock =
+                    ClipLock::acquire(&cache, &clip_id, now()).expect("hold the writer lock");
+                std::thread::sleep(std::time::Duration::from_millis(150));
+                drop(lock);
+            })
+        };
+        std::thread::sleep(std::time::Duration::from_millis(25));
+
+        let queued = ClipLock::acquire(&cache, &clip_id, now()).expect("acquire after the writer");
+        assert!(
+            queued.waited(),
+            "a caller that queued behind another writer must know it waited"
+        );
+        holder.join().expect("join the lock holder");
+        drop(queued);
+
+        let uncontended = ClipLock::acquire(&cache, &clip_id, now()).expect("acquire freely");
+        assert!(
+            !uncontended.waited(),
+            "a fresh writer must not be treated as a waiter"
+        );
     }
 }

@@ -715,7 +715,14 @@ where
             let (mapped, status) = map_provider_error(&error, &attempt_id);
             let mut next = state.clone();
             next.latest_attempt_id = Some(attempt_id.clone());
-            finish_attempt(&mut attempt, now, status, Some(mapped.machine_code()), None, None);
+            finish_attempt(
+                &mut attempt,
+                now,
+                status,
+                Some(mapped.machine_code()),
+                None,
+                None,
+            );
             record_attempt_and_gate(&cache, &attempt, now, has_valid_cache, &mut next);
             return Err(mapped);
         }
@@ -1211,8 +1218,10 @@ mod tests {
     use crate::speech::profile::AudioSettings;
     use crate::speech::store::SpeechStore;
     use crate::speech::SpeechProfileDto;
+    use serde_json::Value;
+    use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
     fn now() -> DateTime<Utc> {
         DateTime::parse_from_rfc3339("2026-09-11T12:00:00Z")
@@ -1623,6 +1632,180 @@ mod tests {
         .expect("a plain generate may retry after an explicit failure");
         assert_eq!(retried.source, SpeechClipSource::Provider);
         assert_eq!(counters.synthesis.load(Ordering::SeqCst), 1);
+    }
+
+    /// 排队等待方必须在锁内原样拿到首个明确失败：0 次 provider 调用、0 次目录请求，
+    /// 且 attempt ID 就是首个 attempt——同一 clip 的第二个请求可能已经被计费过一次。
+    #[tokio::test]
+    async fn a_queued_waiter_receives_the_first_provider_failure_without_a_second_call() {
+        let home = tempfile::tempdir().expect("home");
+        let store = SpeechStore::from_home(home.path());
+        let (catalog_fetch, synthesize, counters) = fake(Err(SenseAudioError::ProviderFailed));
+
+        let first = generate_clip(
+            input(store.clone(), SpeechContentKind::Highlight),
+            Some("test-key".to_string()),
+            now(),
+            catalog_fetch,
+            synthesize,
+        )
+        .await
+        .expect_err("the first attempt fails explicitly");
+        assert_eq!(first.machine_code(), "SPEECH_PROVIDER_FAILED");
+        assert!(
+            !first.blocks_generation(),
+            "an explicit failure is a known outcome"
+        );
+        let first_attempt = first.attempt_id().map(str::to_string).expect("attempt id");
+        assert_eq!(counters.synthesis.load(Ordering::SeqCst), 1);
+
+        // 另一个 writer 先持锁：第二个调用因此排队等待，而不是碰巧串行完成。
+        let holder = {
+            let cache = ClipCache::new(store.clone());
+            let clip_id = clip_id_of(SpeechContentKind::Highlight);
+            std::thread::spawn(move || {
+                let lock =
+                    ClipLock::acquire(&cache, &clip_id, now()).expect("hold the writer lock");
+                std::thread::sleep(std::time::Duration::from_millis(200));
+                drop(lock);
+            })
+        };
+        std::thread::sleep(std::time::Duration::from_millis(25));
+
+        let (catalog_fetch, synthesize, waiter_counters) =
+            fake(Ok(success_response("trace-waiter")));
+        let waited = generate_clip(
+            input(store.clone(), SpeechContentKind::Highlight),
+            Some("test-key".to_string()),
+            now(),
+            catalog_fetch,
+            synthesize,
+        )
+        .await
+        .expect_err("a queued waiter must not start a second provider request");
+
+        holder.join().expect("join the lock holder");
+        assert_eq!(waited.machine_code(), "SPEECH_PROVIDER_FAILED");
+        assert_eq!(waited.reason_code(), "provider_failed");
+        assert_eq!(waited.outcome(), "failed");
+        assert_eq!(
+            waited.attempt_id().map(str::to_string).as_deref(),
+            Some(first_attempt.as_str()),
+            "the waiter must receive the first attempt's terminal error verbatim"
+        );
+        assert_eq!(
+            waiter_counters.synthesis.load(Ordering::SeqCst),
+            0,
+            "the waiter must never reach the provider"
+        );
+        assert_eq!(
+            waiter_counters.catalog.load(Ordering::SeqCst),
+            0,
+            "the recorded terminal error is returned before any preflight"
+        );
+
+        // 第一位调用方自己的显式重试（没有排队）仍然可以重新生成。
+        let (catalog_fetch, synthesize, retry_counters) = fake(Ok(success_response("trace-retry")));
+        let retried = generate_clip(
+            input(store.clone(), SpeechContentKind::Highlight),
+            Some("test-key".to_string()),
+            now(),
+            catalog_fetch,
+            synthesize,
+        )
+        .await
+        .expect("an explicit generate is a new user action");
+        assert_eq!(retried.source, SpeechClipSource::Provider);
+        assert_ne!(
+            retried.attempt_id.as_deref(),
+            Some(first_attempt.as_str()),
+            "the retry is a new Speech Attempt"
+        );
+        assert_eq!(retry_counters.synthesis.load(Ordering::SeqCst), 1);
+    }
+
+    /// attempt 记录必须先于 provider 调用落盘：调用期间就能读到 `in_progress` 记录，
+    /// 返回后按同一 attempt ID 原地更新为终态。
+    #[tokio::test]
+    async fn the_attempt_record_is_persisted_before_the_provider_call() {
+        let home = tempfile::tempdir().expect("home");
+        let store = SpeechStore::from_home(home.path());
+        let probe_cache = ClipCache::new(store.clone());
+        let cache_for_probe = probe_cache.clone();
+        let clip_id = clip_id_of(SpeechContentKind::Highlight);
+        let in_flight = Arc::new(Mutex::new(String::new()));
+        let probe = Arc::clone(&in_flight);
+
+        let catalog_fetch = || std::future::ready(Ok(fresh_catalog()));
+        let synthesize = move |_request: SpeechSynthesisRequest| {
+            let probe = Arc::clone(&probe);
+            let cache = cache_for_probe.clone();
+            async move {
+                // provider 已经被调用：这次可能计费的请求必须已经有历史记录。
+                let mut seen = String::new();
+                for day in std::fs::read_dir(cache.attempts_dir())
+                    .expect("attempts dir")
+                    .flatten()
+                {
+                    for file in std::fs::read_dir(day.path()).expect("records").flatten() {
+                        seen = std::fs::read_to_string(file.path()).expect("attempt record");
+                    }
+                }
+                *probe.lock().expect("probe") = seen;
+                Ok(success_response("trace-in-flight"))
+            }
+        };
+
+        let outcome = generate_clip(
+            input(store.clone(), SpeechContentKind::Highlight),
+            Some("test-key".to_string()),
+            now(),
+            catalog_fetch,
+            synthesize,
+        )
+        .await
+        .expect("generate");
+
+        let during: Value =
+            serde_json::from_str(&in_flight.lock().expect("probe")).expect("in-flight record");
+        assert_eq!(during["status"], "in_progress");
+        assert!(
+            during["finished_at"].is_null(),
+            "an in-flight attempt has no outcome yet"
+        );
+        assert_eq!(
+            during["attempt_id"].as_str(),
+            outcome.attempt_id.as_deref(),
+            "the in-flight record must name the attempt that is being billed"
+        );
+        assert_eq!(during["clip_id"].as_str(), Some(clip_id.as_str()));
+
+        let stored = probe_cache
+            .load_attempt(outcome.attempt_id.as_deref().expect("attempt id"))
+            .expect("load")
+            .expect("record");
+        assert_eq!(
+            stored.status,
+            AttemptStatus::Succeeded,
+            "the same record must be updated in place with the outcome"
+        );
+        assert!(stored.finished_at.is_some());
+        assert_eq!(stored.provider_usage_characters, Some(8));
+        assert_eq!(stored.trace_id.as_deref(), Some("trace-in-flight"));
+        assert!(stored.product_error_code.is_none());
+        // 一条 attempt 一个文件：原地更新不能留下 second record。
+        let files: Vec<PathBuf> = std::fs::read_dir(probe_cache.attempts_dir())
+            .expect("attempts dir")
+            .flatten()
+            .flat_map(|day| {
+                std::fs::read_dir(day.path())
+                    .expect("records")
+                    .flatten()
+                    .map(|f| f.path())
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        assert_eq!(files.len(), 1, "one attempt must stay one history record");
     }
 
     #[tokio::test]
