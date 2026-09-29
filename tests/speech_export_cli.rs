@@ -378,10 +378,8 @@ impl Fixture {
     }
 
     fn manifest(&self) -> Value {
-        serde_json::from_str(
-            &std::fs::read_to_string(self.manifest_path()).expect("manifest.json"),
-        )
-        .expect("manifest JSON")
+        serde_json::from_str(&std::fs::read_to_string(self.manifest_path()).expect("manifest.json"))
+            .expect("manifest JSON")
     }
 
     fn write_manifest(&self, value: &Value) {
@@ -392,11 +390,7 @@ impl Fixture {
 
     /// 常规 Markdown 导出的主笔记。
     fn main_note(&self) -> String {
-        std::fs::read_to_string(
-            self.book_export_root()
-                .join("测试书.md"),
-        )
-        .expect("main note")
+        std::fs::read_to_string(self.book_export_root().join("测试书.md")).expect("main note")
     }
 }
 
@@ -440,12 +434,24 @@ fn provider_with_catalog_and_synthesis(trace_id: &str) -> MockProvider {
 }
 
 /// 生成一个已接受的 Cached Speech Clip，返回完整 clip ID。
-fn generate_cached_clip(fixture: &Fixture, annotation_id: &str, content: &str, trace_id: &str) -> String {
+fn generate_cached_clip(
+    fixture: &Fixture,
+    annotation_id: &str,
+    content: &str,
+    trace_id: &str,
+) -> String {
     let provider = provider_with_catalog_and_synthesis(trace_id);
     let value = succeeded(&fixture.run_with(
         &[
-            "speech", "generate", "--asset-id", "book-1", "--annotation-id", annotation_id,
-            "--content", content, "--json",
+            "speech",
+            "generate",
+            "--asset-id",
+            "book-1",
+            "--annotation-id",
+            annotation_id,
+            "--content",
+            content,
+            "--json",
         ],
         &provider,
         Some(TEST_KEY),
@@ -466,8 +472,17 @@ fn generate_variant_clip(fixture: &Fixture, voice_id: &str, trace_id: &str) -> S
     let provider = provider_with_catalog_and_synthesis(trace_id);
     let value = succeeded(&fixture.run_with(
         &[
-            "speech", "generate", "--asset-id", "book-1", "--annotation-id", "annotation-41",
-            "--content", "highlight", "--voice-id", voice_id, "--json",
+            "speech",
+            "generate",
+            "--asset-id",
+            "book-1",
+            "--annotation-id",
+            "annotation-41",
+            "--content",
+            "highlight",
+            "--voice-id",
+            voice_id,
+            "--json",
         ],
         &provider,
         Some(TEST_KEY),
@@ -480,8 +495,7 @@ fn generate_variant_clip(fixture: &Fixture, voice_id: &str, trace_id: &str) -> S
 }
 
 /// 一次语法合法但没有任何缓存的 clip ID。
-const ABSENT_CLIP_ID: &str =
-    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+const ABSENT_CLIP_ID: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
 fn assert_zero_connections(records: &[RequestRecord], path: &str) {
     assert_eq!(
@@ -493,9 +507,7 @@ fn assert_zero_connections(records: &[RequestRecord], path: &str) {
 
 fn run_export(fixture: &Fixture, clip_id: &str, extra: &[&str]) -> Output {
     let provider = provider_with_catalog_and_synthesis("trace-export");
-    let mut args = vec![
-        "speech", "export", "--clip-id", clip_id, "--output",
-    ];
+    let mut args = vec!["speech", "export", "--clip-id", clip_id, "--output"];
     let root = fixture.book_export_root();
     args.push(root.to_str().expect("export root"));
     args.extend_from_slice(extra);
@@ -551,12 +563,21 @@ fn export_copies_verified_audio_and_commits_a_manifest_without_secrets() {
     assert_eq!(entry["sha256"], receipt["sha256"]);
     assert_eq!(entry["size_bytes"], receipt["size_bytes"]);
     assert_eq!(entry["format"], "mp3");
-    assert!(entry["exported_at"].as_str().expect("exported_at").ends_with('Z'));
+    assert!(entry["exported_at"]
+        .as_str()
+        .expect("exported_at")
+        .ends_with('Z'));
 
     // 没有原文、密钥、绝对路径或供应商响应。
     let text = serde_json::to_string(&manifest).expect("manifest text");
-    assert!(!text.contains("高亮正文"), "manifest must not store the source text");
-    assert!(!text.contains(TEST_KEY), "manifest must not store the API key");
+    assert!(
+        !text.contains("高亮正文"),
+        "manifest must not store the source text"
+    );
+    assert!(
+        !text.contains(TEST_KEY),
+        "manifest must not store the API key"
+    );
     assert!(!text.contains(SECRET_CANARY));
     assert!(
         !text.contains(fixture.home.path().to_str().expect("home")),
@@ -578,7 +599,12 @@ fn markdown_export_links_active_audio_right_after_the_highlight() {
     let relative = format!("assets/audio/highlight-{}.mp3", &clip_id[..12]);
 
     let value = succeeded(&fixture.run(&[
-        "export", "--asset-id", "book-1", "--format", "markdown", "--json",
+        "export",
+        "--asset-id",
+        "book-1",
+        "--format",
+        "markdown",
+        "--json",
     ]));
 
     let note = fixture.main_note();
@@ -595,18 +621,25 @@ fn markdown_export_links_active_audio_right_after_the_highlight() {
     assert!(!note.contains(fixture.speech_root().to_str().expect("speech root")));
 
     // 收据报告写入了哪些链接。
-    assert_eq!(value["receipt"]["audio_links"][0], format!("[▶ 播放高亮语音]({relative})"));
-    assert!(value["receipt"]["warnings"].is_null() || value["receipt"]["warnings"]
-        .as_array()
-        .expect("warnings")
-        .is_empty());
+    assert_eq!(
+        value["receipt"]["audio_links"][0],
+        format!("[▶ 播放高亮语音]({relative})")
+    );
+    assert!(
+        value["receipt"]["warnings"].is_null()
+            || value["receipt"]["warnings"]
+                .as_array()
+                .expect("warnings")
+                .is_empty()
+    );
 }
 
 /// 高亮与笔记各有自己的链接，且 Obsidian 在同一位置写音频嵌入。
 #[test]
 fn highlight_and_note_links_are_separate_and_obsidian_embeds_in_place() {
     let fixture = Fixture::new();
-    let highlight_clip = generate_cached_clip(&fixture, "annotation-42", "highlight", "trace-exp-3");
+    let highlight_clip =
+        generate_cached_clip(&fixture, "annotation-42", "highlight", "trace-exp-3");
     let note_clip = generate_cached_clip(&fixture, "annotation-42", "note", "trace-exp-4");
     succeeded(&run_export(&fixture, &highlight_clip, &[]));
     succeeded(&run_export(&fixture, &note_clip, &[]));
@@ -615,7 +648,12 @@ fn highlight_and_note_links_are_separate_and_obsidian_embeds_in_place() {
     let note_relative = format!("assets/audio/note-{}.mp3", &note_clip[..12]);
 
     succeeded(&fixture.run(&[
-        "export", "--asset-id", "book-1", "--format", "markdown", "--json",
+        "export",
+        "--asset-id",
+        "book-1",
+        "--format",
+        "markdown",
+        "--json",
     ]));
     let markdown = fixture.main_note();
     let highlight_at = markdown
@@ -637,7 +675,13 @@ fn highlight_and_note_links_are_separate_and_obsidian_embeds_in_place() {
 
     // Obsidian 格式在同一位置写相对嵌入（覆盖同一本书已有的 Markdown）。
     succeeded(&fixture.run(&[
-        "export", "--asset-id", "book-1", "--format", "obsidian", "--overwrite", "--json",
+        "export",
+        "--asset-id",
+        "book-1",
+        "--format",
+        "obsidian",
+        "--overwrite",
+        "--json",
     ]));
     let obsidian = fixture.main_note();
     assert!(obsidian.contains(&format!("![[{highlight_relative}]]")));
@@ -659,7 +703,10 @@ fn re_export_reuses_identical_content_and_overwrite_is_explicit() {
 
     // 相同 clip、相同 checksum：直接复用，不重写。
     let second = succeeded(&run_export(&fixture, &clip_id, &[]));
-    assert_eq!(first["receipt"]["relative_path"], second["receipt"]["relative_path"]);
+    assert_eq!(
+        first["receipt"]["relative_path"],
+        second["receipt"]["relative_path"]
+    );
     assert_eq!(second["receipt"]["reused"], true);
     assert_eq!(second["receipt"]["replaced"], false);
     assert_eq!(
@@ -673,7 +720,10 @@ fn re_export_reuses_identical_content_and_overwrite_is_explicit() {
     std::fs::write(&exported, &tampered).expect("tamper");
     let protected = failed(&run_export(&fixture, &clip_id, &[]));
     assert_eq!(protected["error"]["code"], "SPEECH_OUTPUT_FILE_EXISTS");
-    assert_eq!(protected["error"]["details"]["relative_path"], relative.as_str());
+    assert_eq!(
+        protected["error"]["details"]["relative_path"],
+        relative.as_str()
+    );
     assert_eq!(
         std::fs::read(&exported).expect("audio"),
         tampered,
@@ -695,7 +745,10 @@ fn the_newest_variant_is_active_and_older_variants_survive() {
     let fixture = Fixture::new();
     let first = generate_cached_clip(&fixture, "annotation-41", "highlight", "trace-exp-6");
     let second = generate_variant_clip(&fixture, VARIANT_VOICE_ID, "trace-exp-7");
-    assert_ne!(first, second, "a different Voice Profile is a different clip");
+    assert_ne!(
+        first, second,
+        "a different Voice Profile is a different clip"
+    );
 
     succeeded(&run_export(&fixture, &first, &[]));
     let first_relative = format!("assets/audio/highlight-{}.mp3", &first[..12]);
@@ -717,11 +770,19 @@ fn the_newest_variant_is_active_and_older_variants_survive() {
     );
     assert_eq!(record["clips"][0]["clip_id"], first.as_str());
     // 旧变体文件仍然存在且内容不变：由用户拥有，应用不静默删除。
-    assert_eq!(std::fs::read(&first_file).expect("old variant"), first_bytes);
+    assert_eq!(
+        std::fs::read(&first_file).expect("old variant"),
+        first_bytes
+    );
 
     // 常规导出只链接 active 变体。
     succeeded(&fixture.run(&[
-        "export", "--asset-id", "book-1", "--format", "markdown", "--json",
+        "export",
+        "--asset-id",
+        "book-1",
+        "--format",
+        "markdown",
+        "--json",
     ]));
     let note = fixture.main_note();
     assert!(note.contains(&second_relative));
@@ -773,7 +834,10 @@ fn a_short_fingerprint_collision_extends_instead_of_overwriting() {
     assert!(relative.starts_with(&format!("assets/audio/highlight-{}", &clip_id[..13])));
 
     // 另一个 clip 的文件逐字节不变。
-    assert_eq!(std::fs::read(&fixture_file).expect("foreign audio"), other_bytes_before);
+    assert_eq!(
+        std::fs::read(&fixture_file).expect("foreign audio"),
+        other_bytes_before
+    );
     let manifest = fixture.manifest();
     let paths: Vec<String> = manifest["records"]
         .as_array()
@@ -829,15 +893,26 @@ fn a_traversal_path_in_the_manifest_never_escapes_the_export_root() {
 
     // 常规 Markdown 导出照常成功，只省略这条链接并给出 warning。
     let value = succeeded(&fixture.run(&[
-        "export", "--asset-id", "book-1", "--format", "markdown", "--json",
+        "export",
+        "--asset-id",
+        "book-1",
+        "--format",
+        "markdown",
+        "--json",
     ]));
     let warnings = value["receipt"]["warnings"].as_array().expect("warnings");
     assert_eq!(warnings.len(), 1, "the traversal link must be reported");
     assert_eq!(warnings[0]["code"], "SPEECH_AUDIO_LINK_OMITTED");
     assert_eq!(warnings[0]["reason"], "path_outside_export_root");
     let note = fixture.main_note();
-    assert!(!note.contains("secret.mp3"), "no link to the file outside the root");
-    assert!(note.contains("> 高亮正文"), "the main note is still exported");
+    assert!(
+        !note.contains("secret.mp3"),
+        "no link to the file outside the root"
+    );
+    assert!(
+        note.contains("> 高亮正文"),
+        "the main note is still exported"
+    );
     assert_eq!(
         std::fs::read(&secret).expect("secret"),
         secret_bytes,
@@ -892,7 +967,12 @@ fn a_missing_exported_audio_becomes_a_warning_not_a_failed_export() {
     std::fs::remove_file(fixture.book_export_root().join(&relative)).expect("remove audio");
 
     let value = succeeded(&fixture.run(&[
-        "export", "--asset-id", "book-1", "--format", "markdown", "--json",
+        "export",
+        "--asset-id",
+        "book-1",
+        "--format",
+        "markdown",
+        "--json",
     ]));
 
     let warnings = value["receipt"]["warnings"].as_array().expect("warnings");
@@ -901,14 +981,20 @@ fn a_missing_exported_audio_becomes_a_warning_not_a_failed_export() {
     assert_eq!(warnings[0]["reason"], "audio_missing");
     let note = fixture.main_note();
     assert!(!note.contains(&relative), "no dangling link is written");
-    assert!(note.contains("> 高亮正文"), "the reading note is still complete");
+    assert!(
+        note.contains("> 高亮正文"),
+        "the reading note is still complete"
+    );
     assert!(!value["receipt"]["generated_files"]
         .as_array()
         .expect("files")
         .is_empty());
     // 常规导出不修复文件、不修改 manifest。
     assert!(!fixture.book_export_root().join(&relative).exists());
-    assert_eq!(fixture.manifest()["records"][0]["active_clip_id"], clip_id.as_str());
+    assert_eq!(
+        fixture.manifest()["records"][0]["active_clip_id"],
+        clip_id.as_str()
+    );
 }
 
 /// 被用户改写（checksum 不匹配）的音频同样只产生 warning。
@@ -925,7 +1011,12 @@ fn a_checksum_mismatch_omits_the_link_and_keeps_the_manifest_untouched() {
     let manifest_before = std::fs::read_to_string(fixture.manifest_path()).expect("manifest");
 
     let value = succeeded(&fixture.run(&[
-        "export", "--asset-id", "book-1", "--format", "markdown", "--json",
+        "export",
+        "--asset-id",
+        "book-1",
+        "--format",
+        "markdown",
+        "--json",
     ]));
 
     let warnings = value["receipt"]["warnings"].as_array().expect("warnings");
@@ -937,7 +1028,11 @@ fn a_checksum_mismatch_omits_the_link_and_keeps_the_manifest_untouched() {
         manifest_before,
         "the book exporter never edits the manifest"
     );
-    assert_eq!(std::fs::read(&audio).expect("audio"), tampered, "and never repairs the file");
+    assert_eq!(
+        std::fs::read(&audio).expect("audio"),
+        tampered,
+        "and never repairs the file"
+    );
 }
 
 /// 中断导出：manifest 提交失败时不会留下指向缺失文件的 active 记录。
@@ -954,12 +1049,7 @@ fn an_interrupted_export_never_commits_a_manifest_pointing_at_a_missing_file() {
     std::fs::create_dir_all(&staging).expect("create blocking directory");
 
     let value = failed(&run_export(&fixture, &clip_id, &[]));
-    assert!(
-        !value["error"]["code"]
-            .as_str()
-            .expect("code")
-            .is_empty()
-    );
+    assert!(!value["error"]["code"].as_str().expect("code").is_empty());
     assert_eq!(
         value["error"]["code"], "SPEECH_STORAGE_UNAVAILABLE",
         "a manifest commit failure is a stable storage error"
@@ -994,7 +1084,10 @@ fn an_interrupted_export_never_commits_a_manifest_pointing_at_a_missing_file() {
     std::fs::remove_dir(&staging).expect("remove blocking directory");
     let retried = succeeded(&run_export(&fixture, &clip_id, &[]));
     assert_eq!(retried["receipt"]["reused"], true);
-    assert_eq!(retried["receipt"]["relative_path"], format!("assets/audio/highlight-{}.mp3", &clip_id[..12]));
+    assert_eq!(
+        retried["receipt"]["relative_path"],
+        format!("assets/audio/highlight-{}.mp3", &clip_id[..12])
+    );
 }
 
 /// `speech export` 绝不改写已有 Markdown，也绝不调用 provider。
@@ -1005,7 +1098,12 @@ fn speech_export_never_patches_markdown_and_never_calls_a_provider() {
 
     // 先做一次常规导出，让 Markdown 存在。
     succeeded(&fixture.run(&[
-        "export", "--asset-id", "book-1", "--format", "markdown", "--json",
+        "export",
+        "--asset-id",
+        "book-1",
+        "--format",
+        "markdown",
+        "--json",
     ]));
     let before = fixture.main_note();
     let markdown_before = list_markdown(&fixture.book_export_root());
@@ -1074,7 +1172,11 @@ fn absent_and_malformed_clips_are_stable_errors() {
     let provider = provider_with_catalog_and_synthesis("trace-exp-16");
     let output = fixture.run_with(
         &[
-            "speech", "export", "--clip-id", ABSENT_CLIP_ID, "--output",
+            "speech",
+            "export",
+            "--clip-id",
+            ABSENT_CLIP_ID,
+            "--output",
             fixture.book_export_root().to_str().expect("root"),
         ],
         &provider,
@@ -1101,10 +1203,7 @@ fn a_tampered_cache_entry_is_rejected_before_anything_is_copied() {
     assert_eq!(value["error"]["code"], "SPEECH_CACHE_CORRUPT");
     assert!(!fixture.manifest_path().exists());
     assert!(
-        !fixture
-            .book_export_root()
-            .join("assets/audio")
-            .exists(),
+        !fixture.book_export_root().join("assets/audio").exists(),
         "a corrupt cache entry must not produce any export artifact"
     );
 }
@@ -1133,7 +1232,12 @@ fn a_book_without_exported_audio_writes_no_placeholder_link() {
     let fixture = Fixture::new();
 
     let value = succeeded(&fixture.run(&[
-        "export", "--asset-id", "book-1", "--format", "markdown", "--json",
+        "export",
+        "--asset-id",
+        "book-1",
+        "--format",
+        "markdown",
+        "--json",
     ]));
 
     let note = fixture.main_note();
@@ -1141,7 +1245,10 @@ fn a_book_without_exported_audio_writes_no_placeholder_link() {
     assert!(!note.contains("assets/audio"), "no placeholder audio link");
     assert!(!note.contains("播放"));
     assert!(value["receipt"]["audio_links"].is_null());
-    assert!(!fixture.manifest_path().exists(), "reading notes never create a manifest");
+    assert!(
+        !fixture.manifest_path().exists(),
+        "reading notes never create a manifest"
+    );
 }
 
 /// 人类 CLI 的导出输出说明复用了哪个文件、哪个 clip 现在 active。
@@ -1153,18 +1260,29 @@ fn human_export_reports_the_relative_path_and_active_clip() {
     let provider = provider_with_catalog_and_synthesis("trace-exp-20");
     let output = fixture.run_with(
         &[
-            "speech", "export", "--clip-id", &clip_id, "--output",
+            "speech",
+            "export",
+            "--clip-id",
+            &clip_id,
+            "--output",
             fixture.book_export_root().to_str().expect("root"),
         ],
         &provider,
         Some(TEST_KEY),
     );
-    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let records = provider.finish();
     assert_zero_connections(&records, "speech export (human success)");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains(&format!("assets/audio/highlight-{}.mp3", &clip_id[..12])), "{stdout}");
+    assert!(
+        stdout.contains(&format!("assets/audio/highlight-{}.mp3", &clip_id[..12])),
+        "{stdout}"
+    );
     assert!(stdout.contains(&clip_id), "{stdout}");
 }
 

@@ -81,8 +81,15 @@ pub fn export_book_checked(
     format: ExportFormat,
     overwrite: bool,
 ) -> std::result::Result<Vec<PathBuf>, ExportWriteError> {
-    export_book_checked_with_speech(book, annotations, llm_results, output_dir, format, overwrite)
-        .map(|outcome| outcome.files)
+    export_book_checked_with_speech(
+        book,
+        annotations,
+        llm_results,
+        output_dir,
+        format,
+        overwrite,
+    )
+    .map(|outcome| outcome.files)
 }
 
 /// 与 [`export_book_checked`] 相同，另外报告 Speech 音频链接的处理结果。
@@ -289,10 +296,7 @@ fn push_audio_link(
     format: ExportFormat,
     written_links: &mut Vec<String>,
 ) {
-    let Some(link) = links
-        .links
-        .get(&(annotation_id.to_string(), content_kind))
-    else {
+    let Some(link) = links.links.get(&(annotation_id.to_string(), content_kind)) else {
         return;
     };
     let rendered = render_audio_link(link, content_kind, format);

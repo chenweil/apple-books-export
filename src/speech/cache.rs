@@ -930,8 +930,7 @@ impl ClipCache {
             let files = fs::read_dir(day.path())
                 .map_err(|error| ClipCacheError::unavailable(&day.path(), error))?;
             for file in files {
-                let file =
-                    file.map_err(|error| ClipCacheError::unavailable(&day.path(), error))?;
+                let file = file.map_err(|error| ClipCacheError::unavailable(&day.path(), error))?;
                 if !file.path().is_file() {
                     continue;
                 }
@@ -1040,7 +1039,11 @@ impl ClipCache {
     }
 
     /// 播放/导出 usage marker 的路径（`locks/<clip_id>.play` / `.export`）。
-    pub fn usage_marker_path(&self, clip_id: &str, kind: ClipUseKind) -> Result<PathBuf, ClipCacheError> {
+    pub fn usage_marker_path(
+        &self,
+        clip_id: &str,
+        kind: ClipUseKind,
+    ) -> Result<PathBuf, ClipCacheError> {
         Ok(self
             .locks_dir()
             .join(format!("{clip_id}.{}", kind.marker_suffix())))
@@ -1080,7 +1083,10 @@ impl ClipCache {
             Ok(_lock) => self
                 .usage_marker(clip_id, ClipUseKind::Export)
                 .map(|_| ClipUseKind::Export)
-                .or_else(|| self.usage_marker(clip_id, ClipUseKind::Playback).map(|_| ClipUseKind::Playback)),
+                .or_else(|| {
+                    self.usage_marker(clip_id, ClipUseKind::Playback)
+                        .map(|_| ClipUseKind::Playback)
+                }),
         }
     }
 
@@ -1164,9 +1170,7 @@ impl ClipCache {
                 .filter(|sha| Some(sha) != referenced.as_ref())
                 .count();
             let reclaimable_versions = if in_use.is_none() { orphans } else { 0 };
-            let last_used_at = stored
-                .as_ref()
-                .and_then(|state| state.last_used_at.clone());
+            let last_used_at = stored.as_ref().and_then(|state| state.last_used_at.clone());
 
             let (status, accepted, blocked) = match self.load_ready_clip(&clip_id) {
                 Ok(Some(_)) => (ClipCacheStatus::Ready, true, false),
@@ -1273,7 +1277,8 @@ impl ClipCache {
         // 超预算时才动手：先回收确认没有 lock/reference 的孤立 version，再淘汰 clip。
         if used_bytes > usable_budget_bytes {
             for candidate in &candidates {
-                report.reclaimed_versions += self.reclaim_unreferenced_versions(&candidate.clip_id)?;
+                report.reclaimed_versions +=
+                    self.reclaim_unreferenced_versions(&candidate.clip_id)?;
             }
             used_bytes = self.total_used_bytes()?;
         }
@@ -2085,7 +2090,12 @@ mod tests {
         let audio = silent_mp3(1);
         let audio_sha256 = sha256_hex(&audio);
         cache
-            .commit_version(&state(&clip_id), &metadata(&clip_id, &audio_sha256, &audio), &audio, now())
+            .commit_version(
+                &state(&clip_id),
+                &metadata(&clip_id, &audio_sha256, &audio),
+                &audio,
+                now(),
+            )
             .expect("commit");
         let held = ClipLock::acquire(&cache, &clip_id, now()).expect("hold the lock");
 
@@ -2143,7 +2153,9 @@ mod tests {
             provider_code: None,
             trace_id: None,
         };
-        cache.record_attempt(&record, now()).expect("record attempt");
+        cache
+            .record_attempt(&record, now())
+            .expect("record attempt");
         let mut gated = state(&clip_id);
         gated.latest_attempt_id = Some("attempt-clear".to_string());
         gated.latest_attempt_status = Some(AttemptStatus::Unknown);
@@ -2158,7 +2170,10 @@ mod tests {
             "history clear must never lift a generation gate"
         );
         assert!(!cache.attempts_dir().exists());
-        let kept = cache.load_state(&clip_id).expect("load state").expect("state");
+        let kept = cache
+            .load_state(&clip_id)
+            .expect("load state")
+            .expect("state");
         assert!(
             kept.generation_blocked,
             "the unknown gate must survive history clear"
@@ -2555,16 +2570,14 @@ mod tests {
 
             // 生成用 writer 锁表达；播放与导出用 ClipUseGuard 的 usage marker 表达。
             let _lock = match kind {
-                ClipUseKind::Generation => Some(
-                    ClipLock::acquire(&cache, &held, now()).expect("writer lock"),
-                ),
+                ClipUseKind::Generation => {
+                    Some(ClipLock::acquire(&cache, &held, now()).expect("writer lock"))
+                }
                 _ => None,
             };
             let _use = match kind {
                 ClipUseKind::Generation => None,
-                _ => Some(
-                    ClipUseGuard::acquire(&cache, &held, kind, now()).expect("usage marker"),
-                ),
+                _ => Some(ClipUseGuard::acquire(&cache, &held, kind, now()).expect("usage marker")),
             };
             let _ = marker;
 
@@ -2665,20 +2678,20 @@ mod tests {
             .join("versions")
             .join("e".repeat(64));
         fs::create_dir_all(&relaxed_orphan).expect("relaxed orphan dir");
-        let relaxed_report = relaxed.maintain_budget(&[], now()).expect("maintain budget");
+        let relaxed_report = relaxed
+            .maintain_budget(&[], now())
+            .expect("maintain budget");
         assert_eq!(relaxed_report.reclaimed_versions, 0);
         assert!(
             relaxed_orphan.exists(),
             "without pressure nothing may be deleted"
         );
-        assert!(
-            relaxed
-                .clip_dir(&relaxed_id)
-                .expect("clip dir")
-                .join("versions")
-                .join(&relaxed_referenced)
-                .exists()
-        );
+        assert!(relaxed
+            .clip_dir(&relaxed_id)
+            .expect("clip dir")
+            .join("versions")
+            .join(&relaxed_referenced)
+            .exists());
 
         // 超预算（200 MiB 预算 → 72 MiB 可用）：先回收无引用的孤立 version，再淘汰 clip。
         let pressured = cache.maintain_budget(&[], now()).expect("maintain budget");
@@ -2727,14 +2740,18 @@ mod tests {
         fs::write(expired_dir.join("attempt-expired.json"), json).expect("expired record");
         // 窗内的 attempt 同样直接落盘：`record_attempt` 自带维护，会在写下终态前
         // 就把过期记录删掉，那样就断言不到「清理真的发生了」。
-        let fresh_dir = cache.attempts_dir().join(now().format("%Y-%m-%d").to_string());
+        let fresh_dir = cache
+            .attempts_dir()
+            .join(now().format("%Y-%m-%d").to_string());
         fs::create_dir_all(&fresh_dir).expect("fresh day dir");
         let fresh_record = attempt_record("attempt-fresh", &evicted, now());
         let mut fresh_json = serde_json::to_string_pretty(&fresh_record).expect("record JSON");
         fresh_json.push('\n');
         fs::write(fresh_dir.join("attempt-fresh.json"), fresh_json).expect("fresh record");
 
-        let maintenance = cache.maintain_budget(&[&kept], now()).expect("maintain budget");
+        let maintenance = cache
+            .maintain_budget(&[&kept], now())
+            .expect("maintain budget");
         assert_eq!(maintenance.evicted, vec![evicted.clone()]);
 
         let prune = cache
@@ -2747,7 +2764,10 @@ mod tests {
             "a state naming a removed attempt must be reconciled"
         );
         assert!(
-            cache.load_attempt("attempt-expired").expect("load").is_none(),
+            cache
+                .load_attempt("attempt-expired")
+                .expect("load")
+                .is_none(),
             "expired attempt history is pruned"
         );
         assert!(
@@ -2765,7 +2785,10 @@ mod tests {
             Some(kept_audio.as_str()),
             "pruning must never remove a valid cache entry"
         );
-        assert!(!state.generation_blocked, "pruning must never create a gate");
+        assert!(
+            !state.generation_blocked,
+            "pruning must never create a gate"
+        );
         assert!(
             !cache.clip_dir(&evicted).expect("dir").exists(),
             "LRU still evicted the least recently used clip independently"
@@ -2787,10 +2810,7 @@ mod tests {
         gated.current_audio_sha256 = None;
         cache.save_state(&gated).expect("save gate");
         cache
-            .record_attempt(
-                &attempt_record("attempt-gate", &clip_id, now()),
-                now(),
-            )
+            .record_attempt(&attempt_record("attempt-gate", &clip_id, now()), now())
             .expect("record");
         let exports = cache.root().join("exports.json");
         fs::write(&exports, b"{\"schema_version\":1}").expect("export projection");

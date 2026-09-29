@@ -347,7 +347,9 @@ impl Fixture {
                 } else {
                     let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
                     files.push((
-                        path.strip_prefix(&root).expect("relative path").to_path_buf(),
+                        path.strip_prefix(&root)
+                            .expect("relative path")
+                            .to_path_buf(),
                         size,
                     ));
                 }
@@ -415,8 +417,15 @@ fn generate_cached_clip(
     let provider = provider_with_catalog_and_synthesis(trace_id);
     let value = succeeded(&fixture.run_with(
         &[
-            "speech", "generate", "--asset-id", "book-1", "--annotation-id", annotation_id,
-            "--content", content, "--json",
+            "speech",
+            "generate",
+            "--asset-id",
+            "book-1",
+            "--annotation-id",
+            annotation_id,
+            "--content",
+            content,
+            "--json",
         ],
         &provider,
         Some(TEST_KEY),
@@ -547,12 +556,23 @@ fn every_speech_leaf_command_fails_with_a_versioned_error_envelope() {
     // 要么是缺少必需参数，要么是语法非法的 clip ID。
     let cases: &[(&[&str], &str)] = &[
         (&["speech", "voices", "--json"], "speech voices"),
-        (&["speech", "profile", "set", "--json"], "speech profile set"),
+        (
+            &["speech", "profile", "set", "--json"],
+            "speech profile set",
+        ),
         (&["speech", "generate", "--json"], "speech generate"),
-        (&["speech", "play", "--clip-id", "not-a-clip", "--json"], "speech play"),
+        (
+            &["speech", "play", "--clip-id", "not-a-clip", "--json"],
+            "speech play",
+        ),
         (
             &[
-                "speech", "export", "--clip-id", "not-a-clip", "--output", "/tmp/does-not-matter",
+                "speech",
+                "export",
+                "--clip-id",
+                "not-a-clip",
+                "--output",
+                "/tmp/does-not-matter",
                 "--json",
             ],
             "speech export",
@@ -590,8 +610,15 @@ fn every_speech_success_receipt_is_versioned_and_keeps_streams_separate() {
     let provider = provider_with_catalog_and_synthesis("trace-29-generate");
     let value = succeeded(&fixture.run_with(
         &[
-            "speech", "generate", "--asset-id", "book-1", "--annotation-id", "annotation-42",
-            "--content", "note", "--json",
+            "speech",
+            "generate",
+            "--asset-id",
+            "book-1",
+            "--annotation-id",
+            "annotation-42",
+            "--content",
+            "note",
+            "--json",
         ],
         &provider,
         Some(TEST_KEY),
@@ -604,8 +631,13 @@ fn every_speech_success_receipt_is_versioned_and_keeps_streams_separate() {
     let root = fixture.book_export_root();
     let value = succeeded(&fixture.run_with(
         &[
-            "speech", "export", "--clip-id", &clip_id, "--output",
-            root.to_str().expect("export root"), "--json",
+            "speech",
+            "export",
+            "--clip-id",
+            &clip_id,
+            "--output",
+            root.to_str().expect("export root"),
+            "--json",
         ],
         &provider,
         Some(TEST_KEY),
@@ -617,7 +649,8 @@ fn every_speech_success_receipt_is_versioned_and_keeps_streams_separate() {
     // 已经把 24 小时 Voice Catalog 缓存写好，第二次调用会合法地复用缓存而不再联网。
     let fresh = Fixture::new();
     let provider = provider_with_catalog_and_synthesis("trace-29-voices");
-    let value = succeeded(&fresh.run_with(&["speech", "voices", "--json"], &provider, Some(TEST_KEY)));
+    let value =
+        succeeded(&fresh.run_with(&["speech", "voices", "--json"], &provider, Some(TEST_KEY)));
     assert!(!provider.finish().is_empty());
     assert_versioned_and_secret_free(&value, "speech voices");
 }
@@ -649,7 +682,11 @@ fn a_tampered_entry_is_a_stable_code_rather_than_a_varying_one() {
         .join("clips")
         .join(&clip_id)
         .join("versions")
-        .join(state["current_audio_sha256"].as_str().expect("audio sha256"))
+        .join(
+            state["current_audio_sha256"]
+                .as_str()
+                .expect("audio sha256"),
+        )
         .join("audio.mp3");
 
     let mut bytes = std::fs::read(&audio_path).expect("read audio");
@@ -676,8 +713,16 @@ fn error_details_carry_diagnostics_without_source_text_or_secrets() {
     let provider = provider_with_catalog_and_synthesis("trace-29-auth");
     let output = fixture.run_with(
         &[
-            "speech", "generate", "--asset-id", "book-1", "--annotation-id", "annotation-41",
-            "--content", "highlight", "--regenerate", "--json",
+            "speech",
+            "generate",
+            "--asset-id",
+            "book-1",
+            "--annotation-id",
+            "annotation-41",
+            "--content",
+            "highlight",
+            "--regenerate",
+            "--json",
         ],
         &provider,
         // 空字符串 = 配置的环境变量存在但没有值。
@@ -715,8 +760,15 @@ fn content_selection_refuses_the_side_an_annotation_does_not_have() {
     let provider = provider_with_catalog_and_synthesis("trace-29-content");
     let error = failed(&fixture.run_with(
         &[
-            "speech", "generate", "--asset-id", "book-1", "--annotation-id", "annotation-41",
-            "--content", "note", "--json",
+            "speech",
+            "generate",
+            "--asset-id",
+            "book-1",
+            "--annotation-id",
+            "annotation-41",
+            "--content",
+            "note",
+            "--json",
         ],
         &provider,
         Some(TEST_KEY),
@@ -729,8 +781,15 @@ fn content_selection_refuses_the_side_an_annotation_does_not_have() {
     let provider = provider_with_catalog_and_synthesis("trace-29-wrongbook");
     let error = failed(&fixture.run_with(
         &[
-            "speech", "generate", "--asset-id", "book-1", "--annotation-id", "annotation-999",
-            "--content", "highlight", "--json",
+            "speech",
+            "generate",
+            "--asset-id",
+            "book-1",
+            "--annotation-id",
+            "annotation-999",
+            "--content",
+            "highlight",
+            "--json",
         ],
         &provider,
         Some(TEST_KEY),
@@ -749,8 +808,15 @@ fn only_explicit_generation_and_voice_browsing_may_contact_the_provider() {
     let provider = provider_with_catalog_and_synthesis("trace-29-hit");
     let value = succeeded(&fixture.run_with(
         &[
-            "speech", "generate", "--asset-id", "book-1", "--annotation-id", "annotation-41",
-            "--content", "highlight", "--json",
+            "speech",
+            "generate",
+            "--asset-id",
+            "book-1",
+            "--annotation-id",
+            "annotation-41",
+            "--content",
+            "highlight",
+            "--json",
         ],
         &provider,
         Some(TEST_KEY),
@@ -773,8 +839,13 @@ fn only_explicit_generation_and_voice_browsing_may_contact_the_provider() {
     let provider = provider_with_catalog_and_synthesis("trace-29-export");
     succeeded(&fixture.run_with(
         &[
-            "speech", "export", "--clip-id", &clip_id, "--output",
-            root.to_str().expect("export root"), "--json",
+            "speech",
+            "export",
+            "--clip-id",
+            &clip_id,
+            "--output",
+            root.to_str().expect("export root"),
+            "--json",
         ],
         &provider,
         Some(TEST_KEY),
@@ -800,8 +871,13 @@ fn a_manifest_traversal_path_never_escapes_the_export_root() {
     let clip_id = generate_cached_clip(&fixture, "annotation-41", "highlight", "trace-29-traverse");
     let root = fixture.book_export_root();
     succeeded(&fixture.run(&[
-        "speech", "export", "--clip-id", &clip_id, "--output",
-        root.to_str().expect("export root"), "--json",
+        "speech",
+        "export",
+        "--clip-id",
+        &clip_id,
+        "--output",
+        root.to_str().expect("export root"),
+        "--json",
     ]));
 
     // 根目录外的一个诱饵文件：任何越界读取都会在这里暴露。
@@ -816,22 +892,36 @@ fn a_manifest_traversal_path_never_escapes_the_export_root() {
         serde_json::from_str(&std::fs::read_to_string(&manifest_path).expect("manifest.json"))
             .expect("manifest JSON");
     manifest["records"][0]["clips"][0]["relative_path"] = json!("../../../outside-canary.mp3");
-    std::fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest).expect("serialize"))
-        .expect("write manifest");
+    std::fs::write(
+        &manifest_path,
+        serde_json::to_vec_pretty(&manifest).expect("serialize"),
+    )
+    .expect("write manifest");
 
     // 常规 Markdown 导出必须成功但省略该链接，而不是跟随路径穿越。
     // 音频链接与 warning 都在 ExportReceipt 顶层（`receipt.warnings` /
     // `receipt.audio_links`），因为常规导出的主文档成功与否与语音无关。
     let provider = provider_with_catalog_and_synthesis("trace-29-traverse-md");
-    let value = succeeded(&fixture.run_with(
-        &[
-            "export", "--asset-id", "book-1", "--format", "markdown", "--output",
-            root.parent().expect("export parent").to_str().expect("parent"),
-            "--overwrite", "--json",
-        ],
-        &provider,
-        Some(TEST_KEY),
-    ));
+    let value = succeeded(
+        &fixture.run_with(
+            &[
+                "export",
+                "--asset-id",
+                "book-1",
+                "--format",
+                "markdown",
+                "--output",
+                root.parent()
+                    .expect("export parent")
+                    .to_str()
+                    .expect("parent"),
+                "--overwrite",
+                "--json",
+            ],
+            &provider,
+            Some(TEST_KEY),
+        ),
+    );
     assert_zero_connections(&provider.finish(), "export (traversal manifest)");
 
     let warnings: Vec<(String, String)> = value["receipt"]["warnings"]
@@ -881,8 +971,13 @@ fn a_corrupt_manifest_is_never_rebuilt_or_guessed() {
     let clip_id = generate_cached_clip(&fixture, "annotation-41", "highlight", "trace-29-manifest");
     let root = fixture.book_export_root();
     succeeded(&fixture.run(&[
-        "speech", "export", "--clip-id", &clip_id, "--output",
-        root.to_str().expect("export root"), "--json",
+        "speech",
+        "export",
+        "--clip-id",
+        &clip_id,
+        "--output",
+        root.to_str().expect("export root"),
+        "--json",
     ]));
 
     let manifest_path = fixture.manifest_path();
@@ -890,8 +985,13 @@ fn a_corrupt_manifest_is_never_rebuilt_or_guessed() {
     std::fs::write(&manifest_path, corrupt).expect("corrupt manifest");
 
     let error = failed(&fixture.run(&[
-        "speech", "export", "--clip-id", &clip_id, "--output",
-        root.to_str().expect("export root"), "--json",
+        "speech",
+        "export",
+        "--clip-id",
+        &clip_id,
+        "--output",
+        root.to_str().expect("export root"),
+        "--json",
     ]));
     assert_stable_error_envelope(&error, "speech export (corrupt manifest)");
     assert_eq!(error["error"]["code"], "SPEECH_EXPORT_MANIFEST_INVALID");
@@ -910,8 +1010,13 @@ fn no_speech_state_or_command_output_ever_contains_the_api_key() {
     let clip_id = generate_cached_clip(&fixture, "annotation-41", "highlight", "trace-29-secret");
     let root = fixture.book_export_root();
     succeeded(&fixture.run(&[
-        "speech", "export", "--clip-id", &clip_id, "--output",
-        root.to_str().expect("export root"), "--json",
+        "speech",
+        "export",
+        "--clip-id",
+        &clip_id,
+        "--output",
+        root.to_str().expect("export root"),
+        "--json",
     ]));
 
     // 隔离 HOME 下每一个 Speech 状态文件都不含密钥值。
@@ -965,7 +1070,13 @@ fn existing_read_only_commands_gain_no_implicit_speech_behavior() {
         vec!["list", "--json"],
         vec!["annotations", "--asset-id", "book-1", "--json"],
         vec![
-            "export", "--asset-id", "book-1", "--format", "markdown", "--output", &output_dir,
+            "export",
+            "--asset-id",
+            "book-1",
+            "--format",
+            "markdown",
+            "--output",
+            &output_dir,
             "--json",
         ],
         vec!["doctor", "--json"],
@@ -987,8 +1098,7 @@ fn existing_read_only_commands_gain_no_implicit_speech_behavior() {
         // **不得**出现 clip_id / attempt_id / provider receipt 这类生成期身份，
         // 也不得联系 provider——这两点在本测试里分别由上面与下面断言。
         if label.starts_with("export") {
-            let receipt_text =
-                serde_json::to_string(&value["receipt"]).expect("serialize receipt");
+            let receipt_text = serde_json::to_string(&value["receipt"]).expect("serialize receipt");
             for forbidden in ["clip_id", "attempt_id", "provider_called", "source"] {
                 assert!(
                     !receipt_text.contains(forbidden),

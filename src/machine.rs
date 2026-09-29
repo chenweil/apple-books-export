@@ -392,8 +392,8 @@ mod tests {
 
     #[test]
     fn details_are_serialized_only_when_present() {
-        let error =
-            MachineError::missing_asset_id().with_details(serde_json::json!({ "field": "voice_id" }));
+        let error = MachineError::missing_asset_id()
+            .with_details(serde_json::json!({ "field": "voice_id" }));
         let value = serde_json::to_value(&error).expect("serialize error");
 
         assert_eq!(value["details"]["field"], "voice_id");

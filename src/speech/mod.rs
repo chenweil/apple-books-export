@@ -51,9 +51,9 @@ pub use generate::{
 pub use machine::{
     is_stable_speech_error_code, SpeechCacheClearReceipt, SpeechCacheClearResponse,
     SpeechCacheStatusReceipt, SpeechCacheStatusResponse, SpeechGenerateReceipt,
-    SpeechGenerateResponse, SpeechHistoryClearReceipt, SpeechHistoryClearResponse, SpeechPlayReceipt,
-    SpeechPlayResponse, SpeechProfileDto, SpeechProfileResponse, VoiceCatalogReceipt,
-    VoiceCatalogResponse, VoiceCatalogVoiceDto, STABLE_SPEECH_ERROR_CODES,
+    SpeechGenerateResponse, SpeechHistoryClearReceipt, SpeechHistoryClearResponse,
+    SpeechPlayReceipt, SpeechPlayResponse, SpeechProfileDto, SpeechProfileResponse,
+    VoiceCatalogReceipt, VoiceCatalogResponse, VoiceCatalogVoiceDto, STABLE_SPEECH_ERROR_CODES,
 };
 pub use play::{
     play_clip, AfplayPlayer, AudioPlayer, NeverPlayer, PlayError, PlayMode, PlayOutcome,

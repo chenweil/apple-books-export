@@ -1314,5 +1314,8 @@ fn human_generate_rehydrates_from_an_export_root_without_a_provider_call() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("export_rehydration"), "{stdout}");
     assert!(stdout.contains(&clip_id), "{stdout}");
-    assert!(!stdout.contains("高亮正文"), "human output must not print the text");
+    assert!(
+        !stdout.contains("高亮正文"),
+        "human output must not print the text"
+    );
 }

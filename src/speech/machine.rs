@@ -1133,7 +1133,8 @@ mod tests {
             .machine_code(),
         );
         // PlayError
-        codes.push(PlayError::Storage(SpeechStoreError::UnsupportedSchemaVersion(2)).machine_code());
+        codes
+            .push(PlayError::Storage(SpeechStoreError::UnsupportedSchemaVersion(2)).machine_code());
         codes.push(PlayError::InvalidClipId("x".to_string()).machine_code());
         codes.push(
             PlayError::ClipNotFound {
@@ -1157,9 +1158,16 @@ mod tests {
             .machine_code(),
         );
         // ExportError
-        codes.push(ExportError::Storage(SpeechStoreError::UnsupportedSchemaVersion(2)).machine_code());
+        codes.push(
+            ExportError::Storage(SpeechStoreError::UnsupportedSchemaVersion(2)).machine_code(),
+        );
         codes.push(ExportError::InvalidClipId("x".to_string()).machine_code());
-        codes.push(ExportError::ClipNotFound { clip_id: "x".to_string() }.machine_code());
+        codes.push(
+            ExportError::ClipNotFound {
+                clip_id: "x".to_string(),
+            }
+            .machine_code(),
+        );
         codes.push(
             ExportError::CacheCorrupt {
                 path: std::path::PathBuf::from("/tmp"),
@@ -1183,13 +1191,17 @@ mod tests {
         );
         codes.push(ExportError::ClipInUse.machine_code());
         // GenerationError：每个变体各取一个代表值。
-        codes.push(GenerationError::Storage(SpeechStoreError::UnsupportedSchemaVersion(2)).machine_code());
+        codes.push(
+            GenerationError::Storage(SpeechStoreError::UnsupportedSchemaVersion(2)).machine_code(),
+        );
         codes.push(GenerationError::MissingApiKey.machine_code());
-        codes.push(GenerationError::InProgress {
-            clip_id: "c".to_string(),
-            attempt_id: None,
-        }
-        .machine_code());
+        codes.push(
+            GenerationError::InProgress {
+                clip_id: "c".to_string(),
+                attempt_id: None,
+            }
+            .machine_code(),
+        );
         for code in [
             "SPEECH_AUTH_FAILED",
             "SPEECH_RATE_LIMITED",
@@ -1209,7 +1221,9 @@ mod tests {
         // 否则一个被篡改/过期的 attempt 记录就能让同一个 clip 每次返回不同错误码。
         assert_eq!(
             GenerationError::ProviderFailed {
-                code: crate::speech::generate::normalize_recorded_failure_code("SPEECH_TEXT_TOO_LONG"),
+                code: crate::speech::generate::normalize_recorded_failure_code(
+                    "SPEECH_TEXT_TOO_LONG"
+                ),
                 trace_id: None,
                 provider_code: None,
                 attempt_id: "a".to_string(),
@@ -1249,6 +1263,10 @@ mod tests {
         sorted.sort_unstable();
         let count = sorted.len();
         sorted.dedup();
-        assert_eq!(sorted.len(), count, "STABLE_SPEECH_ERROR_CODES has duplicates");
+        assert_eq!(
+            sorted.len(),
+            count,
+            "STABLE_SPEECH_ERROR_CODES has duplicates"
+        );
     }
 }
