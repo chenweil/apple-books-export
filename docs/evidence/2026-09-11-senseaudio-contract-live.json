@@ -1,0 +1,234 @@
+{
+  "schema_version": 1,
+  "issue": 20,
+  "status": "verified_with_manual_listen",
+  "provider": "senseaudio",
+  "endpoint": "default",
+  "credential": {
+    "environment_variable": "SENSEAUDIO_API_KEY",
+    "provided": true,
+    "retained": false
+  },
+  "redaction_scan": {
+    "captured_output": "passed",
+    "evidence": "passed",
+    "source_text": "absent",
+    "authorization": "absent",
+    "raw_audio_hex": "absent"
+  },
+  "voice_catalog": {
+    "explicit_all": {
+      "http_status": 200,
+      "accepted": true,
+      "latency_ms": 280,
+      "group_counts": {
+        "system_voice": 34,
+        "voice_cloning": 0,
+        "voice_generation": 0
+      },
+      "known_candidate_ids": [
+        "female_0033_b",
+        "male_0004_a",
+        "male_0028_a",
+        "male_0028_b"
+      ]
+    },
+    "empty_object": {
+      "http_status": 200,
+      "accepted": true,
+      "latency_ms": 281,
+      "group_counts": {
+        "system_voice": null,
+        "voice_cloning": null,
+        "voice_generation": null
+      }
+    },
+    "observed_difference": "both_requests_accepted",
+    "resolved_voice_ids": {
+      "default": "male_0004_a",
+      "emotion": "female_0033_b",
+      "style": "male_0028_a"
+    }
+  },
+  "audio_contract": {
+    "format": "mp3",
+    "sample_rate": 32000,
+    "bitrate": 128000,
+    "channel": 2
+  },
+  "samples": [
+    {
+      "id": "zh-default",
+      "purpose": "fixed_chinese_default",
+      "voice_id": "male_0004_a",
+      "speed": 1.0,
+      "volume": 1.0,
+      "pitch": 0,
+      "text_sha256": "cf78fd0b19fca04752edf098ed547c370e54f3953e27e5a000b9d4be04c4d70a",
+      "unicode_characters": 26,
+      "provider_usage_characters": 26,
+      "latency_ms": 1362,
+      "provider_trace_id": "97d8eac78382114ed0ff84ba063c968e",
+      "artifact_name": "zh-default.mp3",
+      "audio_sha256": "37d28d31d9dc39a04cfd08a232eb2fa00fdbe47cf7ddb8bea69eb97f7373bace",
+      "size_bytes": 78089,
+      "duration_ms": 4860,
+      "manual_listen": {
+        "result": "pass",
+        "performed_on": "2026-09-11",
+        "note": "Played successfully; the fixed Chinese sample was clear and free of playback artifacts."
+      }
+    },
+    {
+      "id": "en-default",
+      "purpose": "fixed_english_default",
+      "voice_id": "male_0004_a",
+      "speed": 1.0,
+      "volume": 1.0,
+      "pitch": 0,
+      "text_sha256": "107e54178a98b4f1e6cbea68e88916dd9bd02b60727c2ab7fa6eb878a577c284",
+      "unicode_characters": 59,
+      "provider_usage_characters": 59,
+      "latency_ms": 1312,
+      "provider_trace_id": "b85b0023b97520b36afe8770af6c26d7",
+      "artifact_name": "en-default.mp3",
+      "audio_sha256": "b51f43c58164fb644de3faea06c8d7f2009dd0b1fe30f23b5836c9f779b55f9f",
+      "size_bytes": 88457,
+      "duration_ms": 5508,
+      "manual_listen": {
+        "result": "pass",
+        "performed_on": "2026-09-11",
+        "note": "Played successfully; the fixed English sample was clear and free of playback artifacts."
+      }
+    },
+    {
+      "id": "emotion-variant",
+      "purpose": "catalog_selected_emotion_variant",
+      "voice_id": "female_0033_b",
+      "speed": 1.0,
+      "volume": 1.0,
+      "pitch": 0,
+      "text_sha256": "107e54178a98b4f1e6cbea68e88916dd9bd02b60727c2ab7fa6eb878a577c284",
+      "unicode_characters": 59,
+      "provider_usage_characters": 59,
+      "latency_ms": 1862,
+      "provider_trace_id": "6bd9f7cdda7aae58925e901e6f1912e0",
+      "artifact_name": "emotion-variant.mp3",
+      "audio_sha256": "cc316e5e3abfce1a15287ede1f197e55e1ccc712d8c2a0cddcb602e7b1dc44db",
+      "size_bytes": 65417,
+      "duration_ms": 4068,
+      "manual_listen": {
+        "result": "pass",
+        "performed_on": "2026-09-11",
+        "note": "Played successfully; the emotion variant had a perceptible difference from the default voice."
+      }
+    },
+    {
+      "id": "style-variant",
+      "purpose": "catalog_selected_style_variant",
+      "voice_id": "male_0028_a",
+      "speed": 1.0,
+      "volume": 1.0,
+      "pitch": 0,
+      "text_sha256": "107e54178a98b4f1e6cbea68e88916dd9bd02b60727c2ab7fa6eb878a577c284",
+      "unicode_characters": 59,
+      "provider_usage_characters": 59,
+      "latency_ms": 972,
+      "provider_trace_id": "15ef70839d2ad9a36f9aa690b82d7ef8",
+      "artifact_name": "style-variant.mp3",
+      "audio_sha256": "a7dbd92cc582ed2dedb666bede1e9fcb4db6431eacd9dc568ed04117d9235b3a",
+      "size_bytes": 67721,
+      "duration_ms": 4212,
+      "manual_listen": {
+        "result": "pass",
+        "performed_on": "2026-09-11",
+        "note": "Played successfully; the style variant had a perceptible difference from the default voice."
+      }
+    },
+    {
+      "id": "speed-override",
+      "purpose": "fixed_speed_override",
+      "voice_id": "male_0004_a",
+      "speed": 1.25,
+      "volume": 1.0,
+      "pitch": 0,
+      "text_sha256": "107e54178a98b4f1e6cbea68e88916dd9bd02b60727c2ab7fa6eb878a577c284",
+      "unicode_characters": 59,
+      "provider_usage_characters": 59,
+      "latency_ms": 1281,
+      "provider_trace_id": "2cfa64581fd2458167a8702036e78cd2",
+      "artifact_name": "speed-override.mp3",
+      "audio_sha256": "5046238e6012cf75a90e0c45c504d134367b7759934b3b33f3f36b4be25009f6",
+      "size_bytes": 78665,
+      "duration_ms": 4896,
+      "manual_listen": {
+        "result": "pass",
+        "performed_on": "2026-09-11",
+        "note": "Played successfully; the speed override was audibly faster than the default sample."
+      }
+    },
+    {
+      "id": "volume-override",
+      "purpose": "fixed_volume_override",
+      "voice_id": "male_0004_a",
+      "speed": 1.0,
+      "volume": 1.5,
+      "pitch": 0,
+      "text_sha256": "107e54178a98b4f1e6cbea68e88916dd9bd02b60727c2ab7fa6eb878a577c284",
+      "unicode_characters": 59,
+      "provider_usage_characters": 59,
+      "latency_ms": 1279,
+      "provider_trace_id": "7217c021fa5d4e749264b33c079eb62c",
+      "artifact_name": "volume-override.mp3",
+      "audio_sha256": "a91cb164b88603470f438270fca70ead357ffddd8dde5b4218f73561235b6db5",
+      "size_bytes": 98249,
+      "duration_ms": 6120,
+      "manual_listen": {
+        "result": "pass",
+        "performed_on": "2026-09-11",
+        "note": "Played successfully; the volume override was audibly louder than the default sample."
+      }
+    },
+    {
+      "id": "control-safe",
+      "purpose": "literal_break_markup_safe_transform",
+      "voice_id": "male_0004_a",
+      "speed": 1.0,
+      "volume": 1.0,
+      "pitch": 0,
+      "text_sha256": "6b857f9e64828ada3b005b145b437265075abb33ec7128a40b4cb7d20625110f",
+      "provider_text_sha256": "cf52dc2abb3b3e1149beafb119ebd7764a9045a86f10e0024f7c545fb1352df9",
+      "unicode_characters": 55,
+      "provider_usage_characters": 56,
+      "latency_ms": 1840,
+      "provider_trace_id": "823096bf6188221c503d2a80d69dd343",
+      "artifact_name": "control-safe.mp3",
+      "audio_sha256": "7a78ead38575dc84d312ecd3968ae192b6e7890c0e8647d361564776408e0d28",
+      "size_bytes": 114377,
+      "duration_ms": 7128,
+      "manual_listen": {
+        "result": "pass",
+        "performed_on": "2026-09-11",
+        "note": "Played successfully; no abnormal control-shaped pause was heard in the guarded sample."
+      },
+      "transformation": "insert U+200B after each ASCII '<'",
+      "provider_text_contains_ascii_break_control": false,
+      "provider_text_contains_zero_width_guard": true
+    }
+  ],
+  "manual_listen": {
+    "required": true,
+    "performed": true,
+    "performed_on": "2026-09-11",
+    "comparison_performed": false,
+    "comparison_note": "No direct listening comparison used a real provider break control; the guarded transformation was assessed as ordinary continuous content.",
+    "all_samples_playable": true,
+    "variant_differences_perceptible": {
+      "emotion": true,
+      "style": true,
+      "speed": true,
+      "volume": true
+    },
+    "script_plays_audio": false
+  }
+}

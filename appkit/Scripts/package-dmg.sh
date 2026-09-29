@@ -5,6 +5,11 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 APPKIT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 REPO_DIR="$(cd "$APPKIT_DIR/.." && pwd)"
 
+# SwiftPM 要在含有 Package.swift 的目录里运行。脚本已经算出了 APPKIT_DIR，
+# 但此前两处 `swift build` 仍依赖调用者的当前工作目录，从仓库根执行会直接
+# 报 "Could not find Package.swift"。这里显式切过去，让脚本可以从任意目录调用。
+cd "$APPKIT_DIR"
+
 CONFIG="${CONFIG:-release}"
 APP_VERSION="${APP_VERSION:-0.1.8}"
 BUILD_VERSION="${BUILD_VERSION:-9}"
