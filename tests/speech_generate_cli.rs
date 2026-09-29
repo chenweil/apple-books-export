@@ -2119,6 +2119,7 @@ fn each_real_request_creates_a_distinct_metadata_only_attempt_record() {
         }
     }
     assert_eq!(files, 2, "two real requests must leave two history records");
+    recorded.sort();
     let mut expected = vec![first_attempt.to_string(), second_attempt.to_string()];
     expected.sort();
     assert_eq!(recorded, expected);
