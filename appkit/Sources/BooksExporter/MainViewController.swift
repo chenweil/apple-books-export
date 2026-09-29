@@ -1,0 +1,176 @@
+import AppKit
+
+final class MainViewController: NSViewController, NSSplitViewDelegate {
+    static let minimumListWidth: CGFloat = 280
+    static let minimumDetailWidth: CGFloat = 420
+    static let minimumContentSize = NSSize(
+        width: minimumListWidth + minimumDetailWidth + dividerThickness,
+        height: 480
+    )
+    private static let dividerThickness: CGFloat = 1
+    private static let initialListWidth: CGFloat = 420
+
+    private let splitView = NSSplitView()
+    private let bookListViewController = BookListViewController()
+    private let bookDetailViewController = BookDetailViewController()
+    private var didSetInitialPosition = false
+    private var activationObserver: NSObjectProtocol?
+    private var settingsObserver: NSObjectProtocol?
+    private var refreshTimer: Timer?
+
+    deinit {
+        refreshTimer?.invalidate()
+        if let activationObserver {
+            NotificationCenter.default.removeObserver(activationObserver)
+        }
+        if let settingsObserver {
+            NotificationCenter.default.removeObserver(settingsObserver)
+        }
+    }
+
+    override func loadView() {
+        splitView.isVertical = true
+        splitView.dividerStyle = .thin
+        splitView.delegate = self
+
+        view = splitView
+
+        addChild(bookListViewController)
+        addChild(bookDetailViewController)
+
+        splitView.addSubview(bookListViewController.view)
+        splitView.addSubview(bookDetailViewController.view)
+    }
+
+    // 不设约束时分隔条可拖到底,把书单或整个详情栏(含导出按钮)拖没。
+    func splitView(_ splitView: NSSplitView, constrainMinCoordinate proposedMinimumPosition: CGFloat, ofSubviewAt dividerIndex: Int) -> CGFloat {
+        max(proposedMinimumPosition, MainViewController.minimumListWidth)
+    }
+
+    func splitView(_ splitView: NSSplitView, constrainMaxCoordinate proposedMaximumPosition: CGFloat, ofSubviewAt dividerIndex: Int) -> CGFloat {
+        min(proposedMaximumPosition, splitView.bounds.width - MainViewController.minimumDetailWidth - MainViewController.dividerThickness)
+    }
+
+    func splitView(_ splitView: NSSplitView, canCollapseSubview subview: NSView) -> Bool {
+        false
+    }
+
+    override func viewDidAppear() {
+        super.viewDidAppear()
+        if !didSetInitialPosition && splitView.subviews.count == 2 {
+            splitView.setPosition(MainViewController.initialListWidth, ofDividerAt: 0)
+            didSetInitialPosition = true
+        }
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        bookListViewController.onBookSelected = { [weak self] book in
+            self?.bookDetailViewController.show(book: book)
+        }
+        bookListViewController.onBooksLoaded = { [weak self] books in
+            self?.bookDetailViewController.refresh(using: books)
+        }
+        bookListViewController.onExportAllRequested = { [weak self] books in
+            self?.exportAllBooks(books)
+        }
+        settingsObserver = NotificationCenter.default.addObserver(
+            forName: AppSettingsStore.didChangeNotification,
+            object: AppSettingsStore.shared,
+            queue: .main
+        ) { [weak self] _ in
+            self?.configureRefreshTimer()
+            self?.bookListViewController.reload()
+        }
+        activationObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.bookListViewController.reload()
+        }
+        configureRefreshTimer()
+    }
+
+    private func configureRefreshTimer() {
+        refreshTimer?.invalidate()
+        refreshTimer = nil
+
+        guard let interval = AppSettingsStore.shared.refreshInterval.timeInterval else {
+            return
+        }
+
+        let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
+            guard NSApp.isActive else { return }
+            self?.bookListViewController.reload()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        refreshTimer = timer
+    }
+
+    private func exportAllBooks(_ books: [Book]) {
+        guard !books.isEmpty else { return }
+        guard let window = view.window else { return }
+
+        let panel = NSOpenPanel()
+        panel.title = "选择导出目录(\(books.count) 本)"
+        panel.prompt = "导出"
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.beginSheetModal(for: window) { [weak self] response in
+            guard response == .OK, let directoryURL = panel.url else { return }
+            self?.runExportAllBooks(books, to: directoryURL)
+        }
+    }
+
+    private func runExportAllBooks(_ books: [Book], to directoryURL: URL) {
+        let bookService = BookService()
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            var succeeded = 0
+            var failed = 0
+            var lastError: Error?
+
+            for book in books {
+                let annotations = await bookService.getAnnotations(for: book.id)
+                do {
+                    try await bookService.exportToMarkdown(book: book, annotations: annotations, outputURL: directoryURL)
+                    succeeded += 1
+                } catch {
+                    failed += 1
+                    lastError = error
+                }
+            }
+
+            let message: String
+            var details: String
+            if failed == 0 {
+                message = "导出完成"
+                details = "共成功导出 \(succeeded) 本书到：\(directoryURL.path)"
+            } else {
+                message = "部分导出失败"
+                details = "成功 \(succeeded) 本，失败 \(failed) 本。\n目录：\(directoryURL.path)"
+                if let error = lastError {
+                    details += "\n最后错误：\(error.localizedDescription)"
+                }
+            }
+
+            showAlert(message: message, details: details)
+        }
+    }
+
+    private func showAlert(message: String, details: String) {
+        let alert = NSAlert()
+        alert.messageText = message
+        alert.informativeText = details
+        alert.alertStyle = message == "导出完成" ? .informational : .warning
+
+        if let window = view.window {
+            alert.beginSheetModal(for: window)
+        } else {
+            alert.runModal()
+        }
+    }
+}
