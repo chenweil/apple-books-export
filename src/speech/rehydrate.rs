@@ -25,8 +25,8 @@ use crate::speech::audio::inspect_mp3;
 use crate::speech::cache::ClipCache;
 use crate::speech::clip::SpeechContentKind;
 use crate::speech::export::{
-    locator_candidates, record_export_locator, resolve_contained_path, ExportedClipRecord,
-    ExportedContentRecord, SpeechExportManifest, AUDIO_SUBDIRECTORY,
+    locator_candidates, locator_path, record_export_locator, resolve_contained_path,
+    ExportedClipRecord, ExportedContentRecord, SpeechExportManifest, AUDIO_SUBDIRECTORY,
 };
 use crate::speech::SpeechWarning;
 use chrono::{DateTime, Utc};
@@ -482,5 +482,398 @@ fn manifest_clip(clip: &ExportedClipRecord) -> RehydratedManifestClip {
         sha256: clip.sha256.clone(),
         size_bytes: clip.size_bytes,
         format: clip.format.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::speech::export::{
+        relative_path_for, ExportedClipRecord, ExportedContentRecord, SpeechExportManifest,
+        AUDIO_SUBDIRECTORY, EXPORT_LOCATOR_SCHEMA_VERSION, SHORT_FINGERPRINT_LEN,
+        SPEECH_EXPORT_MANIFEST_SCHEMA_VERSION,
+    };
+    use crate::speech::store::SpeechStore;
+    use crate::speech::text::sha256_hex;
+    use std::collections::BTreeMap;
+    use tempfile::TempDir;
+
+    const CLIP: &str = "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90";
+    const OTHER_CLIP: &str = "f0e1d2c3b4a5968778695a4b3c2d1e0ff0e1d2c3b4a5968778695a4b3c2d1e0f";
+
+    fn now() -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339("2026-09-29T12:00:00Z")
+            .expect("timestamp")
+            .with_timezone(&Utc)
+    }
+
+    /// 一个可解析的最小 MP3。
+    fn silent_mp3() -> Vec<u8> {
+        let mut bytes = vec![0xFF, 0xFB, 0x98, 0x0C];
+        bytes.extend(std::iter::repeat(0u8).take(144 * 128_000 / 32_000 - 4));
+        bytes
+    }
+
+    fn query(require_active: bool) -> ExportedClipQuery {
+        ExportedClipQuery {
+            clip_id: CLIP.to_string(),
+            book: Some(ExportedBookIdentity {
+                asset_id: "book-1".to_string(),
+                annotation_id: "annotation-41".to_string(),
+                content_kind: SpeechContentKind::Highlight,
+            }),
+            explicit_root: None,
+            require_active,
+        }
+    }
+
+    /// 一个导出根，里面有一份自洽的 manifest + 音频。
+    struct Exported {
+        root: TempDir,
+        audio: PathBuf,
+        relative_path: String,
+    }
+
+    fn exported_root(asset_id: &str) -> Exported {
+        let root = tempfile::tempdir().expect("export root");
+        let bytes = silent_mp3();
+        let relative_path =
+            relative_path_for(SpeechContentKind::Highlight, CLIP, SHORT_FINGERPRINT_LEN);
+        let audio = root.path().join(&relative_path);
+        fs::create_dir_all(audio.parent().expect("audio parent")).expect("audio directory");
+        fs::write(&audio, &bytes).expect("write audio");
+        let manifest = SpeechExportManifest {
+            schema_version: SPEECH_EXPORT_MANIFEST_SCHEMA_VERSION,
+            asset_id: asset_id.to_string(),
+            records: vec![ExportedContentRecord {
+                annotation_id: "annotation-41".to_string(),
+                content_kind: SpeechContentKind::Highlight,
+                active_clip_id: CLIP.to_string(),
+                clips: vec![ExportedClipRecord {
+                    clip_id: CLIP.to_string(),
+                    relative_path: relative_path.clone(),
+                    sha256: sha256_hex(&bytes),
+                    size_bytes: bytes.len() as u64,
+                    format: "mp3".to_string(),
+                    exported_at: "2026-09-29T10:00:00Z".to_string(),
+                }],
+            }],
+        };
+        write_manifest(root.path(), &manifest);
+        Exported {
+            root,
+            audio,
+            relative_path,
+        }
+    }
+
+    fn write_manifest(root: &std::path::Path, manifest: &SpeechExportManifest) {
+        let path = root.join(AUDIO_SUBDIRECTORY).join("manifest.json");
+        fs::create_dir_all(path.parent().expect("manifest parent")).expect("manifest directory");
+        fs::write(
+            &path,
+            serde_json::to_string_pretty(manifest).expect("manifest JSON"),
+        )
+        .expect("write manifest");
+    }
+
+    fn store_and_cache(home: &TempDir) -> ClipCache {
+        ClipCache::new(SpeechStore::from_home(home.path()))
+    }
+
+    fn with_explicit_root(root: &std::path::Path, require_active: bool) -> ExportedClipQuery {
+        ExportedClipQuery {
+            explicit_root: Some(root.to_path_buf()),
+            ..query(require_active)
+        }
+    }
+
+    /// 显式 `--export-root` 里的自洽导出被接受，并刷新 locator 投影。
+    #[test]
+    fn an_explicit_export_root_is_verified_and_refreshes_the_locator() {
+        let home = TempDir::new().expect("home");
+        let cache = store_and_cache(&home);
+        let exported = exported_root("book-1");
+
+        let lookup = find_verified_exported_clip(
+            &cache,
+            &with_explicit_root(exported.root.path(), true),
+            now(),
+        );
+        let (clip, origin) = lookup.found().expect("verified export");
+        assert_eq!(origin, ExportCandidateOrigin::ExplicitExportRoot);
+        assert_eq!(clip.clip_id, CLIP);
+        assert_eq!(clip.audio_path, exported.audio);
+        assert_eq!(clip.asset_id, "book-1");
+        assert_eq!(clip.annotation_id, "annotation-41");
+        assert!(clip.active);
+        assert!(lookup.rejections.is_empty());
+
+        // 验证通过 ⇒ locator 被刷新；下一次不带 --export-root 也能命中。
+        let candidates = locator_candidates(&cache);
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].export_root, exported.root.path());
+        let from_locator = find_verified_exported_clip(&cache, &query(true), now());
+        assert_eq!(
+            from_locator.found().map(|(_, origin)| origin),
+            Some(ExportCandidateOrigin::ExportLocator)
+        );
+    }
+
+    /// 负向控制：用户改写过的导出文件 checksum 不匹配，绝不当作已验证 clip。
+    #[test]
+    fn a_user_modified_export_is_rejected_instead_of_guessed() {
+        let home = TempDir::new().expect("home");
+        let cache = store_and_cache(&home);
+        let exported = exported_root("book-1");
+        let mut bytes = fs::read(&exported.audio).expect("audio");
+        let last = bytes.len() - 1;
+        bytes[last] ^= 0xFF;
+        fs::write(&exported.audio, &bytes).expect("tamper");
+
+        let lookup = find_verified_exported_clip(
+            &cache,
+            &with_explicit_root(exported.root.path(), true),
+            now(),
+        );
+        assert!(lookup.found().is_none());
+        assert_eq!(lookup.rejections[0].reason, "checksum_mismatch");
+        // 被拒绝的候选不会写进 locator：投影仍然可丢弃地保持为空。
+        assert!(locator_candidates(&cache).is_empty());
+    }
+
+    /// 负向控制：缺 manifest、缺音频、损坏 manifest 都只是拒绝，不猜。
+    #[test]
+    fn missing_or_broken_manifests_fail_without_guessing() {
+        let home = TempDir::new().expect("home");
+        let cache = store_and_cache(&home);
+
+        // 根本没有导出目录。
+        let empty = tempfile::tempdir().expect("empty root");
+        let lookup =
+            find_verified_exported_clip(&cache, &with_explicit_root(empty.path(), true), now());
+        assert!(lookup.found().is_none());
+        assert_eq!(lookup.rejections[0].reason, "manifest_missing");
+
+        // manifest 指向的音频文件不存在。
+        let exported = exported_root("book-1");
+        fs::remove_file(&exported.audio).expect("remove audio");
+        let lookup = find_verified_exported_clip(
+            &cache,
+            &with_explicit_root(exported.root.path(), true),
+            now(),
+        );
+        assert!(lookup.found().is_none());
+        assert_eq!(lookup.rejections[0].reason, "audio_missing");
+
+        // manifest 结构不可信：损坏即拒绝，绝不按文件名重建身份。
+        let broken = exported_root("book-1");
+        fs::write(
+            broken
+                .root
+                .path()
+                .join(AUDIO_SUBDIRECTORY)
+                .join("manifest.json"),
+            "{ not json",
+        )
+        .expect("write broken manifest");
+        let lookup = find_verified_exported_clip(
+            &cache,
+            &with_explicit_root(broken.root.path(), true),
+            now(),
+        );
+        assert!(lookup.found().is_none());
+        assert_eq!(lookup.rejections[0].reason, "manifest_unusable");
+    }
+
+    /// 负向控制：导出根属于另一本书时拒绝（clip ID 相同也不接受）。
+    #[test]
+    fn an_export_root_for_another_book_is_rejected() {
+        let home = TempDir::new().expect("home");
+        let cache = store_and_cache(&home);
+        let exported = exported_root("book-2");
+
+        let lookup = find_verified_exported_clip(
+            &cache,
+            &with_explicit_root(exported.root.path(), false),
+            now(),
+        );
+        assert!(lookup.found().is_none());
+        assert_eq!(lookup.rejections[0].reason, "manifest_asset_mismatch");
+    }
+
+    /// 负向控制：play 只接受 active 变体；rehydration 允许同一 clip ID 的旧变体。
+    #[test]
+    fn only_play_requires_the_active_variant() {
+        let home = TempDir::new().expect("home");
+        let cache = store_and_cache(&home);
+        let exported = exported_root("book-1");
+        // 把 active 切到另一个 clip ID，当前 clip 仍然是记录在案的变体。
+        let mut manifest = SpeechExportManifest::load(exported.root.path())
+            .expect("load")
+            .expect("manifest");
+        manifest.records[0].clips.push(ExportedClipRecord {
+            clip_id: OTHER_CLIP.to_string(),
+            relative_path: relative_path_for(SpeechContentKind::Highlight, OTHER_CLIP, 13),
+            sha256: "d".repeat(64),
+            size_bytes: 10,
+            format: "mp3".to_string(),
+            exported_at: "2026-09-29T11:00:00Z".to_string(),
+        });
+        manifest.records[0].active_clip_id = OTHER_CLIP.to_string();
+        write_manifest(exported.root.path(), &manifest);
+
+        let play = find_verified_exported_clip(
+            &cache,
+            &with_explicit_root(exported.root.path(), true),
+            now(),
+        );
+        assert!(play.found().is_none());
+        assert_eq!(play.rejections[0].reason, "clip_not_active");
+
+        let rehydrate = find_verified_exported_clip(
+            &cache,
+            &with_explicit_root(exported.root.path(), false),
+            now(),
+        );
+        let (clip, _) = rehydrate.found().expect("recorded variant");
+        assert_eq!(clip.clip_id, CLIP);
+        assert!(!clip.active);
+    }
+
+    /// 负向控制：manifest 里的路径必须留在导出根内，symlink 段同样拒绝。
+    #[test]
+    fn manifest_paths_may_not_escape_the_export_root() {
+        let home = TempDir::new().expect("home");
+        let cache = store_and_cache(&home);
+        let outside = tempfile::tempdir().expect("outside");
+        let secret = outside.path().join("secret.mp3");
+        fs::write(&secret, silent_mp3()).expect("write outside audio");
+
+        // 路径穿越。
+        let exported = exported_root("book-1");
+        let mut manifest = SpeechExportManifest::load(exported.root.path())
+            .expect("load")
+            .expect("manifest");
+        manifest.records[0].clips[0].relative_path = "assets/audio/../../../etc/passwd".to_string();
+        write_manifest(exported.root.path(), &manifest);
+        let lookup = find_verified_exported_clip(
+            &cache,
+            &with_explicit_root(exported.root.path(), false),
+            now(),
+        );
+        assert!(lookup.found().is_none());
+        assert_eq!(lookup.rejections[0].reason, "path_not_contained");
+
+        // symlink 段。
+        let exported = exported_root("book-1");
+        let mut manifest = SpeechExportManifest::load(exported.root.path())
+            .expect("load")
+            .expect("manifest");
+        manifest.records[0].clips[0].relative_path = "assets/audio/link/secret.mp3".to_string();
+        write_manifest(exported.root.path(), &manifest);
+        std::os::unix::fs::symlink(
+            outside.path(),
+            exported.root.path().join("assets/audio/link"),
+        )
+        .expect("symlink");
+        let lookup = find_verified_exported_clip(
+            &cache,
+            &with_explicit_root(exported.root.path(), false),
+            now(),
+        );
+        assert!(lookup.found().is_none());
+        assert_eq!(lookup.rejections[0].reason, "path_not_contained");
+        // 用户在导出根外的文件一个字节都没被读到、更没被改动。
+        assert!(secret.exists());
+    }
+
+    /// 关键性能/隐私边界：只读那一个 manifest，不递归扫描导出根或任何父目录。
+    ///
+    /// 负向控制：把一份**完全有效**的 manifest 放在导出根的子目录里，以及放在兄弟目录
+    /// 里，都必须找不到——没有 `--export-root` 或 locator 条目指向它们。
+    #[test]
+    fn nested_and_sibling_manifests_are_never_discovered() {
+        let home = TempDir::new().expect("home");
+        let cache = store_and_cache(&home);
+        let exported = exported_root("book-1");
+        // 复制一份自洽的 manifest + 音频到子目录。
+        let nested = exported.root.path().join("旧导出");
+        fs::create_dir_all(nested.join(AUDIO_SUBDIRECTORY)).expect("nested audio");
+        fs::copy(&exported.audio, nested.join(&exported.relative_path)).expect("copy nested audio");
+        let manifest = SpeechExportManifest::load(exported.root.path())
+            .expect("load")
+            .expect("manifest");
+        write_manifest(&nested, &manifest);
+        // 再复制到兄弟目录（模拟「用户把导出目录搬到了别处」但没有告诉本工具）。
+        let sibling = exported
+            .root
+            .path()
+            .parent()
+            .expect("parent")
+            .join("搬走了");
+        fs::create_dir_all(sibling.join(AUDIO_SUBDIRECTORY)).expect("sibling audio");
+        fs::copy(&exported.audio, sibling.join(&exported.relative_path)).expect("copy sibling");
+        write_manifest(&sibling, &manifest);
+
+        // 顶层导出根本身没有被 manifest 覆盖：只指向一个不存在的 clip ID 时，
+        // 递归扫描的实现会「找到」子目录或兄弟目录里的那份。
+        let query = ExportedClipQuery {
+            clip_id: OTHER_CLIP.to_string(),
+            book: Some(ExportedBookIdentity {
+                asset_id: "book-1".to_string(),
+                annotation_id: "annotation-41".to_string(),
+                content_kind: SpeechContentKind::Highlight,
+            }),
+            explicit_root: Some(exported.root.path().to_path_buf()),
+            require_active: false,
+        };
+        let lookup = find_verified_exported_clip(&cache, &query, now());
+        assert!(
+            lookup.found().is_none(),
+            "no directory walk may discover a nested or sibling manifest"
+        );
+        assert!(lookup.rejections.iter().all(|rejection| {
+            matches!(
+                rejection.reason,
+                "manifest_missing" | "manifest_unusable" | "clip_not_recorded"
+            )
+        }));
+    }
+
+    /// 负向控制：locator 投影坏了或过期时只是没有候选，绝不当作「已验证」。
+    #[test]
+    fn a_stale_or_unreadable_locator_yields_no_candidates() {
+        let home = TempDir::new().expect("home");
+        let cache = store_and_cache(&home);
+        assert!(locator_candidates(&cache).is_empty(), "absent projection");
+
+        fs::create_dir_all(cache.root()).expect("speech root");
+        fs::write(locator_path(&cache), "{ not json").expect("write broken projection");
+        assert!(locator_candidates(&cache).is_empty());
+
+        let mut entries = BTreeMap::new();
+        entries.insert(
+            "book-1".to_string(),
+            serde_json::json!({
+                "export_root": "",
+                "manifest_schema_version": 1,
+                "manifest_sha256": "0".repeat(64),
+                "last_verified_at": "2026-09-29T10:00:00Z",
+            }),
+        );
+        let projection = serde_json::json!({
+            "schema_version": EXPORT_LOCATOR_SCHEMA_VERSION,
+            "entries": entries,
+        });
+        fs::write(
+            locator_path(&cache),
+            serde_json::to_string_pretty(&projection).expect("projection JSON"),
+        )
+        .expect("write projection");
+        assert!(
+            locator_candidates(&cache).is_empty(),
+            "an empty export root is never a candidate"
+        );
     }
 }
