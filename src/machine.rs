@@ -423,7 +423,9 @@ impl EnvironmentStatus {
 
         // 只判断「能否写」，不创建目录：父目录不存在时用最近的上层目录判断。
         let probe_dir = nearest_existing_ancestor(&default_output_dir);
-        let writable = probe_dir.as_deref().is_some_and(crate::utils::dir_is_writable);
+        let writable = probe_dir
+            .as_deref()
+            .is_some_and(crate::utils::dir_is_writable);
         let output_status = OutputDirStatus {
             status: match &home {
                 None => "unknown",
@@ -435,7 +437,13 @@ impl EnvironmentStatus {
             writable,
         };
 
-        let free_bytes = free_bytes_for(&default_output_dir).unwrap_or(0);
+        // 必须在已存在的目录上查询：`statvfs` 对不存在的路径返回 ENOENT，
+        // 而全新机器上 ~/books-exported 正是如此，否则每个新用户都会看到
+        // free_bytes == 0 并被误判为磁盘已满。
+        let free_bytes = probe_dir
+            .as_deref()
+            .and_then(free_bytes_for)
+            .unwrap_or_default();
 
         Self {
             home: home_status,
@@ -465,13 +473,13 @@ fn free_bytes_for(path: &std::path::Path) -> Option<u64> {
 
     let c_path = CString::new(path.as_os_str().as_bytes()).ok()?;
     // SAFETY: `c_path` is a valid NUL-terminated C string that outlives the call,
-    // and `stat` is only read for the single `statvfs` output argument.
+    // and `statvfs` only writes the single `statvfs` output argument we initialise.
     unsafe {
         let mut stat: libc::statvfs = std::mem::zeroed();
         if libc::statvfs(c_path.as_ptr(), &mut stat) != 0 {
             return None;
         }
-        Some(u64::from(stat.f_bavail) * u64::from(stat.f_frsize))
+        Some(u64::from(stat.f_bavail).saturating_mul(stat.f_frsize))
     }
 }
 

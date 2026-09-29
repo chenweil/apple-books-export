@@ -12,16 +12,20 @@ pub fn home_dir() -> Option<PathBuf> {
 /// 真正的可写性取决于文件系统权限位与挂载选项（例如只读卷），所以用一次
 /// 真实的创建-删除探测，而不是只看权限位。探测文件在返回前一定被删除。
 pub fn dir_is_writable(dir: &std::path::Path) -> bool {
-    use std::io::Write;
-
-    let probe = dir.join(format!(".exporter-write-probe-{}", std::process::id()));
-    let created = (|| -> std::io::Result<()> {
-        let mut file = std::fs::File::create(&probe)?;
-        file.write_all(b"")?;
-        file.sync_all()
-    })();
+    // `File::create` 本身就会因权限或只读挂载失败，这已经足够判定；
+    // 写 0 字节和 `sync_all()` 不增加任何证明力，却让每次 doctor 都做一次
+    // 同步落盘。探针文件名带上时间戳，降低进程被 SIGKILL 后残留重名的可能。
+    let probe = dir.join(format!(
+        ".exporter-write-probe-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or_default()
+    ));
+    let created = std::fs::File::create(&probe).is_ok();
     let _ = std::fs::remove_file(&probe);
-    created.is_ok()
+    created
 }
 
 /// 安全文件名（支持中文 CJK 字符）

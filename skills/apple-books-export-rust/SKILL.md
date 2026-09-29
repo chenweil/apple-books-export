@@ -139,3 +139,26 @@ Access to the terminal or agent host in **System Settings → Privacy & Security
 
 Use `doctor --json` when diagnosing binary, database, or permission failures.
 Its response is diagnostic data; do not treat human CLI output as a fallback.
+
+The `doctor --json` response has `schema_version`, `status`, `binary`,
+`databases`, and `environment`. The `environment` block is an environment
+preflight — read it once at the start of a workflow instead of discovering the
+same problem later in each write step:
+
+```json
+"environment": {
+  "home": { "status": "ok", "path": "/Users/you" },
+  "default_output_dir": { "status": "missing", "path": "/Users/you/books-exported", "writable": true },
+  "free_bytes": 72806043648
+}
+```
+
+- `home.status` — `ok` or `missing`.
+- `default_output_dir.status` — `ok` (exists and writable), `missing` (not
+  created yet, which is normal on a fresh machine; `writable` then describes
+  the **parent** that would receive it), `unwritable`, or `unknown` (no HOME).
+- `free_bytes` — free bytes on the output volume. Treat a small value as a real
+  signal to free space before exporting.
+
+`doctor` only reports; it never creates or repairs anything.
+
