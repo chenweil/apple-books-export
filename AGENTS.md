@@ -114,7 +114,9 @@ Apple CoreData 时间戳从 **2001-01-01 UTC** 开始(`APPLE_EPOCH`),转换时�
 推送 `v*` tag 时,GitHub Actions (`.github/workflows/release.yml`) 自动:
 - **先校验 tag 与 `Cargo.toml` 的 `version` 一致**,不一致直接失败(在任何构建之前)
 - 并行构建 macOS arm64 / Intel CLI binary
-- 生成 SHA256SUMS
+- 在 arm64 一格额外打包 AppKit DMG(版本取自同一个 tag,`CFBundleVersion` 取 run number),
+  并挂载回读 `Info.plist` 确认版本与 tag 一致
+- 生成 SHA256SUMS(CLI 与 DMG 都纳入)
 - 创建/更新 GitHub Release
 
 ```bash

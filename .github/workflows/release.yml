@@ -55,6 +55,7 @@ jobs:
       # The check lives in a script so the workflow and the local guard share
       # one implementation and cannot drift.
       - name: Verify the tag matches Cargo.toml
+        id: tag
         env:
           TAG: ${{ github.ref_name }}
         run: |
@@ -128,6 +129,68 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+      # ── AppKit 打包 (arm64) ─────────────────────────
+      # AppKit is the shipped GUI, so a release that only carries the CLI hands
+      # users nothing to install. Only the arm64 leg builds it: `swift build`
+      # emits a host-architecture binary unless a --triple is given, and the
+      # Intel leg is covered by #45, which is also where actually running the
+      # x86_64 artifact belongs.
+      - name: Build the AppKit DMG (arm64)
+        if: matrix.label == 'macos-arm64'
+        env:
+          APP_VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          set -euo pipefail
+          swift build -c release --package-path appkit
+          # CFBundleVersion is the bundle build number, not the marketing
+          # version; it has to rise for each build of the same version, so it
+          # is derived from the run rather than hand-maintained in three files.
+          BUILD_VERSION="${{ github.run_number }}"
+          # Absolute path: package-dmg.sh cd's into appkit/ before reading
+          # RUST_CLI_BIN, so a workspace-relative path would not resolve.
+          RUST_CLI_BIN="$GITHUB_WORKSPACE/target/${{ matrix.target }}/release/apple-books-exporter" \
+          APP_VERSION="$APP_VERSION" \
+          BUILD_VERSION="$BUILD_VERSION" \
+            ./appkit/Scripts/package-dmg.sh
+
+      # Trusting the packaging script's exit code is not enough: the whole point
+      # of the version unification is that the shipped bundle agrees with the
+      # tag, so read it back out of the mounted image.
+      - name: Verify the shipped bundle matches the tag
+        if: matrix.label == 'macos-arm64'
+        env:
+          APP_VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          set -euo pipefail
+          DMG="dist/Books-Exporter-${APP_VERSION}-unsigned.dmg"
+          if [ ! -f "$DMG" ]; then
+            echo "::error::expected DMG was not produced: $DMG"
+            ls -la dist/ 2>/dev/null || true
+            exit 1
+          fi
+          MOUNT_DIR="$(mktemp -d)"
+          hdiutil attach "$DMG" -mountpoint "$MOUNT_DIR" -nobrowse -quiet
+          trap 'hdiutil detach "$MOUNT_DIR" -quiet' EXIT
+          PLIST="$MOUNT_DIR/Books Exporter.app/Contents/Info.plist"
+          bundle_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$PLIST")"
+          bundle_build="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$PLIST")"
+          echo "bundle version=$bundle_version build=$bundle_build (tag v$APP_VERSION)"
+          if [ "$bundle_version" != "$APP_VERSION" ]; then
+            echo "::error::the shipped bundle version does not match the tag"
+            exit 1
+          fi
+          file "$MOUNT_DIR/Books Exporter.app/Contents/MacOS/BooksExporter"
+          file "$MOUNT_DIR/Books Exporter.app/Contents/Resources/apple-books-exporter"
+
+      - name: Upload AppKit artifact
+        if: matrix.label == 'macos-arm64'
+        uses: actions/upload-artifact@v4
+        with:
+          name: appkit-aarch64-${{ steps.tag.outputs.version }}
+          path: dist/Books-Exporter-*.dmg
+          if-no-files-found: error
+          retention-days: 7
+
   # ─────────────────────────────────────────────────
   # 2. 收集所有 artifact, 创建/更新 GitHub Release
   # ─────────────────────────────────────────────────
@@ -157,8 +220,11 @@ jobs:
       - name: Generate SHA256 checksums (files only)
         working-directory: dist
         run: |
-          # 对所有可下载文件生成 checksum
-          find . -maxdepth 2 -type f -name "apple-books-exporter-*" \
+          # Both the CLI binaries and the AppKit disk image are downloadable
+          # artifacts, so both are checksummed. The update manifest is not: it
+          # is consumed by the app's update check, not verified by a downloader.
+          find . -maxdepth 2 -type f \
+            \( -name "apple-books-exporter-*" -o -name "Books-Exporter-*.dmg" \) \
             -exec sha256sum {} \; | tee SHA256SUMS
           echo ""
           echo "=== 文件清单 ==="
@@ -175,9 +241,13 @@ jobs:
           generate_release_notes: true
           draft: false
           prerelease: ${{ contains(steps.version.outputs.VERSION, '-') }}  # 含 - 视为预发布
+          # The AppKit DMG is globbed rather than named: only the arm64 matrix
+          # leg produces one today, so listing it literally would trip
+          # fail_on_unmatched_files.
           files: |
             dist/apple-books-exporter-aarch64-apple-darwin
             dist/apple-books-exporter-x86_64-apple-darwin
+            dist/Books-Exporter-*.dmg
             dist/SHA256SUMS
           fail_on_unmatched_files: true
           overwrite_files: true

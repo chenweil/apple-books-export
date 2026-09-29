@@ -30,11 +30,15 @@ for text in "${required_release_text[@]}"; do
   fi
 done
 
-# These forbid the Tauri release path coming back. `.dmg` is in the list
-# because nothing in the current release workflow produces a disk image; if an
-# AppKit DMG is added later, this entry has to be revisited deliberately rather
-# than relaxed in passing. A bare `tauri` is deliberately absent: it would also
-# match a comment explaining the rollback, which this file contains.
+# These forbid the Tauri release path coming back.
+#
+# `.dmg` used to be in this list on its own, because the only disk image the
+# workflow ever produced was Tauri's. AppKit now ships a DMG too, so the bare
+# extension no longer distinguishes anything and would fail on a legitimate
+# artifact. The Tauri path is caught by its own markers instead: the build
+# invocations and the `gui-`-prefixed artifact names it used. A bare `tauri` is
+# deliberately absent, because it also matches the comments explaining the
+# rollback that this file contains.
 for forbidden in \
   'cargo tauri' \
   'npm ci' \
@@ -43,10 +47,35 @@ for forbidden in \
   'locate-gui' \
   'gui-app-' \
   'gui-dmg-' \
-  '.app.zip' \
-  '.dmg'; do
+  'tauri.conf.json' \
+  '.app.zip'; do
   if grep -Fq -- "$forbidden" "$RELEASE_WORKFLOW"; then
     printf 'legacy GUI release path remains: %s\n' "$forbidden" >&2
+    exit 1
+  fi
+done
+
+# An AppKit DMG in the workflow must be the one we build, and it must be
+# unsigned -- there is no Developer ID identity in this repository, so a signed
+# claim would be false. The naming is checked rather than merely the extension.
+if grep -Fq -- '.dmg' "$RELEASE_WORKFLOW"; then
+  if ! grep -Fq -- 'package-dmg.sh' "$RELEASE_WORKFLOW"; then
+    printf 'a DMG is released but not produced by package-dmg.sh\n' >&2
+    exit 1
+  fi
+fi
+
+# Naming a signing step that this repository cannot actually perform is worse
+# than having none: a reader would take it as evidence the artifact is signed.
+for phantom in \
+  'notarytool' \
+  'xcrun notarytool' \
+  'codesign --sign' \
+  'Developer ID Application' \
+  'stapler staple'; do
+  if grep -Fq -- "$phantom" "$RELEASE_WORKFLOW"; then
+    printf 'release.yml claims a signing step this repository cannot perform: %s\n' \
+      "$phantom" >&2
     exit 1
   fi
 done
