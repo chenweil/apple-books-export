@@ -179,7 +179,7 @@ A Compatible Release is a Stable Channel release that meets the reader's minimum
 
 ## Headless Mainline
 
-The Headless Mainline is the `main` product surface without a shipped GUI. It provides the Rust CLI, the read-only TUI, and the Agent Data Skill. The deprecated Tauri GUI may remain in source history during migration, but it is not the default product entry or release target.
+The Headless Mainline is the `main` product surface: the Rust CLI, the read-only TUI, the Agent Data Skill, and the AppKit GUI. The deprecated Tauri GUI is no longer part of the tree; it survives only in source history behind the `legacy/tauri-gui-mainline` tag.
 
 ## Canonical Rust Data Core
 
@@ -203,11 +203,11 @@ The Agent Data Skill is the repository-managed workflow that lets an AI agent li
 
 ## AppKit GUI Surface
 
-The AppKit GUI Surface is the official macOS graphical experience. It lives on the Headless Mainline and consumes the Canonical Rust Data Core through the Machine JSON Protocol rather than maintaining separate database rules. Removing the Tauri Legacy GUI remains a separate step tracked by the Cutover Gate.
+The AppKit GUI Surface is the official macOS graphical experience. It lives on the Headless Mainline and consumes the Canonical Rust Data Core through the Machine JSON Protocol rather than maintaining separate database rules. It replaced the Tauri Legacy GUI.
 
 ## Tauri Legacy GUI
 
-The Tauri Legacy GUI is the existing Rust/Tauri graphical surface that is no longer the target product entry. Its source is retained for rollback and historical comparison until the Cutover Gate is satisfied; it is not expanded as part of the migration.
+The Tauri Legacy GUI was the retired Rust/Tauri graphical surface. Its source was removed once AppKit became the shipped GUI; the `legacy/tauri-gui-mainline` tag remains the rollback anchor that can restore it.
 
 ## Cutover Gate
 

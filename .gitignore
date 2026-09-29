@@ -1,6 +1,5 @@
 # Rust
 /target/
-src-tauri/target/
 **/*.rs.bk
 
 # Build

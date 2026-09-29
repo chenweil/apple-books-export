@@ -3,8 +3,7 @@
 Rust 版本 Apple Books 笔记导出工具，提供 CLI、只读 TUI 和 Agent Data Skill，可导出笔记、高亮、书签为 Markdown 文件，并支持 AI 增强和图片卡片生成。
 
 当前 `main` 是 Headless Mainline：默认入口是 Rust CLI、Read-only TUI 和
-Agent Data Skill。Tauri Legacy GUI 源码仍保留，但不属于默认文档、构建或
-发布路径。
+Agent Data Skill，图形界面是 AppKit。Tauri Legacy GUI 源码已删除。
 
 ## 功能
 
@@ -106,38 +105,35 @@ Skill 会刷新 `list --json`，通过 `asset_id` 读取标注或导出 Markdown
 验证生成的非空文件。它不解析人类表格、不修改 Apple Books、不自动下载
 binary，也不调用 AI。
 
-## Tauri Legacy GUI（已废弃，源码保留）
+## Tauri Legacy GUI（已移除）
 
-`src-tauri/` 与 `src/lib/` 的 Svelte 源码**保留**在 `main` 上，用于历史比较、迁移
-和回滚；Tauri GUI **不再是** `main` 的默认入口、默认构建目标或发布产物。正式 GUI
-是同一仓库内的 AppKit 应用（见 [`appkit/README.md`](appkit/README.md)），它已在
-`main` 上并受 `appkit` CI job 门禁覆盖；删除 Tauri 源码是 Cutover Gate（issue #19）
-的独立步骤，尚未执行。
+Tauri GUI 的源码（`src-tauri/`、Svelte 前端、root `package.json` 及其构建配置）已从
+`main` 删除。AppKit 取代它成为本仓库唯一的图形界面，并受 `appkit` CI job 门禁覆盖
+（见 [`appkit/README.md`](appkit/README.md)）。删除动作见 issue #43。
+
+仓库不再需要 Node.js：`package.json` 已随前端一起移除，Headless Mainline 的三条入口
+都是原生工具链——`cargo`（CLI）、`bun`（TUI）、`swift`（AppKit）。
 
 **回滚锚点**：Tauri GUI 仍是默认入口的最后一个 `main` 提交是 `6bac3e5`
 （`feat: harden Apple Books agent data skill`），已打标签
-`legacy/tauri-gui-mainline`。需要回到那个状态时：
+`legacy/tauri-gui-mainline`。需要取回当时的完整状态时：
 
 ```bash
 git checkout legacy/tauri-gui-mainline
 ```
 
 该标签下 `package.json` 仍有 `dev` / `build` / `preview` / `tauri` 四个默认脚本，
-`release.yml` 仍会发布 GUI 产物。
-
-**显式构建路径**（仅在明确的迁移/回滚任务中使用）：
+`release.yml` 仍会发布 GUI 产物。要在当前代码上取回**源码**（而非整体回退），用：
 
 ```bash
-npm install                # 只在需要 Legacy GUI 时安装前端依赖
-npm run legacy-gui:dev     # 只启动 Svelte 前端（vite dev server）
-npm run legacy-gui:build   # 只构建 Svelte 前端到 dist/
-npm run legacy-gui:tauri build   # 构建完整 Tauri 应用（需要 Rust + Node + Xcode 工具链）
+git checkout legacy/tauri-gui-mainline -- src-tauri package.json package-lock.json \
+  svelte.config.js vite.config.ts tsconfig.json
+git checkout legacy/tauri-gui-mainline -- 'src/*.svelte' 'src/lib' 'src/main.ts' \
+  'src/app.css' 'src/index.html'
 ```
 
-`src-tauri/tauri.conf.json` 的 `beforeDevCommand` / `beforeBuildCommand` 已指向
-`legacy-gui:dev` / `legacy-gui:build`，所以上面这条路径是自洽的。`package.json`
-顶层原有的 `dev` / `build` / `preview` / `tauri` 四个脚本已随 Headless Mainline
-一起移除——它们过去指向这个被废弃的 GUI。
+`tests/headless_mainline.sh` 会持续验证该标签仍能解析到 `6bac3e5`、是 `HEAD` 的
+祖先，且仍携带上面这些路径——因此回滚能力不会在无人察觉的情况下失效。
 
 ## AppKit GUI
 
@@ -533,16 +529,14 @@ apple-books-export/
 │   ├── provider.rs                # LLM API 调用
 │   ├── cache.rs                   # LLM 结果缓存
 │   ├── card.rs                    # 图片卡片生成
+│   ├── speech/                    # Speech Clip 生成、缓存、播放与导出
 │   └── ...
-├── src-tauri/                     # Tauri Legacy GUI（保留源码,不默认发布）
-│   ├── src/main.rs                # Tauri 入口
-│   └── tauri.conf.json            # Tauri 配置
 ├── tui/                           # OpenTUI 只读终端界面
 │   ├── src/                       # Core API 应用、后端协议与测试
 │   └── package.json               # Bun 脚本与 OpenTUI 依赖
-├── src/lib/                       # Tauri Legacy GUI 的 Svelte 前端
-│   ├── pages/                     # 页面组件
-│   └── components/                # UI 组件
+├── appkit/                        # AppKit GUI (Swift)
+│   ├── Sources/BooksExporter/     # 应用主体
+│   └── Scripts/verify-ui.sh       # UI 回归探针
 ├── skills/                        # AI Agent Skill
 │   └── apple-books-export-rust/
 │       ├── SKILL.md               # Skill 文档
@@ -568,7 +562,8 @@ Apple Books 的笔记数据存储在：
 - **后端**: Rust CLI + rusqlite (bundled)
 - **TUI**: Bun + OpenTUI
 - **Agent Data Skill**: 仓库内 `apple-books-export-rust` Skill
-- **Legacy GUI**: Tauri 2 + Svelte 5（源码保留,不默认构建/发布）
+- **图形界面**: AppKit (Swift)，随包分发 canonical Rust CLI
+- **Legacy GUI**: Tauri 2 + Svelte 5（源码已删除，回滚锚点 `legacy/tauri-gui-mainline`）
 - **数据库**: rusqlite (bundled)
 - **HTTP**: reqwest + tokio
 - **图片**: image + rusttype
