@@ -137,7 +137,9 @@ Apple Books 的一条 Annotation 可以同时包含高亮原文和个人笔记�
 - 没有现有 cache entry 的 Unknown Speech Result 作为 clip 级阻塞状态持续保留，不随 90 天
   attempt history 到期。只有显式 `--regenerate` 或用户明确清除该状态后才允许新 attempt；
 - Speech Attempt History 仅保留不含原文、密钥和音频的 metadata，默认保留 90 天，不随音频
-  LRU 淘汰。`speech cache clear` 和 `speech history clear` 是两个不同动作。
+  LRU 淘汰。`speech cache clear` 和 `speech history clear` 是两个不同动作。超过保留期的
+  attempt metadata 由正常维护自动删除，但 clip 级阻塞状态（unknown gate）与 current
+  pointer 不随之失效；`state.latest_attempt_id` 不得再指向已被删除或已清除的 attempt。
 
 ### CLI 与 Machine JSON 合同
 

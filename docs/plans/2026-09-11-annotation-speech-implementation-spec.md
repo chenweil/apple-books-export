@@ -564,8 +564,10 @@ provider_code?
 trace_id?
 ```
 
-允许状态：`cancelled_before_send`、`provider_failed`、`succeeded`、`unknown`、
-`provider_succeeded_artifact_missing`。不保存原文、请求体、响应体、API Key 或音频。
+允许状态：`in_progress`、`cancelled_before_send`、`provider_failed`、`succeeded`、`unknown`、
+`provider_succeeded_artifact_missing`。`in_progress` 是 provider 调用前的持久状态，终态按同一
+`attempt_id` 原地更新：请求可能已经计费，崩溃也不得丢掉这次请求的历史。不保存原文、请求体、
+响应体、API Key 或音频。
 
 ### 7.4 Cache budget
 
@@ -723,6 +725,12 @@ receipt(source=provider)
 - failed：返回相同稳定失败，不自动调用 provider；
 - unknown：返回 `SPEECH_RESULT_UNKNOWN`；
 - 等待超时：返回 `SPEECH_IN_PROGRESS`。
+
+「返回相同稳定失败」必须覆盖明确的 `provider_failed` 终态：显式失败不写 generation gate
+（`blocks_generation == false`），因此为同一 clip 排过队的调用方要在锁内按该终态原样返回首个
+错误（错误码、attempt ID、provider code、trace ID 都来自已记录的历史），不得发起第二个
+provider 请求。`--regenerate` 仍然创建新 attempt。这条路径只对排队等待方生效：一次全新的显式
+`generate` 是新的用户授权，可以重新尝试。
 
 ## 10. Speech Export Manifest
 
