@@ -1424,6 +1424,60 @@ fn declared_audio_metadata_that_contradicts_the_parsed_mp3_is_rejected() {
 }
 
 #[test]
+fn an_unusable_speech_root_fails_the_preflight_before_any_provider_call() {
+    let fixture = Fixture::new();
+    // 用一个普通文件占住 Speech 状态根：存储预检必须在任何连接之前失败。
+    std::fs::create_dir_all(fixture.speech_root()).expect("speech root");
+    std::fs::write(fixture.speech_root().join("clips"), b"not a directory")
+        .expect("block clip storage");
+
+    let provider = provider_with_catalog_and_synthesis("trace-storage");
+    let value = failed(&fixture.run_with(
+        &[
+            "speech",
+            "generate",
+            "--asset-id",
+            "book-1",
+            "--annotation-id",
+            "annotation-41",
+            "--content",
+            "highlight",
+            "--json",
+        ],
+        &provider,
+        Some(TEST_KEY),
+    ));
+    let records = provider.finish();
+
+    assert_eq!(value["error"]["code"], "SPEECH_STORAGE_UNAVAILABLE");
+    assert_eq!(
+        records.len(),
+        0,
+        "a failed storage preflight must not open a connection"
+    );
+
+    // human 模式给出一句可读错误，同样零连接。
+    let human_provider = provider_with_catalog_and_synthesis("trace-storage-human");
+    let human = fixture.run_with(
+        &[
+            "speech",
+            "generate",
+            "1",
+            "--annotation",
+            "1",
+            "--content",
+            "highlight",
+        ],
+        &human_provider,
+        Some(TEST_KEY),
+    );
+    assert!(!human.status.success());
+    let stderr = String::from_utf8_lossy(&human.stderr);
+    assert!(stderr.contains("Speech"), "{stderr}");
+    assert_eq!(human_provider.finish().len(), 0);
+}
+
+#[test]
 fn human_display_indices_out_of_range_fail_without_targeting_the_first_book() {
     let fixture = Fixture::new();
     let provider = provider_with_catalog_and_synthesis("trace-index");

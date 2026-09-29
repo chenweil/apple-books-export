@@ -619,8 +619,18 @@ async fn cmd_speech_generate(arguments: GenerateArguments) -> anyhow::Result<()>
         (book.asset_id.clone(), annotation.id.clone())
     };
 
-    let store = speech_store().map_err(speech_error)?;
-    let config = store.load_config().map_err(SpeechError::Storage).map_err(speech_error)?;
+    // Speech 状态根与配置也必须在任何 provider 连接之前可用；machine 模式同样要拿到
+    // 稳定的错误信封，而不是一句纯文本。
+    let store = match speech_store() {
+        Ok(store) => store,
+        Err(error) => return Err(fail_speech_setup(error, arguments.json)),
+    };
+    let config = match store.load_config() {
+        Ok(config) => config,
+        Err(error) => {
+            return Err(fail_speech_setup(SpeechError::Storage(error), arguments.json));
+        }
+    };
     let api_key = std::env::var(&config.api_key_env)
         .ok()
         .filter(|value| !value.trim().is_empty());
@@ -683,8 +693,16 @@ fn generation_annotations(asset_id: &str) -> anyhow::Result<Vec<Annotation>> {
         .map_err(|error| anyhow::anyhow!("无法读取 Annotation：{error}"))
 }
 
-/// 把人类显示序号（1-based）解析成 0-based 下标。
-///
+/// Speech 状态根 / 配置不可用时的稳定失败：JSON 模式输出机器错误信封，
+/// human 模式给出一句可读说明；两种情况都以非零状态退出，绝不 panic。
+fn fail_speech_setup(error: SpeechError, json: bool) -> anyhow::Error {
+    if json {
+        fail_machine(speech_machine::error_response(&error));
+    }
+    speech_error(error)
+}
+
+/// 把人类显示序号（1-based）解析成 0-based 下标。///
 /// 0、越界或缺失都返回稳定的 `INVALID_ARGUMENT` 错误，而不是 panic，也绝不像
 /// `saturating_sub` 那样把 0 悄悄降级成第一个条目：那会让 `speech generate`
 /// 对错误的书籍或 Annotation 发起付费请求。`len` 是当前列表长度，错误信息里
