@@ -211,8 +211,8 @@ Apple Books 的一条 Annotation 可以同时包含高亮原文和个人笔记�
   播放、导出或持有锁的 entry 不参与淘汰；
 - 判定「正在使用」的入口是统一的占用检查：生成看跨进程 writer 锁，播放与导出看同一套
   usage marker（`locks/<clip_id>.play` / `locks/<clip_id>.export`，由 `ClipUseGuard`
-  维护）。`speech play` 与 `speech export` 尚未实现，但清理与淘汰逻辑已经按 marker 实现，
-  这两个命令落地时通过同一个 guard 取用 marker，不需要再改清理语义；
+  维护）。`speech play` 已经通过同一个 guard 取用 `locks/<clip_id>.play`，因此
+  `speech export` 落地时不需要再改清理语义；
 - 预算中真正可给缓存内容使用的部分是 `budget - 128 MiB` 安全余量；根目录不可写或
   可用空间保不住该余量时，在 provider 调用前本地返回 `SPEECH_STORAGE_UNAVAILABLE`；
 - 手动 `speech cache clear` 同样跳过正在生成、播放、导出或持有锁的 entry，并在 Speech

@@ -120,7 +120,8 @@ impl ClipUseKind {
 
 /// 播放/导出占用一个 Cached Speech Clip 的跨进程凭证；Drop 时释放。
 ///
-/// `speech play` 与 `speech export`（尚未实现）必须持有它：LRU 维护和
+/// `speech play`（已实现，见 [`crate::speech::play`]）与 `speech export`（尚未实现）
+/// 必须持有它：LRU 维护和
 /// `speech cache clear` 因此不会在音频被读取时抽走 entry。
 #[derive(Debug)]
 pub struct ClipUseGuard {
@@ -1061,9 +1062,9 @@ impl ClipCache {
     /// 该 entry 是否正在被生成、播放或导出（含持锁）。
     ///
     /// 生成由跨进程 writer 锁表达；播放与导出由 [`ClipUseGuard`] 维护的 usage marker
-    /// 表达。`speech play` / `speech export` 尚未实现：它们落地时通过
-    /// [`ClipUseGuard`] 取用同一套 marker，这个 guard 因此天然覆盖这两种操作，
-    /// 现在也已经被注入 marker 的测试直接证明（见 `clear_or_eviction_skips_*`）。
+    /// 表达。`speech play` 已经通过 [`ClipUseGuard`] 取用同一套 marker（见
+    /// [`crate::speech::play`]），`speech export` 落地时照搬即可；这个 guard 因此天然
+    /// 覆盖这两种操作，并已被播放占用与 `clear_or_eviction_skips_*` 直接证明。
     pub fn clip_in_use(&self, clip_id: &str) -> Option<ClipUseKind> {
         match ClipLock::acquire_with_timeout(self, clip_id, Utc::now(), Duration::ZERO) {
             // 拿不到 writer 锁：同一个 clip 正在生成（或别的进程持锁）。
