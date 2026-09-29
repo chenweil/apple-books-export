@@ -40,6 +40,10 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          # tests/headless_mainline.sh verifies the documented Tauri GUI rollback
+          # tag resolves and is still an ancestor, which needs real history.
+          fetch-depth: 0
 
       - name: Validate headless mainline
         run: bash tests/headless_mainline.sh
@@ -120,6 +124,10 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          # tests/headless_mainline.sh verifies the documented Tauri GUI rollback
+          # tag resolves and is still an ancestor, which needs real history.
+          fetch-depth: 0
 
       - name: Download all build artifacts
         uses: actions/download-artifact@v4
