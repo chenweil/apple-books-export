@@ -370,10 +370,7 @@ fn set_rejects_out_of_range_boundaries_and_accepts_the_limits() {
             pitch,
             "--json",
         ]));
-        assert_eq!(
-            value_json["receipt"]["profile"]["pitch"],
-            pitch.parse::<i32>().unwrap()
-        );
+        assert_eq!(value_json["receipt"]["profile"]["pitch"], pitch.parse::<i32>().unwrap());
     }
 }
 
@@ -410,10 +407,7 @@ fn set_requires_an_exact_voice_id_and_known_provider() {
     ]));
     assert_eq!(provider["error"]["code"], "SPEECH_PROFILE_INVALID");
     assert_eq!(provider["error"]["details"]["field"], "provider");
-    assert_eq!(
-        provider["error"]["details"]["reason"],
-        "unsupported_provider"
-    );
+    assert_eq!(provider["error"]["details"]["reason"], "unsupported_provider");
 
     let api_key_env = failed(&fixture.run(&[
         "speech",
@@ -510,10 +504,7 @@ fn set_never_carries_forward_a_hand_edited_verified_status() {
         "--json",
     ]));
 
-    assert_eq!(
-        value["receipt"]["profile"]["verification_status"],
-        "unverified"
-    );
+    assert_eq!(value["receipt"]["profile"]["verification_status"], "unverified");
     assert_eq!(value["receipt"]["profile"]["verified_at"], Value::Null);
     assert_eq!(
         fixture.config()["voice_profile"]["verification_status"],
@@ -529,10 +520,7 @@ fn corrupt_or_unsupported_stored_config_fails_with_stable_codes() {
     fs::write(fixture.config_path(), "{ not json").expect("write corrupt config");
     let corrupt = failed(&fixture.run(&["speech", "profile", "show", "--json"]));
     assert_eq!(corrupt["error"]["code"], "SPEECH_PROFILE_INVALID");
-    assert_eq!(
-        corrupt["error"]["details"]["reason"],
-        "stored_config_invalid"
-    );
+    assert_eq!(corrupt["error"]["details"]["reason"], "stored_config_invalid");
 
     fs::write(
         fixture.config_path(),
@@ -566,10 +554,7 @@ fn corrupt_or_unsupported_stored_config_fails_with_stable_codes() {
     .expect("write config with an unexpected secret field");
     let unexpected = failed(&fixture.run(&["speech", "profile", "show", "--json"]));
     assert_eq!(unexpected["error"]["code"], "SPEECH_PROFILE_INVALID");
-    assert_eq!(
-        unexpected["error"]["details"]["reason"],
-        "stored_config_invalid"
-    );
+    assert_eq!(unexpected["error"]["details"]["reason"], "stored_config_invalid");
 }
 
 #[test]
@@ -604,12 +589,7 @@ fn stored_config_is_an_allowlisted_non_secret_document() {
     keys.sort_unstable();
     assert_eq!(
         keys,
-        [
-            "api_key_env",
-            "cache_budget_bytes",
-            "schema_version",
-            "voice_profile"
-        ]
+        ["api_key_env", "cache_budget_bytes", "schema_version", "voice_profile"]
     );
 
     let mut profile_keys: Vec<&str> = config["voice_profile"]
@@ -796,10 +776,7 @@ fn profile_operations_need_no_network_and_no_apple_books_database() {
     ]));
     assert_eq!(set["receipt"]["operation"], "profile_set");
     assert_eq!(set["receipt"]["warnings"][0]["reason"], "no_catalog");
-    assert_eq!(
-        set["receipt"]["profile"]["verification_status"],
-        "unverified"
-    );
+    assert_eq!(set["receipt"]["profile"]["verification_status"], "unverified");
     let reset = succeeded(&fixture.run(&["speech", "profile", "reset", "--json"]));
     assert_eq!(reset["receipt"]["operation"], "profile_reset");
 }
@@ -857,15 +834,7 @@ fn human_modes_print_readable_profile_output() {
     assert!(String::from_utf8_lossy(&reset.stdout).contains("male_0004_a"));
 
     // 人类模式下的失败仍然是可读错误，而不是 JSON envelope。
-    let invalid = fixture.run(&[
-        "speech",
-        "profile",
-        "set",
-        "--voice-id",
-        "x",
-        "--speed",
-        "1.005",
-    ]);
+    let invalid = fixture.run(&["speech", "profile", "set", "--voice-id", "x", "--speed", "1.005"]);
     assert!(!invalid.status.success());
     assert!(!String::from_utf8_lossy(&invalid.stderr).contains("schema_version"));
 }
@@ -876,9 +845,7 @@ fn real_user_speech_root() -> PathBuf {
 }
 
 /// 真实用户 Speech 目录的非侵入式快照：只看是否存在、大小与修改时间，不读取内容。
-fn real_speech_root_state(
-    root: &Path,
-) -> Vec<(PathBuf, Option<u64>, Option<std::time::SystemTime>)> {
+fn real_speech_root_state(root: &Path) -> Vec<(PathBuf, Option<u64>, Option<std::time::SystemTime>)> {
     fn walk(dir: &Path, entries: &mut Vec<(PathBuf, Option<u64>, Option<std::time::SystemTime>)>) {
         let read = match fs::read_dir(dir) {
             Ok(read) => read,

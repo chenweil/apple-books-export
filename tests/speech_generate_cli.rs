@@ -240,7 +240,12 @@ impl Fixture {
     fn new() -> Self {
         // 默认 fixture：annotation-41 同时有高亮与笔记，annotation-42 只有高亮。
         Self::with_annotations(&[
-            (41, "book-1", Some("高亮正文"), Some("我的笔记")),
+            (
+                41,
+                "book-1",
+                Some("高亮正文"),
+                Some("我的笔记"),
+            ),
             (42, "book-1", Some("只有高亮"), None),
         ])
     }
@@ -387,13 +392,8 @@ impl Fixture {
     /// 该 clip 当前被指向的音频 sha256。
     fn current_audio_sha256(&self, clip_id: &str) -> String {
         let state: Value = serde_json::from_str(
-            &std::fs::read_to_string(
-                self.speech_root()
-                    .join("clips")
-                    .join(clip_id)
-                    .join("state.json"),
-            )
-            .expect("state.json"),
+            &std::fs::read_to_string(self.speech_root().join("clips").join(clip_id).join("state.json"))
+                .expect("state.json"),
         )
         .expect("state JSON");
         state["current_audio_sha256"]
@@ -404,13 +404,8 @@ impl Fixture {
 
     fn clip_state(&self, clip_id: &str) -> Value {
         serde_json::from_str(
-            &std::fs::read_to_string(
-                self.speech_root()
-                    .join("clips")
-                    .join(clip_id)
-                    .join("state.json"),
-            )
-            .expect("state.json"),
+            &std::fs::read_to_string(self.speech_root().join("clips").join(clip_id).join("state.json"))
+                .expect("state.json"),
         )
         .expect("state JSON")
     }
@@ -1169,9 +1164,7 @@ fn explicit_provider_failures_use_stable_codes_and_never_retry() {
         &provider_with_catalog_and_synthesis("trace-after"),
         Some(TEST_KEY),
     ));
-    let after_records_guard = after_regenerate["receipt"]["clip_id"]
-        .as_str()
-        .map(str::to_string);
+    let after_records_guard = after_regenerate["receipt"]["clip_id"].as_str().map(str::to_string);
     assert_eq!(after_regenerate["receipt"]["source"], "cache");
     assert!(after_records_guard.is_some());
 }
@@ -1419,11 +1412,7 @@ fn overlong_annotation_text_fails_before_any_provider_call() {
 
     assert_eq!(value["error"]["code"], "SPEECH_TEXT_TOO_LONG");
     assert_eq!(value["error"]["details"]["reason"], "text_too_long");
-    assert_eq!(
-        records.len(),
-        0,
-        "overlong text must not reach the provider"
-    );
+    assert_eq!(records.len(), 0, "overlong text must not reach the provider");
     assert!(
         !String::from_utf8_lossy(&serde_json::to_vec(&value).expect("error JSON"))
             .contains("字".repeat(100).as_str()),
@@ -1551,42 +1540,10 @@ fn human_display_indices_out_of_range_fail_without_targeting_the_first_book() {
 
     // 0 与越界都必须失败；绝不能降级成第一本书/第一条 Annotation。
     for args in [
-        vec![
-            "speech",
-            "generate",
-            "0",
-            "--annotation",
-            "1",
-            "--content",
-            "highlight",
-        ],
-        vec![
-            "speech",
-            "generate",
-            "99",
-            "--annotation",
-            "1",
-            "--content",
-            "highlight",
-        ],
-        vec![
-            "speech",
-            "generate",
-            "1",
-            "--annotation",
-            "0",
-            "--content",
-            "highlight",
-        ],
-        vec![
-            "speech",
-            "generate",
-            "1",
-            "--annotation",
-            "9",
-            "--content",
-            "highlight",
-        ],
+        vec!["speech", "generate", "0", "--annotation", "1", "--content", "highlight"],
+        vec!["speech", "generate", "99", "--annotation", "1", "--content", "highlight"],
+        vec!["speech", "generate", "1", "--annotation", "0", "--content", "highlight"],
+        vec!["speech", "generate", "1", "--annotation", "9", "--content", "highlight"],
     ] {
         let output = fixture.run_with(&args, &provider, Some(TEST_KEY));
         assert!(!output.status.success(), "{args:?} must fail");
@@ -1624,11 +1581,7 @@ fn human_display_indices_out_of_range_fail_without_targeting_the_first_book() {
         &ok_provider,
         Some(TEST_KEY),
     );
-    assert!(
-        ok.status.success(),
-        "stderr: {:?}",
-        String::from_utf8_lossy(&ok.stderr)
-    );
+    assert!(ok.status.success(), "stderr: {:?}", String::from_utf8_lossy(&ok.stderr));
     let stdout = String::from_utf8_lossy(&ok.stdout);
     assert!(stdout.contains("Voice ID: male_0004_a"), "{stdout}");
     assert_eq!(MockProvider::synthesis_count(&ok_provider.finish()), 1);
@@ -1642,23 +1595,13 @@ fn an_in_place_corrupted_version_is_repaired_and_never_served_as_a_cache_hit() {
     let first = provider_with_catalog_and_synthesis("trace-repair-1");
     let value = succeeded(&fixture.run_with(
         &[
-            "speech",
-            "generate",
-            "--asset-id",
-            "book-1",
-            "--annotation-id",
-            "annotation-41",
-            "--content",
-            "highlight",
-            "--json",
+            "speech", "generate", "--asset-id", "book-1", "--annotation-id", "annotation-41",
+            "--content", "highlight", "--json",
         ],
         &first,
         Some(TEST_KEY),
     ));
-    let clip_id = value["receipt"]["clip_id"]
-        .as_str()
-        .expect("clip id")
-        .to_string();
+    let clip_id = value["receipt"]["clip_id"].as_str().expect("clip id").to_string();
     assert_eq!(MockProvider::synthesis_count(&first.finish()), 1);
 
     let audio_path = fixture
@@ -1666,11 +1609,7 @@ fn an_in_place_corrupted_version_is_repaired_and_never_served_as_a_cache_hit() {
         .join("clips")
         .join(&clip_id)
         .join("versions")
-        .join(
-            value["receipt"]["audio"]["sha256"]
-                .as_str()
-                .expect("sha256"),
-        )
+        .join(value["receipt"]["audio"]["sha256"].as_str().expect("sha256"))
         .join("audio.mp3");
     let bytes = std::fs::read(&audio_path).expect("audio version");
     let mut tampered = bytes.clone();
@@ -1681,15 +1620,8 @@ fn an_in_place_corrupted_version_is_repaired_and_never_served_as_a_cache_hit() {
     let second = provider_with_catalog_and_synthesis("trace-repair-2");
     let repaired = succeeded(&fixture.run_with(
         &[
-            "speech",
-            "generate",
-            "--asset-id",
-            "book-1",
-            "--annotation-id",
-            "annotation-41",
-            "--content",
-            "highlight",
-            "--json",
+            "speech", "generate", "--asset-id", "book-1", "--annotation-id", "annotation-41",
+            "--content", "highlight", "--json",
         ],
         &second,
         Some(TEST_KEY),
@@ -1710,26 +1642,15 @@ fn an_in_place_corrupted_version_is_repaired_and_never_served_as_a_cache_hit() {
     let third = provider_with_catalog_and_synthesis("trace-repair-3");
     let cached = succeeded(&fixture.run_with(
         &[
-            "speech",
-            "generate",
-            "--asset-id",
-            "book-1",
-            "--annotation-id",
-            "annotation-41",
-            "--content",
-            "highlight",
-            "--json",
+            "speech", "generate", "--asset-id", "book-1", "--annotation-id", "annotation-41",
+            "--content", "highlight", "--json",
         ],
         &third,
         Some(TEST_KEY),
     ));
     let third_records = third.finish();
     assert_eq!(cached["receipt"]["source"], "cache");
-    assert_eq!(
-        third_records.len(),
-        0,
-        "a repaired cache must make no connection"
-    );
+    assert_eq!(third_records.len(), 0, "a repaired cache must make no connection");
     assert_eq!(std::fs::read(&audio_path).expect("served audio"), bytes);
 }
 
@@ -1745,15 +1666,8 @@ fn a_commit_failure_returns_artifact_commit_failed_and_gates_the_clip() {
     let failing = provider_with_catalog_and_synthesis("trace-commit-1");
     let failing_output = fixture.run_with(
         &[
-            "speech",
-            "generate",
-            "--asset-id",
-            "book-1",
-            "--annotation-id",
-            "annotation-41",
-            "--content",
-            "highlight",
-            "--json",
+            "speech", "generate", "--asset-id", "book-1", "--annotation-id", "annotation-41",
+            "--content", "highlight", "--json",
         ],
         &failing,
         Some(TEST_KEY),
@@ -1761,12 +1675,10 @@ fn a_commit_failure_returns_artifact_commit_failed_and_gates_the_clip() {
     let failed_records = failing.finish();
     assert!(!failing_output.status.success());
     let failed_value = serde_json::from_slice::<Value>(&failing_output.stderr).expect("error JSON");
+    assert_eq!(failed_value["error"]["code"], "SPEECH_ARTIFACT_COMMIT_FAILED");
     assert_eq!(
-        failed_value["error"]["code"],
-        "SPEECH_ARTIFACT_COMMIT_FAILED"
-    );
-    assert_eq!(
-        failed_value["error"]["details"]["outcome"], "provider_succeeded_artifact_missing",
+        failed_value["error"]["details"]["outcome"],
+        "provider_succeeded_artifact_missing",
         "a commit failure must be recorded as provider-succeeded-artifact-missing"
     );
     assert!(failed_value["error"]["details"]["attempt_id"].is_string());
@@ -1779,32 +1691,25 @@ fn a_commit_failure_returns_artifact_commit_failed_and_gates_the_clip() {
 
     // attempt history 与 clip state 必须留下这次失败，并设置 unknown gate。
     let clip_dir = fixture.clip_dirs().into_iter().next().expect("clip dir");
-    let state: Value =
-        serde_json::from_slice(&std::fs::read(clip_dir.join("state.json")).expect("state.json"))
-            .expect("state JSON");
+    let state: Value = serde_json::from_slice(
+        &std::fs::read(clip_dir.join("state.json")).expect("state.json"),
+    )
+    .expect("state JSON");
     assert_eq!(
         state["generation_blocked"], true,
         "provider-succeeded-artifact-missing must gate a plain generate"
     );
     assert_eq!(state["latest_error_code"], "SPEECH_ARTIFACT_COMMIT_FAILED");
     assert_eq!(
-        state["latest_attempt_status"],
-        "provider_succeeded_artifact_missing"
+        state["latest_attempt_status"], "provider_succeeded_artifact_missing"
     );
 
     // 普通 generate 被 gate 挡住：零连接，不自动重放。
     let blocked = provider_with_catalog_and_synthesis("trace-commit-2");
     let blocked_value = failed(&fixture.run_with(
         &[
-            "speech",
-            "generate",
-            "--asset-id",
-            "book-1",
-            "--annotation-id",
-            "annotation-41",
-            "--content",
-            "highlight",
-            "--json",
+            "speech", "generate", "--asset-id", "book-1", "--annotation-id", "annotation-41",
+            "--content", "highlight", "--json",
         ],
         &blocked,
         Some(TEST_KEY),
@@ -1818,16 +1723,8 @@ fn a_commit_failure_returns_artifact_commit_failed_and_gates_the_clip() {
     let regenerated = provider_with_catalog_and_synthesis("trace-commit-3");
     let recovered = succeeded(&fixture.run_with(
         &[
-            "speech",
-            "generate",
-            "--asset-id",
-            "book-1",
-            "--annotation-id",
-            "annotation-41",
-            "--content",
-            "highlight",
-            "--regenerate",
-            "--json",
+            "speech", "generate", "--asset-id", "book-1", "--annotation-id", "annotation-41",
+            "--content", "highlight", "--regenerate", "--json",
         ],
         &regenerated,
         Some(TEST_KEY),
@@ -2039,15 +1936,8 @@ fn a_lock_timeout_reports_speech_in_progress_with_the_current_attempt_id() {
     let first_provider = provider_with_catalog_and_synthesis("trace-lock-1");
     let first = succeeded(&fixture.run_with(
         &[
-            "speech",
-            "generate",
-            "--asset-id",
-            "book-1",
-            "--annotation-id",
-            "annotation-41",
-            "--content",
-            "highlight",
-            "--json",
+            "speech", "generate", "--asset-id", "book-1", "--annotation-id", "annotation-41",
+            "--content", "highlight", "--json",
         ],
         &first_provider,
         Some(TEST_KEY),
@@ -2061,16 +1951,8 @@ fn a_lock_timeout_reports_speech_in_progress_with_the_current_attempt_id() {
     let waiting = provider_with_catalog_and_synthesis("trace-lock-2");
     let value = failed(&fixture.run_with_env(
         &[
-            "speech",
-            "generate",
-            "--asset-id",
-            "book-1",
-            "--annotation-id",
-            "annotation-41",
-            "--content",
-            "highlight",
-            "--regenerate",
-            "--json",
+            "speech", "generate", "--asset-id", "book-1", "--annotation-id", "annotation-41",
+            "--content", "highlight", "--regenerate", "--json",
         ],
         &waiting,
         Some(TEST_KEY),
@@ -2081,7 +1963,8 @@ fn a_lock_timeout_reports_speech_in_progress_with_the_current_attempt_id() {
     assert_eq!(value["error"]["code"], "SPEECH_IN_PROGRESS");
     assert_eq!(value["error"]["details"]["reason"], "in_progress");
     assert_eq!(
-        value["error"]["details"]["attempt_id"], attempt_id,
+        value["error"]["details"]["attempt_id"],
+        attempt_id,
         "a lock timeout must carry the current attempt id when it is available"
     );
     assert_eq!(
@@ -2095,15 +1978,8 @@ fn a_lock_timeout_reports_speech_in_progress_with_the_current_attempt_id() {
     let after = provider_with_catalog_and_synthesis("trace-lock-3");
     let cached = succeeded(&fixture.run_with(
         &[
-            "speech",
-            "generate",
-            "--asset-id",
-            "book-1",
-            "--annotation-id",
-            "annotation-41",
-            "--content",
-            "highlight",
-            "--json",
+            "speech", "generate", "--asset-id", "book-1", "--annotation-id", "annotation-41",
+            "--content", "highlight", "--json",
         ],
         &after,
         Some(TEST_KEY),
@@ -2119,39 +1995,22 @@ fn an_uncertain_regeneration_keeps_the_previous_version_and_gate_free() {
     let first_provider = provider_with_catalog_and_synthesis("trace-regen-1");
     let first = succeeded(&fixture.run_with(
         &[
-            "speech",
-            "generate",
-            "--asset-id",
-            "book-1",
-            "--annotation-id",
-            "annotation-41",
-            "--content",
-            "highlight",
-            "--json",
+            "speech", "generate", "--asset-id", "book-1", "--annotation-id", "annotation-41",
+            "--content", "highlight", "--json",
         ],
         &first_provider,
         Some(TEST_KEY),
     ));
     first_provider.finish();
     let clip_id = first["receipt"]["clip_id"].as_str().expect("clip id");
-    let first_audio = first["receipt"]["audio"]["sha256"]
-        .as_str()
-        .expect("audio sha");
+    let first_audio = first["receipt"]["audio"]["sha256"].as_str().expect("audio sha");
 
     // provider 接收请求后断开：新 attempt 结果不确定。
     let failing = provider_with_dropped_synthesis();
     let value = failed(&fixture.run_with(
         &[
-            "speech",
-            "generate",
-            "--asset-id",
-            "book-1",
-            "--annotation-id",
-            "annotation-41",
-            "--content",
-            "highlight",
-            "--regenerate",
-            "--json",
+            "speech", "generate", "--asset-id", "book-1", "--annotation-id", "annotation-41",
+            "--content", "highlight", "--regenerate", "--json",
         ],
         &failing,
         Some(TEST_KEY),
@@ -2173,15 +2032,9 @@ fn an_uncertain_regeneration_keeps_the_previous_version_and_gate_free() {
     );
     assert_eq!(state["latest_attempt_status"], "unknown");
     assert_eq!(
-        std::fs::read_dir(
-            fixture
-                .speech_root()
-                .join("clips")
-                .join(clip_id)
-                .join("versions")
-        )
-        .expect("versions")
-        .count(),
+        std::fs::read_dir(fixture.speech_root().join("clips").join(clip_id).join("versions"))
+            .expect("versions")
+            .count(),
         1,
         "a rejected regeneration must not add an audio version"
     );
@@ -2190,15 +2043,8 @@ fn an_uncertain_regeneration_keeps_the_previous_version_and_gate_free() {
     let replay = provider_with_catalog_and_synthesis("trace-regen-2");
     let cached = succeeded(&fixture.run_with(
         &[
-            "speech",
-            "generate",
-            "--asset-id",
-            "book-1",
-            "--annotation-id",
-            "annotation-41",
-            "--content",
-            "highlight",
-            "--json",
+            "speech", "generate", "--asset-id", "book-1", "--annotation-id", "annotation-41",
+            "--content", "highlight", "--json",
         ],
         &replay,
         Some(TEST_KEY),
@@ -2220,15 +2066,8 @@ fn each_real_request_creates_a_distinct_metadata_only_attempt_record() {
     let first_provider = provider_with_catalog_and_synthesis("trace-att-1");
     let first = succeeded(&fixture.run_with(
         &[
-            "speech",
-            "generate",
-            "--asset-id",
-            "book-1",
-            "--annotation-id",
-            "annotation-41",
-            "--content",
-            "highlight",
-            "--json",
+            "speech", "generate", "--asset-id", "book-1", "--annotation-id", "annotation-41",
+            "--content", "highlight", "--json",
         ],
         &first_provider,
         Some(TEST_KEY),
@@ -2238,16 +2077,8 @@ fn each_real_request_creates_a_distinct_metadata_only_attempt_record() {
     let regenerate_provider = provider_with_catalog_and_synthesis("trace-att-2");
     let second = succeeded(&fixture.run_with(
         &[
-            "speech",
-            "generate",
-            "--asset-id",
-            "book-1",
-            "--annotation-id",
-            "annotation-41",
-            "--content",
-            "highlight",
-            "--regenerate",
-            "--json",
+            "speech", "generate", "--asset-id", "book-1", "--annotation-id", "annotation-41",
+            "--content", "highlight", "--regenerate", "--json",
         ],
         &regenerate_provider,
         Some(TEST_KEY),
@@ -2292,13 +2123,7 @@ fn each_real_request_creates_a_distinct_metadata_only_attempt_record() {
     let mut expected = vec![first_attempt.to_string(), second_attempt.to_string()];
     expected.sort();
     assert_eq!(recorded, expected);
-    assert_eq!(
-        fixture.current_audio_sha256(clip_id),
-        first["receipt"]["audio"]["sha256"]
-            .as_str()
-            .expect("sha")
-            .to_string()
-    );
+    assert_eq!(fixture.current_audio_sha256(clip_id), first["receipt"]["audio"]["sha256"].as_str().expect("sha").to_string());
 }
 
 /// `speech cache clear` 是显式清除入口；`speech history clear` 不清 gate。
@@ -2308,15 +2133,8 @@ fn cache_clear_lifts_the_gate_while_history_clear_keeps_it() {
     let unknown = provider_with_dropped_synthesis();
     let value = failed(&fixture.run_with(
         &[
-            "speech",
-            "generate",
-            "--asset-id",
-            "book-1",
-            "--annotation-id",
-            "annotation-41",
-            "--content",
-            "highlight",
-            "--json",
+            "speech", "generate", "--asset-id", "book-1", "--annotation-id", "annotation-41",
+            "--content", "highlight", "--json",
         ],
         &unknown,
         Some(TEST_KEY),
@@ -2332,28 +2150,14 @@ fn cache_clear_lifts_the_gate_while_history_clear_keeps_it() {
 
     // history clear 只删 attempt metadata；mock 必须保持零连接。
     let untouched = provider_with_catalog_and_synthesis("trace-history");
-    let history = succeeded(&fixture.run_with(
-        &["speech", "history", "clear", "--json"],
-        &untouched,
-        Some(TEST_KEY),
-    ));
+    let history = succeeded(&fixture.run_with(&["speech", "history", "clear", "--json"], &untouched, Some(TEST_KEY)));
     let history_records = untouched.finish();
     assert_eq!(history["receipt"]["operation"], "history_clear");
-    assert!(
-        history["receipt"]["removed_attempts"]
-            .as_u64()
-            .expect("removed")
-            >= 1
-    );
+    assert!(history["receipt"]["removed_attempts"].as_u64().expect("removed") >= 1);
     assert_eq!(history["receipt"]["cleared_generation_gates"], 0);
+    assert_eq!(history_records.len(), 0, "history clear must not contact the provider");
     assert_eq!(
-        history_records.len(),
-        0,
-        "history clear must not contact the provider"
-    );
-    assert_eq!(
-        fixture.clip_state(&clip_id)["generation_blocked"],
-        true,
+        fixture.clip_state(&clip_id)["generation_blocked"], true,
         "history clear must not lift the generation gate"
     );
 
@@ -2361,15 +2165,8 @@ fn cache_clear_lifts_the_gate_while_history_clear_keeps_it() {
     let blocked = provider_with_catalog_and_synthesis("trace-blocked");
     let blocked_value = failed(&fixture.run_with(
         &[
-            "speech",
-            "generate",
-            "--asset-id",
-            "book-1",
-            "--annotation-id",
-            "annotation-41",
-            "--content",
-            "highlight",
-            "--json",
+            "speech", "generate", "--asset-id", "book-1", "--annotation-id", "annotation-41",
+            "--content", "highlight", "--json",
         ],
         &blocked,
         Some(TEST_KEY),
@@ -2379,11 +2176,7 @@ fn cache_clear_lifts_the_gate_while_history_clear_keeps_it() {
 
     // cache clear：显式清除 gate 与 clip state。
     let cleared = provider_with_catalog_and_synthesis("trace-clear");
-    let cleared_value = succeeded(&fixture.run_with(
-        &["speech", "cache", "clear", "--json"],
-        &cleared,
-        Some(TEST_KEY),
-    ));
+    let cleared_value = succeeded(&fixture.run_with(&["speech", "cache", "clear", "--json"], &cleared, Some(TEST_KEY)));
     let cleared_records = cleared.finish();
     assert_eq!(cleared_value["receipt"]["operation"], "cache_clear");
     assert_eq!(cleared_value["receipt"]["removed"][0], clip_id);
@@ -2402,15 +2195,8 @@ fn cache_clear_lifts_the_gate_while_history_clear_keeps_it() {
     let recovered = provider_with_catalog_and_synthesis("trace-recovered");
     let recovered_value = succeeded(&fixture.run_with(
         &[
-            "speech",
-            "generate",
-            "--asset-id",
-            "book-1",
-            "--annotation-id",
-            "annotation-41",
-            "--content",
-            "highlight",
-            "--json",
+            "speech", "generate", "--asset-id", "book-1", "--annotation-id", "annotation-41",
+            "--content", "highlight", "--json",
         ],
         &recovered,
         Some(TEST_KEY),
@@ -2426,15 +2212,8 @@ fn cache_clear_skips_an_entry_that_holds_the_writer_lock() {
     let provider = provider_with_catalog_and_synthesis("trace-skip-1");
     let first = succeeded(&fixture.run_with(
         &[
-            "speech",
-            "generate",
-            "--asset-id",
-            "book-1",
-            "--annotation-id",
-            "annotation-41",
-            "--content",
-            "highlight",
-            "--json",
+            "speech", "generate", "--asset-id", "book-1", "--annotation-id", "annotation-41",
+            "--content", "highlight", "--json",
         ],
         &provider,
         Some(TEST_KEY),
@@ -2444,15 +2223,8 @@ fn cache_clear_skips_an_entry_that_holds_the_writer_lock() {
 
     fixture.occupy_lock(clip_id);
     let clearing = provider_with_catalog_and_synthesis("trace-skip-2");
-    let value = succeeded(&fixture.run_with(
-        &["speech", "cache", "clear", "--json"],
-        &clearing,
-        Some(TEST_KEY),
-    ));
-    assert_eq!(
-        value["receipt"]["removed"].as_array().map(Vec::len),
-        Some(0)
-    );
+    let value = succeeded(&fixture.run_with(&["speech", "cache", "clear", "--json"], &clearing, Some(TEST_KEY)));
+    assert_eq!(value["receipt"]["removed"].as_array().map(Vec::len), Some(0));
     assert_eq!(value["receipt"]["skipped"][0], clip_id);
     assert_eq!(value["receipt"]["cleared_generation_gates"], 0);
     assert_eq!(clearing.finish().len(), 0);
@@ -2462,15 +2234,8 @@ fn cache_clear_skips_an_entry_that_holds_the_writer_lock() {
     let replay = provider_with_catalog_and_synthesis("trace-skip-3");
     let cached = succeeded(&fixture.run_with(
         &[
-            "speech",
-            "generate",
-            "--asset-id",
-            "book-1",
-            "--annotation-id",
-            "annotation-41",
-            "--content",
-            "highlight",
-            "--json",
+            "speech", "generate", "--asset-id", "book-1", "--annotation-id", "annotation-41",
+            "--content", "highlight", "--json",
         ],
         &replay,
         Some(TEST_KEY),
@@ -2479,11 +2244,7 @@ fn cache_clear_skips_an_entry_that_holds_the_writer_lock() {
     assert_eq!(replay.finish().len(), 0);
 
     let cleared = provider_with_catalog_and_synthesis("trace-skip-4");
-    let value = succeeded(&fixture.run_with(
-        &["speech", "cache", "clear", "--json"],
-        &cleared,
-        Some(TEST_KEY),
-    ));
+    let value = succeeded(&fixture.run_with(&["speech", "cache", "clear", "--json"], &cleared, Some(TEST_KEY)));
     assert_eq!(value["receipt"]["removed"][0], clip_id);
     assert_eq!(cleared.finish().len(), 0);
 }
@@ -2519,8 +2280,7 @@ fn provider_with_catalog_and_delayed_failed_synthesis(delay: StdDuration) -> Moc
 #[test]
 fn a_concurrent_waiter_receives_the_first_terminal_error_without_a_second_provider_call() {
     let fixture = Fixture::new();
-    let provider =
-        provider_with_catalog_and_delayed_dropped_synthesis(StdDuration::from_millis(700));
+    let provider = provider_with_catalog_and_delayed_dropped_synthesis(StdDuration::from_millis(700));
 
     let mut children = Vec::new();
     for _ in 0..2 {
@@ -2586,29 +2346,16 @@ fn a_failed_regenerate_commit_leaves_the_old_pointer_and_audio_intact() {
     let first_provider = provider_with_catalog_and_synthesis("trace-atomic-1");
     let first = succeeded(&fixture.run_with(
         &[
-            "speech",
-            "generate",
-            "--asset-id",
-            "book-1",
-            "--annotation-id",
-            "annotation-41",
-            "--content",
-            "highlight",
-            "--json",
+            "speech", "generate", "--asset-id", "book-1", "--annotation-id", "annotation-41",
+            "--content", "highlight", "--json",
         ],
         &first_provider,
         Some(TEST_KEY),
     ));
     first_provider.finish();
     let clip_id = first["receipt"]["clip_id"].as_str().expect("clip id");
-    let first_audio = first["receipt"]["audio"]["sha256"]
-        .as_str()
-        .expect("audio sha");
-    let versions = fixture
-        .speech_root()
-        .join("clips")
-        .join(clip_id)
-        .join("versions");
+    let first_audio = first["receipt"]["audio"]["sha256"].as_str().expect("audio sha");
+    let versions = fixture.speech_root().join("clips").join(clip_id).join("versions");
     assert_eq!(std::fs::read_dir(&versions).expect("versions").count(), 1);
 
     // 占住 tmp：新 version 的原子放置必然失败，但旧 pointer 不能被丢弃。
@@ -2633,16 +2380,8 @@ fn a_failed_regenerate_commit_leaves_the_old_pointer_and_audio_intact() {
     });
     let value = failed(&fixture.run_with(
         &[
-            "speech",
-            "generate",
-            "--asset-id",
-            "book-1",
-            "--annotation-id",
-            "annotation-41",
-            "--content",
-            "highlight",
-            "--regenerate",
-            "--json",
+            "speech", "generate", "--asset-id", "book-1", "--annotation-id", "annotation-41",
+            "--content", "highlight", "--regenerate", "--json",
         ],
         &failing,
         Some(TEST_KEY),
@@ -2679,15 +2418,8 @@ fn a_failed_regenerate_commit_leaves_the_old_pointer_and_audio_intact() {
     let replay = provider_with_catalog_and_synthesis("trace-atomic-3");
     let cached = succeeded(&fixture.run_with(
         &[
-            "speech",
-            "generate",
-            "--asset-id",
-            "book-1",
-            "--annotation-id",
-            "annotation-41",
-            "--content",
-            "highlight",
-            "--json",
+            "speech", "generate", "--asset-id", "book-1", "--annotation-id", "annotation-41",
+            "--content", "highlight", "--json",
         ],
         &replay,
         Some(TEST_KEY),
@@ -2698,19 +2430,10 @@ fn a_failed_regenerate_commit_leaves_the_old_pointer_and_audio_intact() {
 
     // 腾出 tmp 后显式 --regenerate 仍然可以替换当前版本。
     std::fs::remove_file(fixture.speech_root().join("tmp")).expect("unblock tmp");
-    let recovered = provider_with_catalog_and_synthesis("trace-atomic-4");
-    let value = succeeded(&fixture.run_with(
+    let recovered = provider_with_catalog_and_synthesis("trace-atomic-4");    let value = succeeded(&fixture.run_with(
         &[
-            "speech",
-            "generate",
-            "--asset-id",
-            "book-1",
-            "--annotation-id",
-            "annotation-41",
-            "--content",
-            "highlight",
-            "--regenerate",
-            "--json",
+            "speech", "generate", "--asset-id", "book-1", "--annotation-id", "annotation-41",
+            "--content", "highlight", "--regenerate", "--json",
         ],
         &recovered,
         Some(TEST_KEY),
@@ -2718,7 +2441,8 @@ fn a_failed_regenerate_commit_leaves_the_old_pointer_and_audio_intact() {
     assert_eq!(value["receipt"]["source"], "provider");
     assert_eq!(MockProvider::synthesis_count(&recovered.finish()), 1);
     assert_ne!(
-        value["receipt"]["attempt_id"], first["receipt"]["attempt_id"],
+        value["receipt"]["attempt_id"],
+        first["receipt"]["attempt_id"],
         "the recovered regeneration is a new Speech Attempt"
     );
     // 相同音频内容是内容寻址的：version 目录被复用，pointer 仍然只有一个。
@@ -3014,15 +2738,8 @@ fn generate_two_cached_clips(fixture: &Fixture) -> (String, String) {
     let provider = provider_with_catalog_and_synthesis("trace-status-1");
     let first = succeeded(&fixture.run_with(
         &[
-            "speech",
-            "generate",
-            "--asset-id",
-            "book-1",
-            "--annotation-id",
-            "annotation-41",
-            "--content",
-            "highlight",
-            "--json",
+            "speech", "generate", "--asset-id", "book-1", "--annotation-id", "annotation-41",
+            "--content", "highlight", "--json",
         ],
         &provider,
         Some(TEST_KEY),
@@ -3031,29 +2748,16 @@ fn generate_two_cached_clips(fixture: &Fixture) -> (String, String) {
     let other = provider_with_catalog_and_synthesis("trace-status-2");
     let second = succeeded(&fixture.run_with(
         &[
-            "speech",
-            "generate",
-            "--asset-id",
-            "book-1",
-            "--annotation-id",
-            "annotation-42",
-            "--content",
-            "highlight",
-            "--json",
+            "speech", "generate", "--asset-id", "book-1", "--annotation-id", "annotation-42",
+            "--content", "highlight", "--json",
         ],
         &other,
         Some(TEST_KEY),
     ));
     assert_eq!(MockProvider::synthesis_count(&other.finish()), 1);
     (
-        first["receipt"]["clip_id"]
-            .as_str()
-            .expect("clip id")
-            .to_string(),
-        second["receipt"]["clip_id"]
-            .as_str()
-            .expect("clip id")
-            .to_string(),
+        first["receipt"]["clip_id"].as_str().expect("clip id").to_string(),
+        second["receipt"]["clip_id"].as_str().expect("clip id").to_string(),
     )
 }
 
@@ -3066,11 +2770,7 @@ fn cache_status_reports_budget_usage_and_in_use_entries() {
     fixture.occupy_lock(&first);
 
     let provider = provider_with_catalog_and_synthesis("trace-status-3");
-    let value = succeeded(&fixture.run_with(
-        &["speech", "cache", "status", "--json"],
-        &provider,
-        Some(TEST_KEY),
-    ));
+    let value = succeeded(&fixture.run_with(&["speech", "cache", "status", "--json"], &provider, Some(TEST_KEY)));
     let records = provider.finish();
 
     assert_eq!(
@@ -3119,11 +2819,7 @@ fn cache_status_reports_budget_usage_and_in_use_entries() {
 
     // 人类输出同样给出这些数字。
     let human_provider = provider_with_catalog_and_synthesis("trace-status-4");
-    let human = fixture.run_with(
-        &["speech", "cache", "status"],
-        &human_provider,
-        Some(TEST_KEY),
-    );
+    let human = fixture.run_with(&["speech", "cache", "status"], &human_provider, Some(TEST_KEY));
     let stdout = String::from_utf8_lossy(&human.stdout);
     assert!(human.status.success(), "{stdout}");
     assert!(stdout.contains("Speech Cache 状态"), "{stdout}");
@@ -3140,11 +2836,7 @@ fn cache_status_reports_budget_usage_and_in_use_entries() {
 fn cache_status_reports_corruption_and_orphans_without_provider_calls() {
     let fixture = Fixture::new();
     let (first, _) = generate_two_cached_clips(&fixture);
-    let versions = fixture
-        .speech_root()
-        .join("clips")
-        .join(&first)
-        .join("versions");
+    let versions = fixture.speech_root().join("clips").join(&first).join("versions");
     let referenced = fixture.current_audio_sha256(&first);
 
     // 一个字节被改写：校验失败的 entry 必须算损坏，不能被当成有效缓存。
@@ -3159,11 +2851,7 @@ fn cache_status_reports_corruption_and_orphans_without_provider_calls() {
     std::fs::write(orphan.join("audio.mp3"), b"orphan").expect("orphan audio");
 
     let provider = provider_with_catalog_and_synthesis("trace-status-5");
-    let value = succeeded(&fixture.run_with(
-        &["speech", "cache", "status", "--json"],
-        &provider,
-        Some(TEST_KEY),
-    ));
+    let value = succeeded(&fixture.run_with(&["speech", "cache", "status", "--json"], &provider, Some(TEST_KEY)));
     assert_eq!(
         provider.finish().len(),
         0,
@@ -3195,7 +2883,10 @@ fn cache_status_reports_corruption_and_orphans_without_provider_calls() {
 fn cache_clear_skips_entries_held_for_playback_or_export() {
     let fixture = Fixture::new();
     let (first, second) = generate_two_cached_clips(&fixture);
-    for (clip_id, marker) in [(&first, "play"), (&second, "export")] {
+    for (clip_id, marker) in [
+        (&first, "play"),
+        (&second, "export"),
+    ] {
         let path = fixture
             .speech_root()
             .join("locks")
@@ -3203,29 +2894,16 @@ fn cache_clear_skips_entries_held_for_playback_or_export() {
         std::fs::create_dir_all(path.parent().expect("locks dir")).expect("locks dir");
         std::fs::write(
             &path,
-            format!(
-                "{{\"kind\":\"{marker}\",\"acquired_at\":\"{}\"}}\n",
-                chrono::Utc::now().to_rfc3339()
-            ),
+            format!("{{\"kind\":\"{marker}\",\"acquired_at\":\"{}\"}}\n", chrono::Utc::now().to_rfc3339()),
         )
         .expect("occupy usage marker");
     }
 
     let provider = provider_with_catalog_and_synthesis("trace-use-1");
-    let value = succeeded(&fixture.run_with(
-        &["speech", "cache", "clear", "--json"],
-        &provider,
-        Some(TEST_KEY),
-    ));
+    let value = succeeded(&fixture.run_with(&["speech", "cache", "clear", "--json"], &provider, Some(TEST_KEY)));
     assert_eq!(provider.finish().len(), 0);
-    assert_eq!(
-        value["receipt"]["removed"].as_array().map(Vec::len),
-        Some(0)
-    );
-    assert_eq!(
-        value["receipt"]["skipped"].as_array().map(Vec::len),
-        Some(2)
-    );
+    assert_eq!(value["receipt"]["removed"].as_array().map(Vec::len), Some(0));
+    assert_eq!(value["receipt"]["skipped"].as_array().map(Vec::len), Some(2));
     let reasons: Vec<(&str, &str)> = value["receipt"]["skipped_reasons"]
         .as_array()
         .expect("skipped_reasons")
@@ -3237,14 +2915,8 @@ fn cache_clear_skips_entries_held_for_playback_or_export() {
             )
         })
         .collect();
-    assert!(
-        reasons.contains(&(first.as_str(), "playback")),
-        "{reasons:?}"
-    );
-    assert!(
-        reasons.contains(&(second.as_str(), "export")),
-        "{reasons:?}"
-    );
+    assert!(reasons.contains(&(first.as_str(), "playback")), "{reasons:?}");
+    assert!(reasons.contains(&(second.as_str(), "export")), "{reasons:?}");
 
     // 被跳过的 entry 在 marker 释放后仍然是有效缓存：零 provider 连接。
     for (clip_id, marker) in [(&first, "play"), (&second, "export")] {
@@ -3259,15 +2931,8 @@ fn cache_clear_skips_entries_held_for_playback_or_export() {
     let replay = provider_with_catalog_and_synthesis("trace-use-2");
     let cached = succeeded(&fixture.run_with(
         &[
-            "speech",
-            "generate",
-            "--asset-id",
-            "book-1",
-            "--annotation-id",
-            "annotation-41",
-            "--content",
-            "highlight",
-            "--json",
+            "speech", "generate", "--asset-id", "book-1", "--annotation-id", "annotation-41",
+            "--content", "highlight", "--json",
         ],
         &replay,
         Some(TEST_KEY),
@@ -3335,16 +3000,8 @@ fn a_cache_that_cannot_preserve_the_safety_margin_fails_before_any_provider_call
     let provider = provider_with_catalog_and_synthesis("trace-budget-1");
     let value = failed(&fixture.run_with(
         &[
-            "speech",
-            "generate",
-            "--asset-id",
-            "book-1",
-            "--annotation-id",
-            "annotation-42",
-            "--content",
-            "highlight",
-            "--regenerate",
-            "--json",
+            "speech", "generate", "--asset-id", "book-1", "--annotation-id", "annotation-42",
+            "--content", "highlight", "--regenerate", "--json",
         ],
         &provider,
         Some(TEST_KEY),
@@ -3371,16 +3028,7 @@ fn a_cache_that_cannot_preserve_the_safety_margin_fails_before_any_provider_call
     // human 模式给出一句可读错误，同样零连接。
     let human_provider = provider_with_catalog_and_synthesis("trace-budget-2");
     let human = fixture.run_with(
-        &[
-            "speech",
-            "generate",
-            "1",
-            "--annotation",
-            "2",
-            "--content",
-            "highlight",
-            "--regenerate",
-        ],
+        &["speech", "generate", "1", "--annotation", "2", "--content", "highlight", "--regenerate"],
         &human_provider,
         Some(TEST_KEY),
     );
@@ -3400,16 +3048,8 @@ fn a_budget_smaller_than_the_safety_margin_fails_locally() {
     let provider = provider_with_catalog_and_synthesis("trace-budget-3");
     let value = failed(&fixture.run_with(
         &[
-            "speech",
-            "generate",
-            "--asset-id",
-            "book-1",
-            "--annotation-id",
-            "annotation-41",
-            "--content",
-            "highlight",
-            "--regenerate",
-            "--json",
+            "speech", "generate", "--asset-id", "book-1", "--annotation-id", "annotation-41",
+            "--content", "highlight", "--regenerate", "--json",
         ],
         &provider,
         Some(TEST_KEY),
@@ -3417,10 +3057,7 @@ fn a_budget_smaller_than_the_safety_margin_fails_locally() {
     assert_eq!(provider.finish().len(), 0);
     assert_eq!(value["error"]["code"], "SPEECH_STORAGE_UNAVAILABLE");
     assert!(
-        value["error"]["message"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("safety margin"),
+        value["error"]["message"].as_str().unwrap_or_default().contains("safety margin"),
         "a budget below the safety margin must be reported as such: {value}"
     );
     assert_eq!(
@@ -3430,11 +3067,7 @@ fn a_budget_smaller_than_the_safety_margin_fails_locally() {
     );
     // 状态视图如实反映这个配置：可用预算为 0。
     let status = provider_with_catalog_and_synthesis("trace-budget-4");
-    let report = succeeded(&fixture.run_with(
-        &["speech", "cache", "status", "--json"],
-        &status,
-        Some(TEST_KEY),
-    ));
+    let report = succeeded(&fixture.run_with(&["speech", "cache", "status", "--json"], &status, Some(TEST_KEY)));
     assert_eq!(status.finish().len(), 0);
     assert_eq!(report["receipt"]["usable_budget_bytes"], 0);
     assert!(fixture.clip_state(&first)["current_cache_status"] == "ready");
@@ -3452,35 +3085,20 @@ fn pre_call_maintenance_evicts_the_least_recently_used_clip_before_the_request()
     // 让 second 成为最近使用的那一个：first 是淘汰候选。
     let now = chrono::Utc::now().to_rfc3339();
     for (clip_id, used_at) in [(&first, "2026-09-01T00:00:00Z"), (&second, now.as_str())] {
-        let path = fixture
-            .speech_root()
-            .join("clips")
-            .join(clip_id)
-            .join("state.json");
-        let mut state: Value =
-            serde_json::from_slice(&std::fs::read(&path).expect("state")).expect("state JSON");
+        let path = fixture.speech_root().join("clips").join(clip_id).join("state.json");
+        let mut state: Value = serde_json::from_slice(&std::fs::read(&path).expect("state"))
+            .expect("state JSON");
         state["last_used_at"] = json!(used_at);
-        std::fs::write(
-            &path,
-            serde_json::to_vec_pretty(&state).expect("state JSON"),
-        )
-        .expect("rewrite state");
+        std::fs::write(&path, serde_json::to_vec_pretty(&state).expect("state JSON"))
+            .expect("rewrite state");
     }
 
     // 生成第三个 clip：预检必须先淘汰 first（LRU），再允许这次 provider 调用。
     let provider = provider_with_catalog_and_synthesis("trace-lru-1");
     let value = succeeded(&fixture.run_with(
         &[
-            "speech",
-            "generate",
-            "--asset-id",
-            "book-1",
-            "--annotation-id",
-            "annotation-42",
-            "--content",
-            "highlight",
-            "--regenerate",
-            "--json",
+            "speech", "generate", "--asset-id", "book-1", "--annotation-id", "annotation-42",
+            "--content", "highlight", "--regenerate", "--json",
         ],
         &provider,
         Some(TEST_KEY),
@@ -3511,15 +3129,8 @@ fn an_unavailable_storage_volume_fails_before_any_provider_call() {
     let provider = provider_with_catalog_and_synthesis("trace-free-1");
     let value = failed(&fixture.run_with_env(
         &[
-            "speech",
-            "generate",
-            "--asset-id",
-            "book-1",
-            "--annotation-id",
-            "annotation-41",
-            "--content",
-            "highlight",
-            "--json",
+            "speech", "generate", "--asset-id", "book-1", "--annotation-id", "annotation-41",
+            "--content", "highlight", "--json",
         ],
         &provider,
         Some(TEST_KEY),

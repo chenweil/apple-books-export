@@ -701,7 +701,8 @@ mod tests {
     /// 直接落一个原始缓存文档，用来模拟损坏或异构的本地状态。
     fn seed_catalog_document(store: &SpeechStore, body: &str) {
         let path = store.voice_catalog_path(SENSEAUDIO_PROVIDER);
-        std::fs::create_dir_all(path.parent().expect("catalog directory")).expect("catalog dir");
+        std::fs::create_dir_all(path.parent().expect("catalog directory"))
+            .expect("catalog dir");
         std::fs::write(path, body).expect("seed catalog document");
     }
 
@@ -1146,26 +1147,14 @@ mod tests {
 
     #[test]
     fn synthesis_failures_map_to_stable_codes_without_retry_semantics() {
-        assert_eq!(
-            SenseAudioError::MissingApiKey.machine_code(),
-            "SPEECH_AUTH_FAILED"
-        );
+        assert_eq!(SenseAudioError::MissingApiKey.machine_code(), "SPEECH_AUTH_FAILED");
         assert_eq!(
             SenseAudioError::AuthenticationFailed.machine_code(),
             "SPEECH_AUTH_FAILED"
         );
-        assert_eq!(
-            SenseAudioError::RateLimited.machine_code(),
-            "SPEECH_RATE_LIMITED"
-        );
-        assert_eq!(
-            SenseAudioError::ProviderFailed.machine_code(),
-            "SPEECH_PROVIDER_FAILED"
-        );
-        assert_eq!(
-            SenseAudioError::InvalidAudio.machine_code(),
-            "SPEECH_AUDIO_INVALID"
-        );
+        assert_eq!(SenseAudioError::RateLimited.machine_code(), "SPEECH_RATE_LIMITED");
+        assert_eq!(SenseAudioError::ProviderFailed.machine_code(), "SPEECH_PROVIDER_FAILED");
+        assert_eq!(SenseAudioError::InvalidAudio.machine_code(), "SPEECH_AUDIO_INVALID");
 
         // transport 失败是「不确定」：调用方必须返回 SPEECH_RESULT_UNKNOWN 而不是自动重放。
         assert!(SenseAudioError::Transport.is_unknown());

@@ -429,15 +429,8 @@ fn generate_cached_clip(fixture: &Fixture, trace_id: &str) -> String {
     let provider = provider_with_catalog_and_synthesis(trace_id);
     let value = succeeded(&fixture.run_with(
         &[
-            "speech",
-            "generate",
-            "--asset-id",
-            "book-1",
-            "--annotation-id",
-            "annotation-41",
-            "--content",
-            "highlight",
-            "--json",
+            "speech", "generate", "--asset-id", "book-1", "--annotation-id", "annotation-41",
+            "--content", "highlight", "--json",
         ],
         &provider,
         Some(TEST_KEY),
@@ -455,7 +448,8 @@ fn generate_cached_clip(fixture: &Fixture, trace_id: &str) -> String {
 }
 
 /// 一个语法合法但没有任何缓存的 clip ID。
-const ABSENT_CLIP_ID: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+const ABSENT_CLIP_ID: &str =
+    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
 /// 断言这次 play 完全没有联系 provider，并把记录交还给调用方做进一步断言。
 fn assert_zero_connections(records: &[RequestRecord], path: &str) {
@@ -491,16 +485,10 @@ fn machine_play_returns_the_verified_path_and_source_without_a_player() {
     assert_eq!(receipt["clip_id"], clip_id.as_str());
     assert_eq!(receipt["source"], "cache");
     assert_eq!(receipt["path"], audio_path.to_string_lossy().as_ref());
-    assert_eq!(
-        receipt["played"], false,
-        "machine mode must not launch a player"
-    );
+    assert_eq!(receipt["played"], false, "machine mode must not launch a player");
     assert_eq!(receipt["provider_called"], false);
     assert_eq!(receipt["content_kind"], "highlight");
-    assert_eq!(
-        receipt["audio"]["path"],
-        audio_path.to_string_lossy().as_ref()
-    );
+    assert_eq!(receipt["audio"]["path"], audio_path.to_string_lossy().as_ref());
     assert_eq!(receipt["audio"]["format"], "mp3");
 
     // 除返回路径与来源外没有副作用：clip 状态逐字节不变，占用 marker 没有被创建。
@@ -532,10 +520,7 @@ fn a_tampered_cache_entry_is_a_stable_corrupt_error() {
     assert_eq!(value["error"]["details"]["reason"], "cache_corrupt");
     // 损坏的 entry 不会被静默修复或重新生成：字节仍然是被改写的那份。
     assert_eq!(std::fs::read(&audio_path).expect("audio"), bytes);
-    assert_eq!(
-        fixture.clip_state(&clip_id)["current_cache_status"],
-        "ready"
-    );
+    assert_eq!(fixture.clip_state(&clip_id)["current_cache_status"], "ready");
 }
 
 /// 没有缓存的 clip：human 与 machine 都是稳定的 `SPEECH_CLIP_NOT_FOUND`，零连接。
@@ -672,14 +657,8 @@ fn a_play_marker_really_protects_a_clip_from_cache_clear() {
     let records = provider.finish();
 
     assert_zero_connections(&records, "cache clear");
-    assert_eq!(
-        value["receipt"]["removed"].as_array().map(Vec::len),
-        Some(0)
-    );
-    assert_eq!(
-        value["receipt"]["skipped"].as_array().map(Vec::len),
-        Some(1)
-    );
+    assert_eq!(value["receipt"]["removed"].as_array().map(Vec::len), Some(0));
+    assert_eq!(value["receipt"]["skipped"].as_array().map(Vec::len), Some(1));
     let skip = &value["receipt"]["skipped_reasons"][0];
     assert_eq!(skip["clip_id"], clip_id.as_str());
     assert_eq!(skip["in_use"], "playback");
@@ -694,14 +673,8 @@ fn a_play_marker_really_protects_a_clip_from_cache_clear() {
     ));
     let next_records = next.finish();
     assert_zero_connections(&next_records, "cache clear");
-    assert_eq!(
-        cleared["receipt"]["removed"].as_array().map(Vec::len),
-        Some(1)
-    );
-    assert_eq!(
-        cleared["receipt"]["skipped"].as_array().map(Vec::len),
-        Some(0)
-    );
+    assert_eq!(cleared["receipt"]["removed"].as_array().map(Vec::len), Some(1));
+    assert_eq!(cleared["receipt"]["skipped"].as_array().map(Vec::len), Some(0));
 }
 
 /// 播放失败/不播放都不创建 Speech Attempt，缓存逻辑身份也不变。
@@ -734,14 +707,8 @@ fn no_play_path_creates_a_speech_attempt() {
         after["current_audio_sha256"],
         state_before["current_audio_sha256"]
     );
-    assert_eq!(
-        after["latest_attempt_id"],
-        state_before["latest_attempt_id"]
-    );
-    assert_eq!(
-        after["generation_blocked"],
-        state_before["generation_blocked"]
-    );
+    assert_eq!(after["latest_attempt_id"], state_before["latest_attempt_id"]);
+    assert_eq!(after["generation_blocked"], state_before["generation_blocked"]);
 }
 
 /// 密钥与 canary 既不进入 play 的输出，也不进入任何 Speech 状态文件。
@@ -765,10 +732,7 @@ fn play_output_and_state_never_contain_the_api_key() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(
-        !combined.contains(TEST_KEY),
-        "the API key must never be printed"
-    );
+    assert!(!combined.contains(TEST_KEY), "the API key must never be printed");
     for (path, bytes) in fixture.speech_state_files() {
         let text = String::from_utf8_lossy(&bytes);
         assert!(!text.contains(TEST_KEY), "the API key leaked into {path:?}");
