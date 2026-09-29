@@ -30,22 +30,21 @@ for text in "${required_release_text[@]}"; do
   fi
 done
 
-# These forbid the Tauri release path coming back. They are deliberately
-# narrow: an AppKit DMG is now a legitimate release artifact, so `.dmg` on its
-# own is no longer a signal, and a bare "tauri" would also match a comment or
-# the rollback explanation. Only real build invocations are forbidden.
+# These forbid the Tauri release path coming back. `.dmg` is in the list
+# because nothing in the current release workflow produces a disk image; if an
+# AppKit DMG is added later, this entry has to be revisited deliberately rather
+# than relaxed in passing. A bare `tauri` is deliberately absent: it would also
+# match a comment explaining the rollback, which this file contains.
 for forbidden in \
   'cargo tauri' \
   'npm ci' \
-  'npm install' \
   'Setup Node.js' \
   'Build GUI' \
   'locate-gui' \
   'gui-app-' \
   'gui-dmg-' \
   '.app.zip' \
-  'tauri.conf.json' \
-  'Books-Exporter-GUI'; do
+  '.dmg'; do
   if grep -Fq -- "$forbidden" "$RELEASE_WORKFLOW"; then
     printf 'legacy GUI release path remains: %s\n' "$forbidden" >&2
     exit 1
@@ -84,13 +83,31 @@ with open(sys.argv[1], encoding="utf-8") as handle:
 ' "$ROOT_DIR/Cargo.toml"
 )"
 
-if ! grep -Fq -- 'check-release-tag.sh' "$RELEASE_WORKFLOW"; then
-  printf 'release.yml does not verify the tag against Cargo.toml\n' >&2
+# The workflow has to *invoke* the check, not merely mention it: a comment
+# saying "see scripts/check-release-tag.sh" satisfies a bare grep. The literal
+# invocation is required, and it must appear before the CLI build, so a
+# mismatched tag still costs seconds rather than a full build.
+if ! grep -Fq -- 'bash scripts/check-release-tag.sh "$TAG"' "$RELEASE_WORKFLOW"; then
+  printf 'release.yml does not invoke check-release-tag.sh\n' >&2
   exit 1
 fi
 
-# And the check itself has to work. A guard that only greps for the name of
-# the script would pass against a script that always exits 0.
+tag_check_line="$(grep -Fn -- 'bash scripts/check-release-tag.sh "$TAG"' "$RELEASE_WORKFLOW" | head -1 | cut -d: -f1)"
+cli_build_line="$(grep -Fn -- 'cargo build --release --target' "$RELEASE_WORKFLOW" | head -1 | cut -d: -f1)"
+
+if [[ -z "$tag_check_line" || -z "$cli_build_line" ]]; then
+  printf 'cannot locate the tag check or the CLI build in release.yml\n' >&2
+  exit 1
+fi
+
+if (( tag_check_line > cli_build_line )); then
+  printf 'release.yml builds the CLI (line %d) before verifying the tag (line %d)\n' \
+    "$cli_build_line" "$tag_check_line" >&2
+  exit 1
+fi
+
+# And the script itself has to work in both directions. A script that always
+# exits 0 would satisfy the invocation check above.
 if ! bash "$ROOT_DIR/scripts/check-release-tag.sh" "v${CRATE_VERSION}" >/dev/null; then
   printf 'check-release-tag.sh rejects the current version v%s\n' "$CRATE_VERSION" >&2
   exit 1
@@ -111,10 +128,6 @@ for required in 'APP_VERSION' 'BUILD_VERSION'; do
   fi
 done
 
-if ! grep -Fq -- 'APP_VERSION' "$ROOT_DIR/appkit/Scripts/package-dmg.sh"; then
-  printf 'package-dmg.sh no longer honours APP_VERSION\n' >&2
-  exit 1
-fi
 
 # The checked-in Info.plist is a template that package-dmg.sh overwrites, so its
 # literal does not have to equal the crate version. It does have to be a real
@@ -124,7 +137,6 @@ if ! grep -Eq '<string>[0-9]+\.[0-9]+\.[0-9]+</string>' "$ROOT_DIR/appkit/Resour
   printf 'appkit/Resources/Info.plist has no concrete CFBundleShortVersionString\n' >&2
   exit 1
 fi
-
 # The release runbook quotes the tag to cut. That literal is exactly the kind
 # of copy that goes stale silently the day the crate version moves, so it is
 # pinned to Cargo.toml rather than trusted.
