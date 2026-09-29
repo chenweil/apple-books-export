@@ -453,6 +453,37 @@ impl ClipCache {
         }))
     }
 
+    /// 已存在的 version 目录是否就是这次要提交的版本。
+    ///
+    /// 目录名是内容寻址的 `audio_sha256`，因此「 intact 」意味着磁盘字节仍然哈希成名
+    /// 字本身，且 `metadata.json` 与本次提交完全一致。只要有一个不成立（音频被原地
+    /// 改写、metadata 被截断、size 不符），调用方就必须重写该目录，绝不能让
+    /// `state.json` 继续指向字节与名字不符的版本。
+    fn version_is_intact(
+        &self,
+        version_dir: &Path,
+        metadata: &ClipVersionMetadata,
+    ) -> Result<bool, ClipCacheError> {
+        let audio_path = version_dir.join("audio.mp3");
+        let Ok(bytes) = fs::read(&audio_path) else {
+            return Ok(false);
+        };
+        if bytes.is_empty() || crate::speech::text::sha256_hex(&bytes) != metadata.audio_sha256 {
+            return Ok(false);
+        }
+        if bytes.len() as u64 != metadata.size_bytes {
+            return Ok(false);
+        }
+        let metadata_path = version_dir.join("metadata.json");
+        let Ok(metadata_text) = fs::read_to_string(&metadata_path) else {
+            return Ok(false);
+        };
+        let Ok(on_disk) = serde_json::from_str::<ClipVersionMetadata>(&metadata_text) else {
+            return Ok(false);
+        };
+        Ok(on_disk == *metadata)
+    }
+
     /// 提交一个不可变音频版本，并原子切换 current pointer。
     ///
     /// 顺序固定：临时目录写完音频与 metadata → rename 成不可变 version 目录 →
@@ -473,12 +504,13 @@ impl ClipCache {
             });
         }
         let version_dir = self.version_dir(&state.clip_id, &metadata.audio_sha256)?;
-        if version_dir.exists() && !version_dir.join("audio.mp3").exists() {
-            // 残留的半成品 version 目录：先移除，否则 rename 到非空目录会失败。
-            fs::remove_dir_all(&version_dir)
-                .map_err(|error| ClipCacheError::unavailable(&version_dir, error))?;
-        }
-        if !version_dir.join("audio.mp3").exists() {
+        if !self.version_is_intact(&version_dir, metadata)? {
+            // 残留半成品、已被原地破坏或 metadata 不一致的 version 目录不能原地保留：
+            // 先整体移除，否则 rename 到非空目录会失败，旧字节会继续被 pointer 引用。
+            if version_dir.exists() {
+                fs::remove_dir_all(&version_dir)
+                    .map_err(|error| ClipCacheError::unavailable(&version_dir, error))?;
+            }
             let tmp_dir = self.tmp_dir();
             fs::create_dir_all(&tmp_dir)
                 .map_err(|error| ClipCacheError::unavailable(&tmp_dir, error))?;
@@ -850,6 +882,76 @@ mod tests {
         fs::write(&ready.audio_path, &tampered).expect("tamper");
         let error = cache.load_ready_clip(&clip_id).expect_err("tampered audio");
         assert_eq!(error.machine_code(), "SPEECH_CACHE_CORRUPT");
+    }
+
+    #[test]
+    fn an_in_place_corrupted_version_is_repaired_instead_of_being_left_pointed_at() {
+        let (_home, cache) = cache();
+        let clip_id = "f".repeat(64);
+        let audio = silent_mp3(1);
+        let audio_sha256 = sha256_hex(&audio);
+        let metadata = metadata(&clip_id, &audio_sha256, &audio);
+        cache
+            .commit_version(&state(&clip_id), &metadata, &audio, now())
+            .expect("commit");
+
+        // 原地破坏一个字节：目录名仍然声称自己是旧的 sha256。
+        let version_dir = cache
+            .clip_dir(&clip_id)
+            .expect("clip dir")
+            .join("versions")
+            .join(&audio_sha256);
+        let mut tampered = audio.clone();
+        tampered[10] ^= 0xFF;
+        fs::write(version_dir.join("audio.mp3"), &tampered).expect("tamper");
+        assert!(cache.load_ready_clip(&clip_id).is_err(), "corrupt audio");
+
+        // 修复：重新提交同样内容的版本，必须重写目录而不是保留被破坏的字节。
+        cache
+            .commit_version(&state(&clip_id), &metadata, &audio, now())
+            .expect("repair");
+
+        let ready = cache
+            .load_ready_clip(&clip_id)
+            .expect("load after repair")
+            .expect("ready after repair");
+        assert_eq!(fs::read(&ready.audio_path).expect("audio"), audio);
+        assert_eq!(
+            crate::speech::text::sha256_hex(&fs::read(&ready.audio_path).expect("audio")),
+            audio_sha256,
+            "the repaired bytes must hash to the version directory name"
+        );
+        assert_eq!(ready.state.generation_blocked, false);
+    }
+
+    #[test]
+    fn a_version_with_broken_metadata_is_rewritten() {
+        let (_home, cache) = cache();
+        let clip_id = "0".repeat(64);
+        let audio = silent_mp3(1);
+        let audio_sha256 = sha256_hex(&audio);
+        let metadata = metadata(&clip_id, &audio_sha256, &audio);
+        cache
+            .commit_version(&state(&clip_id), &metadata, &audio, now())
+            .expect("commit");
+
+        let version_dir = cache
+            .clip_dir(&clip_id)
+            .expect("clip dir")
+            .join("versions")
+            .join(&audio_sha256);
+        fs::remove_file(version_dir.join("metadata.json")).expect("drop metadata");
+        fs::write(version_dir.join("audio.mp3"), b"not json at all").expect("tamper");
+
+        cache
+            .commit_version(&state(&clip_id), &metadata, &audio, now())
+            .expect("repair");
+
+        let ready = cache
+            .load_ready_clip(&clip_id)
+            .expect("load")
+            .expect("ready");
+        assert_eq!(fs::read(&ready.audio_path).expect("audio"), audio);
     }
 
     #[test]

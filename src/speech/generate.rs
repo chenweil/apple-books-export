@@ -353,7 +353,9 @@ impl GenerationError {
     pub const fn outcome(&self) -> &'static str {
         match self {
             Self::Unknown { .. } => "unknown",
-            Self::AudioInvalid { .. } => "provider_succeeded_artifact_missing",
+            Self::AudioInvalid { .. } | Self::ArtifactCommit { .. } => {
+                "provider_succeeded_artifact_missing"
+            }
             _ => "failed",
         }
     }
@@ -460,9 +462,13 @@ impl GenerationError {
         }
     }
 
-    /// 该失败是否阻止普通 `generate` 自动重放（unknown / provider-success-no-artifact）。
+    /// 该失败是否阻止普通 `generate` 自动重放（unknown / provider-success-no-artifact /
+    /// provider 成功但本地提交失败）。
     pub const fn blocks_generation(&self) -> bool {
-        matches!(self, Self::Unknown { .. } | Self::AudioInvalid { .. })
+        matches!(
+            self,
+            Self::Unknown { .. } | Self::AudioInvalid { .. } | Self::ArtifactCommit { .. }
+        )
     }
 
     /// attempt 终态；没有创建 attempt 的本地失败返回 `None`。
@@ -470,7 +476,9 @@ impl GenerationError {
         match self {
             Self::ProviderFailed { .. } => Some(AttemptStatus::ProviderFailed),
             Self::Unknown { .. } => Some(AttemptStatus::Unknown),
-            Self::AudioInvalid { .. } => Some(AttemptStatus::ProviderSucceededArtifactMissing),
+            Self::AudioInvalid { .. } | Self::ArtifactCommit { .. } => {
+                Some(AttemptStatus::ProviderSucceededArtifactMissing)
+            }
             _ => None,
         }
     }
@@ -925,7 +933,10 @@ fn map_provider_error(
     }
 }
 
-/// 记录 attempt history，并把 clip 置为阻塞态（普通 generate 不得自动重放）。
+/// 记录 attempt history，并按终态决定是否把 clip 置为阻塞态（普通 generate 不得自动重放）。
+///
+/// 只有「结果不确定」与「provider 成功但没有可用产物」才阻塞；显式 provider 失败是
+/// 确定的终态，交给调用方原样返回，普通 generate 可以再次尝试，不需要 `--regenerate`。
 #[allow(clippy::too_many_arguments)]
 fn record_attempt_and_gate(
     cache: &ClipCache,
@@ -955,7 +966,9 @@ fn record_attempt_and_gate(
         trace_id,
     );
     let _ = cache.record_attempt(&attempt, now);
-    state.generation_blocked = true;
+    if status.blocks_generation() {
+        state.generation_blocked = true;
+    }
     state.latest_attempt_status = Some(status);
     state.latest_error_code = Some(product_error_code.to_string());
     state.updated_at = now.to_rfc3339();
@@ -1426,7 +1439,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_explicit_provider_failure_blocks_the_clip_and_never_retries() {
+    async fn an_explicit_provider_failure_never_masquerades_as_an_unknown_result() {
         let home = tempfile::tempdir().expect("home");
         let store = SpeechStore::from_home(home.path());
         let (catalog_fetch, synthesize, counters) = fake(Err(SenseAudioError::ProviderFailed));
@@ -1442,11 +1455,19 @@ mod tests {
         .expect_err("provider failed");
 
         assert_eq!(error.machine_code(), "SPEECH_PROVIDER_FAILED");
+        assert_eq!(error.reason_code(), "provider_failed");
+        assert_eq!(error.outcome(), "failed");
+        assert!(!error.blocks_generation(), "an explicit failure is a known outcome");
+        assert_eq!(
+            error.attempt_status(),
+            Some(AttemptStatus::ProviderFailed),
+            "an explicit failure must not be recorded as provider-succeeded-artifact-missing"
+        );
         assert_eq!(counters.synthesis.load(Ordering::SeqCst), 1);
 
-        // 普通 generate 不得自动重放：必须显式 --regenerate。
+        // 普通 generate 不得被 unknown gate 挡住，也不需要 --regenerate。
         let (catalog_fetch, synthesize, counters) = fake(Ok(success_response("trace")));
-        let blocked = generate_clip(
+        let retried = generate_clip(
             input(store.clone(), SpeechContentKind::Highlight),
             Some("test-key".to_string()),
             now(),
@@ -1454,10 +1475,56 @@ mod tests {
             synthesize,
         )
         .await
-        .expect_err("still blocked");
-        assert_eq!(blocked.machine_code(), "SPEECH_RESULT_UNKNOWN");
-        assert!(blocked.blocks_generation());
-        assert_eq!(counters.synthesis.load(Ordering::SeqCst), 0);
+        .expect("a plain generate may retry after an explicit failure");
+        assert_eq!(retried.source, SpeechClipSource::Provider);
+        assert_eq!(counters.synthesis.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn a_rate_limited_failure_is_explicit_and_does_not_gate() {
+        let home = tempfile::tempdir().expect("home");
+        let store = SpeechStore::from_home(home.path());
+        let (catalog_fetch, synthesize, _) = fake(Err(SenseAudioError::RateLimited));
+
+        let error = generate_clip(
+            input(store.clone(), SpeechContentKind::Highlight),
+            Some("test-key".to_string()),
+            now(),
+            catalog_fetch,
+            synthesize,
+        )
+        .await
+        .expect_err("rate limited");
+
+        assert_eq!(error.machine_code(), "SPEECH_RATE_LIMITED");
+        assert_eq!(error.outcome(), "failed");
+        assert!(!error.blocks_generation());
+
+        let cache = ClipCache::new(store.clone());
+        let clip_id = crate::speech::clip::clip_id(&crate::speech::clip::ClipFingerprint {
+            provider: SENSEAUDIO_PROVIDER,
+            model: DEFAULT_MODEL,
+            asset_id: "book-1",
+            annotation_id: "annotation-41",
+            content_kind: SpeechContentKind::Highlight,
+            normalized_speech_text: "高亮正文",
+            voice_id: DEFAULT_VOICE_ID,
+            speed_x100: 100,
+            volume_x100: 100,
+            pitch: 0,
+            audio: &crate::speech::profile::AudioSettings::v1(),
+        });
+        let state = cache
+            .load_state(&clip_id)
+            .expect("load state")
+            .expect("state");
+        assert_eq!(state.generation_blocked, false);
+        assert_eq!(
+            state.latest_attempt_status,
+            Some(AttemptStatus::ProviderFailed),
+            "an explicit failure must stay an explicit attempt status"
+        );
+        assert_eq!(state.latest_error_code.as_deref(), Some("SPEECH_RATE_LIMITED"));
     }
 
     #[tokio::test]

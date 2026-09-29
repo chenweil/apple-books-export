@@ -976,9 +976,10 @@ fn explicit_provider_failures_use_stable_codes_and_never_retry() {
     );
     assert_eq!(MockProvider::synthesis_count(&records), 1);
 
-    // 普通 generate 不得自动重放：第二次必须零连接。
+    // 显式失败是确定终态：普通 generate 可以再次尝试，不需要 --regenerate，
+    // 也绝不返回 SPEECH_RESULT_UNKNOWN（那会把不确定结果伪装成已知失败）。
     let second_provider = provider_with_catalog_and_synthesis("trace");
-    let blocked = failed(&fixture.run_with(
+    let retried = succeeded(&fixture.run_with(
         &[
             "speech",
             "generate",
@@ -994,17 +995,48 @@ fn explicit_provider_failures_use_stable_codes_and_never_retry() {
         Some(TEST_KEY),
     ));
     let second_records = second_provider.finish();
-    assert_eq!(blocked["error"]["code"], "SPEECH_RESULT_UNKNOWN");
-    assert_eq!(blocked["error"]["details"]["outcome"], "unknown");
+    assert_eq!(retried["receipt"]["source"], "provider");
     assert_eq!(
-        second_records.len(),
-        0,
-        "a blocked clip must not contact the provider again"
+        MockProvider::synthesis_count(&second_records),
+        1,
+        "an explicit failure must not gate the clip: the retry reaches the provider"
+    );
+    let state_path = fixture
+        .speech_root()
+        .join("clips")
+        .join(retried["receipt"]["clip_id"].as_str().expect("clip id"))
+        .join("state.json");
+    let state: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&state_path).expect("state.json")).expect("state");
+    assert_eq!(
+        state["generation_blocked"], false,
+        "an explicit provider failure must not write an unknown gate"
     );
 
-    // 只有显式 --regenerate 才能再次调用 provider。
-    let regenerate_provider = provider_with_catalog_and_synthesis("trace-regen");
-    let regenerated = succeeded(&fixture.run_with(
+    // 缓存已经有效：重复的普通 generate 返回 cache，0 次 provider 调用。
+    let cache_provider = provider_with_catalog_and_synthesis("trace-cache");
+    let cached = succeeded(&fixture.run_with(
+        &[
+            "speech",
+            "generate",
+            "--asset-id",
+            "book-1",
+            "--annotation-id",
+            "annotation-41",
+            "--content",
+            "highlight",
+            "--json",
+        ],
+        &cache_provider,
+        Some(TEST_KEY),
+    ));
+    let cache_records = cache_provider.finish();
+    assert_eq!(cached["receipt"]["source"], "cache");
+    assert_eq!(cache_records.len(), 0, "a valid cache makes no connection");
+
+    // 不确定结果仍然只有 --regenerate 才能越过；失败的 regenerate 保留旧的有效缓存。
+    let dropped_provider = provider_with_dropped_synthesis();
+    let uncertain = failed(&fixture.run_with(
         &[
             "speech",
             "generate",
@@ -1017,12 +1049,33 @@ fn explicit_provider_failures_use_stable_codes_and_never_retry() {
             "--regenerate",
             "--json",
         ],
-        &regenerate_provider,
+        &dropped_provider,
         Some(TEST_KEY),
     ));
-    let regenerate_records = regenerate_provider.finish();
-    assert_eq!(regenerated["receipt"]["source"], "provider");
-    assert_eq!(MockProvider::synthesis_count(&regenerate_records), 1);
+    let dropped_records = dropped_provider.finish();
+    assert_eq!(uncertain["error"]["code"], "SPEECH_RESULT_UNKNOWN");
+    assert_eq!(uncertain["error"]["details"]["outcome"], "unknown");
+    assert_eq!(MockProvider::synthesis_count(&dropped_records), 1);
+
+    // 失败的 --regenerate 不破坏已有缓存：普通 generate 仍然零连接命中。
+    let after_regenerate = succeeded(&fixture.run_with(
+        &[
+            "speech",
+            "generate",
+            "--asset-id",
+            "book-1",
+            "--annotation-id",
+            "annotation-41",
+            "--content",
+            "highlight",
+            "--json",
+        ],
+        &provider_with_catalog_and_synthesis("trace-after"),
+        Some(TEST_KEY),
+    ));
+    let after_records_guard = after_regenerate["receipt"]["clip_id"].as_str().map(str::to_string);
+    assert_eq!(after_regenerate["receipt"]["source"], "cache");
+    assert!(after_records_guard.is_some());
 }
 
 #[test]

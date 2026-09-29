@@ -584,20 +584,37 @@ async fn cmd_speech_generate(arguments: GenerateArguments) -> anyhow::Result<()>
         let annotation_id = arguments.annotation_id.clone().ok_or_else(missing)?;
         (asset_id, annotation_id)
     } else {
-        let book_index = arguments.book_index.ok_or_else(|| {
-            anyhow::anyhow!("人类模式需要书籍显示序号：speech generate BOOK_INDEX --annotation N --content KIND")
-        })?;
-        let annotation_index = arguments.annotation.ok_or_else(|| {
-            anyhow::anyhow!("人类模式需要 --annotation 显示序号：speech generate BOOK_INDEX --annotation N --content KIND")
-        })?;
+        let book_index = match arguments.book_index {
+            Some(index) => index,
+            None => fail_machine(MachineError::invalid_argument(
+                "人类模式需要书籍显示序号：speech generate BOOK_INDEX --annotation N --content KIND",
+            )),
+        };
+        let annotation_index = match arguments.annotation {
+            Some(index) => index,
+            None => fail_machine(MachineError::invalid_argument(
+                "人类模式需要 --annotation 显示序号：speech generate BOOK_INDEX --annotation N --content KIND",
+            )),
+        };
         let db = DB::open_apple_books()?;
         let books = db.list_books()?;
+        // 人类显示序号是 1-based：0、越界或缺失都必须是稳定错误，
+        // 绝不能用 saturating_sub 悄悄落到第一个条目上产生付费错误目标。
+        let book_index = match resolve_display_index(book_index, books.len(), "书籍") {
+            Ok(index) => index,
+            Err(error) => fail_machine(error),
+        };
         let book = books
-            .get(book_index.saturating_sub(1))
+            .get(book_index)
             .ok_or_else(|| anyhow::anyhow!("无效的书籍序号：{book_index}"))?;
         let annotations = db.get_annotations(&book.asset_id)?;
+        let annotation_index =
+            match resolve_display_index(annotation_index, annotations.len(), "Annotation") {
+                Ok(index) => index,
+                Err(error) => fail_machine(error),
+            };
         let annotation = annotations
-            .get(annotation_index.saturating_sub(1))
+            .get(annotation_index)
             .ok_or_else(|| anyhow::anyhow!("无效的 Annotation 序号：{annotation_index}"))?;
         (book.asset_id.clone(), annotation.id.clone())
     };
@@ -664,6 +681,21 @@ fn generation_annotations(asset_id: &str) -> anyhow::Result<Vec<Annotation>> {
     let db = DB::open_apple_books()?;
     db.get_annotations(asset_id)
         .map_err(|error| anyhow::anyhow!("无法读取 Annotation：{error}"))
+}
+
+/// 把人类显示序号（1-based）解析成 0-based 下标。
+///
+/// 0、越界或缺失都返回稳定的 `INVALID_ARGUMENT` 错误，而不是 panic，也绝不像
+/// `saturating_sub` 那样把 0 悄悄降级成第一个条目：那会让 `speech generate`
+/// 对错误的书籍或 Annotation 发起付费请求。`len` 是当前列表长度，错误信息里
+/// 给出合法范围，人类与机器调用方都能稳定解析。
+fn resolve_display_index(index: usize, len: usize, label: &str) -> Result<usize, MachineError> {
+    if index == 0 || index > len {
+        return Err(MachineError::invalid_argument(format!(
+            "无效的{label}序号：{index}；{label}显示序号必须是 1..={len} 之间的正整数。"
+        )));
+    }
+    Ok(index - 1)
 }
 
 /// 人类可读的生成结果：显示内容类型、音色与字符估算，不输出完整 Speech Text。
