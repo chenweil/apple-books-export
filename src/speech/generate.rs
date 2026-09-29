@@ -2293,13 +2293,12 @@ mod tests {
             recorded.push(record.attempt_id);
         }
         recorded.sort();
-        assert_eq!(
-            recorded,
-            vec![
-                first.attempt_id.clone().expect("first attempt"),
-                second.attempt_id.clone().expect("second attempt"),
-            ]
-        );
+        let mut expected = vec![
+            first.attempt_id.clone().expect("first attempt"),
+            second.attempt_id.clone().expect("second attempt"),
+        ];
+        expected.sort();
+        assert_eq!(recorded, expected);
     }
 
     #[tokio::test]
