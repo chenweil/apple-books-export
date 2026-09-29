@@ -1,7 +1,7 @@
 //! Apple Books Exporter - EPUB CFI Parser
 
-use std::sync::LazyLock;
 use regex::Regex;
+use std::sync::LazyLock;
 
 /// 中文字符（CJK Unified Ideographs）
 fn is_cjk(s: &str) -> bool {
@@ -11,11 +11,14 @@ fn is_cjk(s: &str) -> bool {
 static RE_BRACKET: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\[([^\]]+)\]").unwrap());
 static RE_HEX_LONG: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[0-9a-f]{8,}").unwrap());
 static RE_ID_NUM: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^id\d{3,}$").unwrap());
-static RE_CHAPTER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)(chapter|ch|section)\d+").unwrap());
-static RE_WORD: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[a-zA-Z][a-zA-Z0-9_-]*$").unwrap());
+static RE_CHAPTER: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)(chapter|ch|section)\d+").unwrap());
+static RE_WORD: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^[a-zA-Z][a-zA-Z0-9_-]*$").unwrap());
 static RE_HTML_EXT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)\.(xhtml|html)$").unwrap());
 static RE_SECTION: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)Section(\d+)").unwrap());
-static RE_CHAPTER_NUM: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)(ch|chapter)(\d+)").unwrap());
+static RE_CHAPTER_NUM: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)(ch|chapter)(\d+)").unwrap());
 static RE_ID_INDEX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^id(\d+)$").unwrap());
 
 /// 从 EPUB CFI 字符串中提取 manifest item ID

@@ -7,6 +7,8 @@
 //! 解析参数冲突 → 选择内容 → 规范化并校验 Speech Text → 解析 Voice Profile
 //!   → 计算 clip_id → 取跨进程 writer 锁
 //!   → 有效缓存？        → receipt(source=cache)，0 次 provider 调用
+//!   → 已验证的导出音频？ → rehydrate（0 次 provider 调用、0 个 Speech Attempt）
+//!                         → receipt(source=export_rehydration)
 //!   → unknown gate？     → SPEECH_RESULT_UNKNOWN，不自动重放
 //!   → 排队等待方 + provider_failed 终态 → 原样返回首个失败，0 次 provider 调用
 //!   → 音色可用性 + API Key + 存储预检
@@ -22,8 +24,8 @@ use crate::models::Annotation;
 use crate::speech::audio::{validate_audio, AudioDecodeError, AudioFacts};
 use crate::speech::cache::{
     AttemptRecord, AttemptStatus, ClipCache, ClipCacheError, ClipLock, ClipLockError, ClipState,
-    ClipVersionMetadata, ATTEMPT_SCHEMA_VERSION, CLIP_LOCK_TIMEOUT, CLIP_STATE_SCHEMA_VERSION,
-    CLIP_VERSION_SCHEMA_VERSION,
+    ClipVersionMetadata, ReadyClip, ATTEMPT_SCHEMA_VERSION, CLIP_LOCK_TIMEOUT,
+    CLIP_STATE_SCHEMA_VERSION, CLIP_VERSION_SCHEMA_VERSION,
 };
 use crate::speech::catalog::{verify_voice, CatalogAvailability};
 use crate::speech::clip::{
@@ -33,6 +35,9 @@ use crate::speech::machine::SpeechGenerateReceipt;
 use crate::speech::profile::{
     resolve_generation_profile, ProfileDraft, ProfileError, VoiceProfile, DEFAULT_MODEL,
     DEFAULT_VOICE_ID, SENSEAUDIO_PROVIDER,
+};
+use crate::speech::rehydrate::{
+    find_verified_exported_clip, ExportedBookIdentity, ExportedClipQuery,
 };
 use crate::speech::senseaudio::{
     load_or_refresh_voice_catalog, SenseAudioError, SynthesisRequest, SynthesisResponse,
@@ -61,6 +66,9 @@ pub struct GenerationInput {
     /// 测试与运维可以注入更短的上限来证明 `SPEECH_IN_PROGRESS` 路径；只能缩短，
     /// 不能越过默认上限，避免把「不自动重放」的安全边界拖长。
     pub lock_timeout: Option<Duration>,
+    /// 显式给出的书籍导出根（`--export-root`）。缓存没有这个 clip 时，rehydration
+    /// 把它当作第一个候选；验证通过后会刷新非权威 locator 投影。
+    pub export_root: Option<PathBuf>,
 }
 
 /// 一次生成请求的稳定身份与覆盖项。
@@ -143,11 +151,17 @@ pub struct SpeechSynthesisOutcome {
 }
 
 /// clip 的来源：只有真正创建了 Speech Attempt 时才是 `Provider`。
+///
+/// 三种来源对应实施 spec 6.1 的 `source` 取值，机器消费者据此区分「复用本地状态」
+/// 与「发生了付费调用」。`Cache` 与 `ExportRehydration` 的 `provider_called` 都是
+/// `false`，且 `attempt_id` 为空。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SpeechClipSource {
     /// 复用现有 Speech Cache Entry，没有 provider 调用。
     Cache,
+    /// 从已验证的 Exported Speech Clip 恢复缓存：没有 provider 调用，也没有 Speech Attempt。
+    ExportRehydration,
     /// 创建了 Speech Attempt。
     Provider,
 }
@@ -157,6 +171,7 @@ impl SpeechClipSource {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Cache => "cache",
+            Self::ExportRehydration => "export_rehydration",
             Self::Provider => "provider",
         }
     }
@@ -531,6 +546,7 @@ where
         annotations,
         request,
         lock_timeout: input_lock_timeout,
+        export_root,
     } = input;
 
     // 1. 内容身份：错误归属、缺失内容与超长文本都在联网前失败。
@@ -629,6 +645,63 @@ where
     }
 
     let state = load_or_init_state(&cache, &id, &selection, now)?;
+
+    // 5b. Speech Cache Rehydration：缓存已被清空或淘汰，但还有一个**已验证**的
+    //     Exported Speech Clip 时，把那份字节复制成一个新的已接受 cache version。
+    //
+    //     这里的位置很重要，它就是实施 spec 第 9 节状态流里的那一格：先 cache，再
+    //     export rehydration，最后才允许 provider 请求。同时它解释了为什么
+    //     rehydration 能救回一个被 unknown gate 阻塞的 clip：新版本就是证据。
+    //
+    //     硬保证（ADR 0007「显式 generate 发现缓存已淘汰但存在 checksum 匹配的
+    //     Exported Speech Clip 时 …provider_called=false …该动作不创建 Speech
+    //     Attempt」）：
+    //
+    //     - 不检查 API Key、不取 Voice Catalog、不创建 attempt、不发请求；
+    //     - `--regenerate` 是唯一可以越过 gate 的入口，因此它**不**参与 rehydration；
+    //     - 只复制并重新校验用户导出的字节，绝不把导出目录当成可淘汰缓存，也绝不
+    //       修改或删除用户文件；
+    //     - 候选只来自显式 `--export-root` 与非权威 locator，绝不扫描用户目录。
+    if !request.regenerate {
+        let lookup = find_verified_exported_clip(
+            &cache,
+            &ExportedClipQuery {
+                clip_id: id.clone(),
+                book: Some(ExportedBookIdentity {
+                    asset_id: selection.asset_id.clone(),
+                    annotation_id: selection.annotation_id.clone(),
+                    content_kind,
+                }),
+                explicit_root: export_root.clone(),
+                // clip_id 本身已经是内容 + Voice Profile 的密码学身份：同一
+                // annotation/content kind 下记录过的同一 clip ID 变体就是同一个逻辑
+                // clip，因此这里不要求它是 active（play 才要求 active）。
+                require_active: false,
+            },
+            now,
+        );
+        warnings.extend(lookup.rejection_warnings());
+        warnings.extend(lookup.warnings.clone());
+        if let Some((clip, origin)) = lookup.found() {
+            let outcome =
+                rehydrate_from_export(&cache, &state, &id, &selection, &profile, clip, origin, now)
+                    .map(|ready| {
+                        cache.touch_clip(&id, now);
+                        let _ = cache.maintain_budget(&[&id], now);
+                        drop(lock);
+                        outcome_from_ready(
+                            &id,
+                            &selection,
+                            &profile,
+                            &ready,
+                            SpeechClipSource::ExportRehydration,
+                            None,
+                            warnings,
+                        )
+                    });
+            return outcome;
+        }
+    }
 
     // 6. unknown gate：没有有效缓存时，普通 generate 不得自动重放。
     if state.generation_blocked && !request.regenerate {
@@ -779,7 +852,7 @@ where
         channel: facts.channel,
         duration_ms: facts.duration_ms,
         size_bytes: facts.size_bytes,
-        attempt_id: attempt_id.clone(),
+        attempt_id: Some(attempt_id.clone()),
         trace_id: response.trace_id.clone(),
         provider_usage_characters: response.usage_characters,
         created_at: now.to_rfc3339(),
@@ -900,6 +973,109 @@ fn outcome_from_ready(
         usage_characters: metadata.provider_usage_characters,
         warnings,
     }
+}
+
+/// Speech Cache Rehydration：把一个已验证的 Exported Speech Clip 复制成一个新的已接受
+/// cache version（实施 spec 第 9 节状态流第 3 格 / ADR 0007「播放与本地回退」）。
+///
+/// 复制的字节是**用户导出目录里那份已校验文件**，并且在写入缓存之前再校验一次：本地
+/// 音频规格必须与已解析的 Voice Profile 一致（`validate_audio`），否则这份导出音频
+/// 不是当前 clip 的可用产物。
+///
+/// 这里不写任何 attempt：`ClipVersionMetadata::attempt_id` 为 `None`，clip state 的
+/// `latest_attempt_id` / `latest_attempt_status` 保持原样（那是过去真实请求的历史，
+/// rehydration 不得改写它），因此一次 rehydration 在 `attempts/` 目录下**不留任何文件**。
+/// 用户导出的文件全程只读：既不修改也不删除。
+fn rehydrate_from_export(
+    cache: &ClipCache,
+    state: &ClipState,
+    clip_id: &str,
+    selection: &crate::speech::clip::SpeechContentSelection,
+    profile: &VoiceProfile,
+    clip: &crate::speech::rehydrate::VerifiedExportedClip,
+    origin: crate::speech::rehydrate::ExportCandidateOrigin,
+    now: DateTime<Utc>,
+) -> Result<ReadyClip, GenerationError> {
+    let bytes = std::fs::read(&clip.audio_path).map_err(|error| {
+        GenerationError::Storage(SpeechStoreError::Unavailable {
+            path: clip.audio_path.clone(),
+            message: format!(
+                "the verified Exported Speech Clip could not be read for rehydration: {error}"
+            ),
+        })
+    })?;
+    // 再次核对：字节仍然是 manifest 记录的那份，且与本地音频规格一致。
+    if bytes.is_empty() || crate::speech::text::sha256_hex(&bytes) != clip.audio_sha256 {
+        return Err(GenerationError::Storage(SpeechStoreError::Unavailable {
+            path: clip.audio_path.clone(),
+            message: "the exported audio changed between verification and rehydration".to_string(),
+        }));
+    }
+    let facts = validate_audio(&bytes, &profile.audio).map_err(|error| {
+        GenerationError::Storage(SpeechStoreError::Unavailable {
+            path: clip.audio_path.clone(),
+            message: format!(
+                "the exported audio is not a valid Speech Clip for this Voice Profile: {error:?}"
+            ),
+        })
+    })?;
+
+    let metadata = ClipVersionMetadata {
+        schema_version: CLIP_VERSION_SCHEMA_VERSION,
+        clip_id: clip_id.to_string(),
+        audio_sha256: clip.audio_sha256.clone(),
+        asset_id: selection.asset_id.clone(),
+        annotation_id: selection.annotation_id.clone(),
+        content_kind: selection.content_kind,
+        text_sha256: selection.text.text_sha256.clone(),
+        unicode_characters: selection.text.unicode_characters,
+        estimated_billing_characters: selection.text.estimated_billing_characters,
+        billing_estimator_version: BILLING_ESTIMATOR_VERSION.to_string(),
+        provider: profile.provider.clone(),
+        model: profile.model.clone(),
+        voice_id: profile.voice_id.clone(),
+        speed_x100: profile.speed.x100(),
+        volume_x100: profile.volume.x100(),
+        pitch: profile.pitch,
+        format: facts.format.clone(),
+        sample_rate: facts.sample_rate,
+        bitrate: facts.bitrate,
+        channel: facts.channel,
+        duration_ms: facts.duration_ms,
+        size_bytes: facts.size_bytes,
+        // 关键：rehydration 没有 Speech Attempt，也没有 provider trace 与用量。
+        attempt_id: None,
+        trace_id: None,
+        provider_usage_characters: None,
+        created_at: now.to_rfc3339(),
+    };
+    let mut next = state.clone();
+    next.latest_error_code = None;
+    cache
+        .commit_version(&next, &metadata, &bytes, now)
+        .map_err(|error| GenerationError::Storage(SpeechStoreError::Unavailable {
+            path: cache.root().to_path_buf(),
+            message: format!(
+                "the rehydrated Speech Cache Version could not be committed ({}); the Exported Speech Clip in {} via {} is unchanged",
+                error.message(),
+                clip.export_root.display(),
+                origin.as_str()
+            ),
+        }))?;
+    cache
+        .load_ready_clip(clip_id)
+        .map_err(|error| {
+            GenerationError::Storage(SpeechStoreError::Unavailable {
+                path: cache.root().to_path_buf(),
+                message: error.message(),
+            })
+        })?
+        .ok_or_else(|| {
+            GenerationError::Storage(SpeechStoreError::Unavailable {
+                path: cache.root().to_path_buf(),
+                message: "the rehydrated cache version could not be read back".to_string(),
+            })
+        })
 }
 
 fn load_or_init_state(
@@ -1204,9 +1380,7 @@ fn ensure_cache_room(
     })?;
     let _ = std::fs::remove_file(&probe);
 
-    let budget = cache
-        .cache_budget_bytes()
-        .map_err(storage_error)?;
+    let budget = cache.cache_budget_bytes().map_err(storage_error)?;
     let usable = crate::speech::usable_cache_budget(budget);
     if usable == 0 {
         // 预算连安全余量都留不出：这不是运行时压力，是配置问题，本地失败。
@@ -1337,6 +1511,7 @@ mod tests {
                 regenerate: false,
             },
             lock_timeout: None,
+            export_root: None,
         }
     }
 
@@ -1674,7 +1849,10 @@ mod tests {
         assert_eq!(error.machine_code(), "SPEECH_PROVIDER_FAILED");
         assert_eq!(error.reason_code(), "provider_failed");
         assert_eq!(error.outcome(), "failed");
-        assert!(!error.blocks_generation(), "an explicit failure is a known outcome");
+        assert!(
+            !error.blocks_generation(),
+            "an explicit failure is a known outcome"
+        );
         assert_eq!(
             error.attempt_status(),
             Some(AttemptStatus::ProviderFailed),
@@ -1914,7 +2092,10 @@ mod tests {
             Some(AttemptStatus::ProviderFailed),
             "an explicit failure must stay an explicit attempt status"
         );
-        assert_eq!(state.latest_error_code.as_deref(), Some("SPEECH_RATE_LIMITED"));
+        assert_eq!(
+            state.latest_error_code.as_deref(),
+            Some("SPEECH_RATE_LIMITED")
+        );
     }
 
     #[tokio::test]
@@ -2416,7 +2597,9 @@ mod tests {
             "a lock timeout must carry the current attempt id when it is available"
         );
         assert!(
-            error.message().contains(first.attempt_id.as_deref().expect("attempt id")),
+            error
+                .message()
+                .contains(first.attempt_id.as_deref().expect("attempt id")),
             "the human message must name the in-progress attempt: {}",
             error.message()
         );
@@ -2429,12 +2612,8 @@ mod tests {
 
         // 锁释放后同一请求继续正常命中缓存。
         let cache = ClipCache::new(store.clone());
-        std::fs::remove_file(
-            cache
-                .locks_dir()
-                .join(format!("{}.lock", first.clip_id)),
-        )
-        .expect("release lock");
+        std::fs::remove_file(cache.locks_dir().join(format!("{}.lock", first.clip_id)))
+            .expect("release lock");
         let (catalog_fetch, synthesize, counters) = fake(Ok(success_response("trace-3")));
         let cached = generate_clip(
             input(store.clone(), SpeechContentKind::Highlight),
@@ -2488,7 +2667,10 @@ mod tests {
             Some(first.audio_sha256.as_str()),
             "an uncertain regeneration must not move the current pointer"
         );
-        assert_eq!(state.current_cache_status, crate::speech::cache::ClipCacheStatus::Ready);
+        assert_eq!(
+            state.current_cache_status,
+            crate::speech::cache::ClipCacheStatus::Ready
+        );
         assert!(
             !state.generation_blocked,
             "a failed regeneration must not gate a clip that still has a valid version"
@@ -2674,7 +2856,10 @@ mod tests {
         assert_eq!(cleared.removed, Vec::<String>::new());
         assert_eq!(cleared.skipped, vec![first.clip_id.clone()]);
         assert_eq!(cleared.cleared_generation_gates, 0);
-        assert!(stored_state(&store, &first.clip_id).current_cache_status == crate::speech::cache::ClipCacheStatus::Ready);
+        assert!(
+            stored_state(&store, &first.clip_id).current_cache_status
+                == crate::speech::cache::ClipCacheStatus::Ready
+        );
 
         // 释放锁之后同一命令就能删掉它。
         let cache = ClipCache::new(store.clone());

@@ -49,9 +49,7 @@ impl MockServer {
         let stop_flag = Arc::clone(&stop);
         let join = thread::spawn(move || {
             if response.is_none() {
-                listener
-                    .set_nonblocking(true)
-                    .expect("nonblocking accept");
+                listener.set_nonblocking(true).expect("nonblocking accept");
             }
             loop {
                 match listener.accept() {
@@ -75,8 +73,7 @@ impl MockServer {
                         }
                     }
                     Err(error)
-                        if error.kind() == std::io::ErrorKind::WouldBlock
-                            && response.is_none() =>
+                        if error.kind() == std::io::ErrorKind::WouldBlock && response.is_none() =>
                     {
                         if stop_flag.load(Ordering::SeqCst) {
                             return;
@@ -511,7 +508,10 @@ fn empty_account_catalog_warns_and_human_output_says_no_voices() {
     let value = success_json(&json_output);
     let records = server.finish();
     assert_eq!(records.len(), 1);
-    assert_eq!(value["receipt"]["voices"].as_array().expect("voices").len(), 0);
+    assert_eq!(
+        value["receipt"]["voices"].as_array().expect("voices").len(),
+        0
+    );
     assert_eq!(
         value["receipt"]["warnings"][0]["code"],
         "SPEECH_VOICE_CATALOG_EMPTY"

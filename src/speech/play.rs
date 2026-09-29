@@ -9,18 +9,24 @@ use crate::speech::cache::{
     is_valid_clip_id, ClipCache, ClipCacheError, ClipLockError, ClipUseGuard, ClipUseKind,
 };
 use crate::speech::clip::SpeechContentKind;
+use crate::speech::rehydrate::{
+    find_verified_exported_clip, ExportCandidateOrigin, ExportedClipQuery,
+};
 use crate::speech::store::{SpeechStore, SpeechStoreError};
+use crate::speech::SpeechWarning;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
-/// 播放来源。首版只有 Cached Speech Clip：Active Exported Speech Clip 回退依赖
-/// `speech export` 的 manifest 与 locator，尚未落地（实施 spec 5.5 的查找顺序）。
+/// 播放来源。查找顺序固定：Speech Cache Entry → 显式 `--export-root` → 非权威 locator
+/// 投影里 **checksum 匹配且 active** 的 Exported Speech Clip（实施 spec 5.5）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PlaybackSource {
     /// 通过校验的本地 Speech Cache Entry。
     Cache,
+    /// 通过校验的 Active Exported Speech Clip：用户拥有的导出文件，只读不修改。
+    Export,
 }
 
 impl PlaybackSource {
@@ -28,6 +34,7 @@ impl PlaybackSource {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Cache => "cache",
+            Self::Export => "export",
         }
     }
 }
@@ -50,6 +57,8 @@ pub struct PlayRequest {
     pub clip_id: String,
     /// human 还是 machine 模式。
     pub mode: PlayMode,
+    /// 显式给出的书籍导出根（`--export-root`）；缓存没有这个 clip 时才作为候选。
+    pub export_root: Option<PathBuf>,
 }
 
 /// 播放解析结果。含已校验的本地音频事实，不含原文、密钥或音频字节。
@@ -77,6 +86,10 @@ pub struct PlayOutcome {
     pub content_kind: SpeechContentKind,
     /// 是否真的启动了播放器；machine 模式恒为 `false`。
     pub played: bool,
+    /// 没有回退到缓存时，候选导出根被拒绝的原因等结构化 warning。
+    pub warnings: Vec<SpeechWarning>,
+    /// 回退到导出音频时，候选根是怎么被找到的（来自缓存时为 `None`）。
+    pub export_origin: Option<ExportCandidateOrigin>,
 }
 
 /// 播放失败。全部发生在任何 provider 调用之前。
@@ -90,6 +103,8 @@ pub enum PlayError {
     ClipNotFound {
         /// 被请求的 clip ID。
         clip_id: String,
+        /// 被拒绝的导出候选与原因；证明「找过、且没猜」。
+        warnings: Vec<SpeechWarning>,
     },
     /// 缓存损坏：字节、metadata 或 checksum 互相矛盾。
     CacheCorrupt {
@@ -127,9 +142,22 @@ impl PlayError {
             Self::InvalidClipId(clip_id) => {
                 format!("'{clip_id}' is not a 64 character lowercase sha256 clip id")
             }
-            Self::ClipNotFound { clip_id } => format!(
-                "no verified Speech Clip is available for {clip_id}; run `speech generate` first (playback never calls the Speech Provider)"
-            ),
+            Self::ClipNotFound { clip_id, warnings } => {
+                let rejected = if warnings.is_empty() {
+                    String::new()
+                } else {
+                    let reasons: Vec<&str> =
+                        warnings.iter().map(|warning| warning.reason).collect();
+                    format!(
+                        " ({} candidate export root(s) were checked and rejected: {})",
+                        reasons.len(),
+                        reasons.join(", ")
+                    )
+                };
+                format!(
+                    "no verified Speech Clip is available for {clip_id}{rejected}; run `speech generate` first (playback never calls the Speech Provider)"
+                )
+            }
             Self::CacheCorrupt { path, reason } => format!(
                 "the Speech Cache Entry is corrupt at {}: {reason}; run `speech generate --regenerate` to replace it",
                 path.display()
@@ -175,19 +203,19 @@ impl std::fmt::Display for PlayError {
 impl From<ClipCacheError> for PlayError {
     fn from(error: ClipCacheError) -> Self {
         match error {
-            ClipCacheError::Unavailable { path, message } => Self::Storage(
-                SpeechStoreError::Unavailable { path, message },
-            ),
+            ClipCacheError::Unavailable { path, message } => {
+                Self::Storage(SpeechStoreError::Unavailable { path, message })
+            }
             ClipCacheError::Corrupt { path, reason } => Self::CacheCorrupt {
                 path,
                 reason: reason.to_string(),
             },
-            ClipCacheError::UnsupportedSchemaVersion { path, version } => Self::Storage(
-                SpeechStoreError::Unavailable {
+            ClipCacheError::UnsupportedSchemaVersion { path, version } => {
+                Self::Storage(SpeechStoreError::Unavailable {
                     path,
                     message: format!("unsupported Speech cache schema version {version}"),
-                },
-            ),
+                })
+            }
         }
     }
 }
@@ -229,7 +257,10 @@ pub struct NeverPlayer;
 
 impl AudioPlayer for NeverPlayer {
     fn play(&self, audio_path: &Path) -> Result<(), String> {
-        panic!("machine `speech play` must not launch a player for {}", audio_path.display());
+        panic!(
+            "machine `speech play` must not launch a player for {}",
+            audio_path.display()
+        );
     }
 }
 
@@ -250,12 +281,12 @@ pub fn play_clip(
     if !is_valid_clip_id(&request.clip_id) {
         return Err(PlayError::InvalidClipId(request.clip_id));
     }
-    let cache = ClipCache::new(request.store);
+    let cache = ClipCache::new(request.store.clone());
 
     match request.mode {
         PlayMode::Machine => {
             // 只读解析：不占用、不刷新、不启动播放器。
-            let outcome = resolve(&cache, &request.clip_id, false)?;
+            let outcome = resolve(&cache, &request, false, now)?;
             Ok((outcome, None))
         }
         PlayMode::Human => {
@@ -269,7 +300,7 @@ pub fn play_clip(
                     }),
                 })?;
             // 校验一定在播放器之前：损坏或 checksum 不匹配的 entry 永远不会被播放。
-            let mut outcome = resolve(&cache, &request.clip_id, true)?;
+            let mut outcome = resolve(&cache, &request, true, now)?;
             // marker 在整个播放期间有效，LRU 与 `speech cache clear` 不会抽走它。
             player
                 .play(&outcome.audio_path)
@@ -280,38 +311,86 @@ pub fn play_clip(
     }
 }
 
-/// 解析并校验当前 Speech Cache Entry。
+/// 解析并校验要播放的本地音频。
 ///
-/// `load_ready_clip` 复用 #25 的完整性校验：音频字节的 SHA-256、size、metadata、
-/// current pointer 与 MP3 可解析性必须全部成立，否则是稳定的 `SPEECH_CACHE_CORRUPT`。
-/// 播放只读取，绝不修复、重新生成或刷新目录。
+/// 顺序固定（实施 spec 5.5）：
 ///
+/// 1. **Speech Cache Entry**：`load_ready_clip` 复用 #25 的完整性校验（音频字节的
+///    SHA-256、size、metadata、current pointer 与 MP3 可解析性必须全部成立），否则是
+///    稳定的 `SPEECH_CACHE_CORRUPT`；
+/// 2. **显式 `--export-root`**，然后是**非权威 locator 投影**里的候选：每个候选都重新
+///    读取该根的 manifest 并复核身份、active 状态、路径 containment 与 checksum，
+///    只接受 **active** 的 Exported Speech Clip。
+///
+/// 两种来源都只**读取**已验证的字节，绝不修复、重新生成、改写或删除用户导出的音频。
 /// `record_use` 只在真正播放时为真：machine 模式除返回已校验路径与来源外不得留下
 /// 任何状态变化，因此不刷新 recency。
-fn resolve(cache: &ClipCache, clip_id: &str, record_use: bool) -> Result<PlayOutcome, PlayError> {
-    let ready = cache
-        .load_ready_clip(clip_id)
-        .map_err(PlayError::from)?
-        .ok_or_else(|| PlayError::ClipNotFound {
+fn resolve(
+    cache: &ClipCache,
+    request: &PlayRequest,
+    record_use: bool,
+    now: DateTime<Utc>,
+) -> Result<PlayOutcome, PlayError> {
+    let clip_id = request.clip_id.as_str();
+    let cached = cache.load_ready_clip(clip_id).map_err(PlayError::from)?;
+    if let Some(ready) = cached {
+        if record_use {
+            // 播放算一次「最近使用过」（LRU 的 U）；只改 recency，不改逻辑 clip。
+            cache.touch_clip(clip_id, Utc::now());
+        }
+        let metadata = ready.metadata;
+        return Ok(PlayOutcome {
             clip_id: clip_id.to_string(),
-        })?;
-    // 播放算一次「最近使用过」（LRU 的 U）；只改 recency，不改逻辑 clip。
-    if record_use {
-        cache.touch_clip(clip_id, Utc::now());
+            source: PlaybackSource::Cache,
+            audio_path: ready.audio_path,
+            audio_sha256: metadata.audio_sha256,
+            audio_size_bytes: metadata.size_bytes,
+            audio_duration_ms: metadata.duration_ms,
+            sample_rate: metadata.sample_rate,
+            asset_id: ready.state.asset_id,
+            annotation_id: ready.state.annotation_id,
+            content_kind: metadata.content_kind,
+            played: false,
+            warnings: Vec::new(),
+            export_origin: None,
+        });
     }
-    let metadata = ready.metadata;
+
+    // 缓存没有：只回退到**已验证的 active 导出音频**，候选只来自显式根与 locator，
+    // 绝不扫描用户目录。被拒绝的候选变成结构化 warning 而不是「猜一个」。
+    let lookup = find_verified_exported_clip(
+        cache,
+        &ExportedClipQuery {
+            clip_id: clip_id.to_string(),
+            book: None,
+            explicit_root: request.export_root.clone(),
+            require_active: true,
+        },
+        now,
+    );
+    let (clip, origin) = match lookup.found() {
+        Some(found) => found,
+        None => {
+            return Err(PlayError::ClipNotFound {
+                clip_id: clip_id.to_string(),
+                warnings: lookup.rejection_warnings(),
+            })
+        }
+    };
     Ok(PlayOutcome {
         clip_id: clip_id.to_string(),
-        source: PlaybackSource::Cache,
-        audio_path: ready.audio_path,
-        audio_sha256: metadata.audio_sha256,
-        audio_size_bytes: metadata.size_bytes,
-        audio_duration_ms: metadata.duration_ms,
-        sample_rate: metadata.sample_rate,
-        asset_id: ready.state.asset_id,
-        annotation_id: ready.state.annotation_id,
-        content_kind: metadata.content_kind,
+        source: PlaybackSource::Export,
+        audio_path: clip.audio_path.clone(),
+        audio_sha256: clip.audio_sha256.clone(),
+        audio_size_bytes: clip.audio_size_bytes,
+        audio_duration_ms: clip.audio_duration_ms,
+        sample_rate: clip.sample_rate,
+        asset_id: clip.asset_id.clone(),
+        annotation_id: clip.annotation_id.clone(),
+        content_kind: clip.content_kind,
         played: false,
+        warnings: lookup.rejection_warnings(),
+        export_origin: Some(origin),
     })
 }
 
@@ -444,12 +523,14 @@ mod tests {
             channel: facts.channel,
             duration_ms: facts.duration_ms,
             size_bytes: bytes.len() as u64,
-            attempt_id: "attempt-1".to_string(),
+            attempt_id: Some("attempt-1".to_string()),
             trace_id: Some("trace-1".to_string()),
             provider_usage_characters: Some(4),
             created_at: "2026-09-29T10:00:00Z".to_string(),
         };
-        cache.commit_version(&state, &metadata, &bytes, now()).expect("commit version");
+        cache
+            .commit_version(&state, &metadata, &bytes, now())
+            .expect("commit version");
         let audio_path = cache
             .load_ready_clip(CLIP_ID)
             .expect("ready")
@@ -463,6 +544,7 @@ mod tests {
             store,
             clip_id: CLIP_ID.to_string(),
             mode,
+            export_root: None,
         }
     }
 
@@ -473,17 +555,17 @@ mod tests {
         let home = TempDir::new().expect("home");
         let (store, audio_path) = accepted_clip(&home);
 
-        let (outcome, guard) =
-            play_clip(play_request(store.clone(), PlayMode::Machine), &NeverPlayer, now())
-                .expect("resolve");
+        let (outcome, guard) = play_clip(
+            play_request(store.clone(), PlayMode::Machine),
+            &NeverPlayer,
+            now(),
+        )
+        .expect("resolve");
 
         assert_eq!(outcome.source, PlaybackSource::Cache);
         assert!(!outcome.played);
         assert_eq!(outcome.audio_path, audio_path);
-        assert!(
-            guard.is_none(),
-            "machine mode must not hold a usage marker"
-        );
+        assert!(guard.is_none(), "machine mode must not hold a usage marker");
     }
 
     /// machine 模式除返回已校验路径与来源外没有副作用：不刷新 recency。
@@ -509,8 +591,8 @@ mod tests {
         let cache = ClipCache::new(store.clone());
         let (player, calls) = FakePlayer::new();
 
-        let (outcome, guard) = play_clip(play_request(store, PlayMode::Human), &player, now())
-            .expect("play");
+        let (outcome, guard) =
+            play_clip(play_request(store, PlayMode::Human), &player, now()).expect("play");
 
         assert!(outcome.played);
         assert_eq!(calls.lock().expect("calls").as_slice(), &[audio_path]);
@@ -584,9 +666,8 @@ mod tests {
         let store = SpeechStore::from_home(home.path());
         let (player, calls) = FakePlayer::new();
 
-        let error =
-            play_clip(play_request(store.clone(), PlayMode::Human), &player, now())
-                .expect_err("absent clip");
+        let error = play_clip(play_request(store.clone(), PlayMode::Human), &player, now())
+            .expect_err("absent clip");
 
         assert_eq!(error.machine_code(), "SPEECH_CLIP_NOT_FOUND");
         assert!(calls.lock().expect("calls").is_empty());
@@ -631,8 +712,14 @@ mod tests {
         // 音频字节仍然是原样，缓存没有被隔离或重写。
         assert_eq!(std::fs::read(&audio_path).expect("audio"), silent_mp3());
         let state_after = cache.load_state(CLIP_ID).expect("state").expect("present");
-        assert_eq!(state_after.current_audio_sha256, state_before.current_audio_sha256);
-        assert_eq!(state_after.current_cache_status, state_before.current_cache_status);
+        assert_eq!(
+            state_after.current_audio_sha256,
+            state_before.current_audio_sha256
+        );
+        assert_eq!(
+            state_after.current_cache_status,
+            state_before.current_cache_status
+        );
         assert!(
             cache.load_attempt("attempt-1").expect("attempt").is_none(),
             "a playback failure must not create a Speech Attempt"

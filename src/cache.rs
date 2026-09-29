@@ -51,8 +51,7 @@ impl LLMCache {
                 .with_context(|| format!("无法创建缓存目录: {:?}", parent))?;
         }
 
-        let content = serde_json::to_string_pretty(&self.data)
-            .with_context(|| "无法序列化缓存")?;
+        let content = serde_json::to_string_pretty(&self.data).with_context(|| "无法序列化缓存")?;
 
         fs::write(&self.path, content)
             .with_context(|| format!("无法写入缓存文件: {:?}", self.path))?;

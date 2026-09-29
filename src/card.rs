@@ -208,7 +208,9 @@ pub fn generate_card(
 
     // 截断高亮文本（最多 8 行）
     let highlight_truncated = truncate_to_lines(highlight, &font_manager, text_width, 8);
-    let highlight_lines = font_manager.wrap_text(&highlight_truncated, text_width).len() as f32;
+    let highlight_lines = font_manager
+        .wrap_text(&highlight_truncated, text_width)
+        .len() as f32;
     let highlight_height = highlight_lines * font_manager.scale.y;
 
     // 截断解释文本（最多 10 行）

@@ -512,7 +512,8 @@ pub struct SpeechPlayReceipt {
     pub operation: &'static str,
     /// 完整 clip ID。
     pub clip_id: String,
-    /// 音频来源：`cache`。
+    /// 音频来源：`cache`（Speech Cache Entry）或 `export`（已验证的 Active Exported
+    /// Speech Clip）。
     pub source: &'static str,
     /// 已校验音频的绝对路径。
     pub path: String,
@@ -528,6 +529,10 @@ pub struct SpeechPlayReceipt {
     pub content_kind: &'static str,
     /// 本地音频事实。
     pub audio: SpeechAudioDto,
+    /// 结构化 warning：候选导出根被拒绝的原因（没有回退时解释「为什么没找到」）。
+    pub warnings: Vec<SpeechWarning>,
+    /// 回退到导出音频时，候选根来自显式 `--export-root` 还是 locator 投影。
+    pub export_origin: Option<&'static str>,
 }
 
 impl SpeechPlayResponse {
@@ -555,6 +560,8 @@ impl SpeechPlayResponse {
                     bitrate: 128_000,
                     channel: 2,
                 },
+                warnings: outcome.warnings.clone(),
+                export_origin: outcome.export_origin.map(|origin| origin.as_str()),
             },
         }
     }
@@ -567,8 +574,20 @@ impl SpeechPlayResponse {
 pub fn play_error_response(error: &crate::speech::PlayError) -> MachineError {
     let mut details = serde_json::Map::new();
     details.insert("reason".to_string(), json!(play_reason(error)));
-    if let crate::speech::PlayError::ClipNotFound { clip_id } = error {
+    if let crate::speech::PlayError::ClipNotFound { clip_id, warnings } = error {
         details.insert("clip_id".to_string(), json!(clip_id));
+        // 候选导出根被拒绝的原因：证明「找过、且没猜」，而不是笼统的 not found。
+        details.insert(
+            "rejected_candidates".to_string(),
+            json!(warnings
+                .iter()
+                .map(|warning| json!({
+                    "code": warning.code,
+                    "reason": warning.reason,
+                    "message": warning.message,
+                }))
+                .collect::<Vec<_>>()),
+        );
     }
     if let crate::speech::PlayError::InvalidClipId(clip_id) = error {
         details.insert("field".to_string(), json!("clip_id"));
@@ -821,10 +840,9 @@ pub fn error_response(error: &SpeechError) -> MachineError {
         },
         SpeechError::Profile(error) => profile_invalid(error),
         SpeechError::VoiceCatalog(error) => voice_catalog_error(error),
-        SpeechError::VoiceUnavailable {
-            provider,
-            voice_id,
-        } => voice_unavailable(provider, voice_id),
+        SpeechError::VoiceUnavailable { provider, voice_id } => {
+            voice_unavailable(provider, voice_id)
+        }
     }
 }
 
@@ -880,7 +898,10 @@ mod tests {
         assert_eq!(json["receipt"]["operation"], "profile_show");
         assert_eq!(json["receipt"]["profile"]["speed"], 1.0);
         assert_eq!(json["receipt"]["profile"]["volume"], 1.0);
-        assert_eq!(json["receipt"]["profile"]["verification_status"], "unverified");
+        assert_eq!(
+            json["receipt"]["profile"]["verification_status"],
+            "unverified"
+        );
         assert_eq!(json["receipt"]["api_key_env"], "SENSEAUDIO_API_KEY");
         assert_eq!(json["receipt"]["config_path"], "/tmp/speech/config.json");
 
@@ -992,7 +1013,10 @@ mod tests {
 
         assert_eq!(json["code"], "SPEECH_STORAGE_UNAVAILABLE");
         assert_eq!(json["details"]["reason"], "storage_unavailable");
-        assert_eq!(json["details"]["path"], file_path.to_string_lossy().as_ref());
+        assert_eq!(
+            json["details"]["path"],
+            file_path.to_string_lossy().as_ref()
+        );
         assert!(json["remediation"]
             .as_str()
             .expect("remediation")
@@ -1028,10 +1052,7 @@ mod tests {
 
     #[test]
     fn shared_storage_unavailable_keeps_the_directory_remediation() {
-        let error = storage_unavailable(
-            std::path::Path::new("/tmp/speech"),
-            "permission denied",
-        );
+        let error = storage_unavailable(std::path::Path::new("/tmp/speech"), "permission denied");
         assert_eq!(
             error.remediation.as_deref(),
             Some("Verify that this directory exists and is writable, then retry.")

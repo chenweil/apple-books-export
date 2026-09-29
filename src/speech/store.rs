@@ -160,7 +160,9 @@ impl SpeechStore {
         let probe: SchemaProbe = serde_json::from_str(&text)
             .map_err(|_| SpeechStoreError::InvalidConfig(ProfileError::stored_config_invalid()))?;
         if probe.schema_version != SPEECH_CONFIG_SCHEMA_VERSION {
-            return Err(SpeechStoreError::UnsupportedSchemaVersion(probe.schema_version));
+            return Err(SpeechStoreError::UnsupportedSchemaVersion(
+                probe.schema_version,
+            ));
         }
 
         let file: ConfigFile = serde_json::from_str(&text)
@@ -190,24 +192,22 @@ impl SpeechStore {
         struct SchemaProbe {
             schema_version: u32,
         }
-        let probe: SchemaProbe = serde_json::from_str(&text).map_err(|_| {
-            SpeechStoreError::Unavailable {
+        let probe: SchemaProbe =
+            serde_json::from_str(&text).map_err(|_| SpeechStoreError::Unavailable {
                 path: path.clone(),
                 message: "the Voice Catalog cache is invalid".to_string(),
-            }
-        })?;
+            })?;
         if probe.schema_version != VOICE_CATALOG_SCHEMA_VERSION {
             return Err(SpeechStoreError::UnsupportedSchemaVersion(
                 probe.schema_version,
             ));
         }
 
-        let file: VoiceCatalogFile = serde_json::from_str(&text).map_err(|error| {
-            SpeechStoreError::Unavailable {
+        let file: VoiceCatalogFile =
+            serde_json::from_str(&text).map_err(|error| SpeechStoreError::Unavailable {
                 path: path.clone(),
                 message: format!("the Voice Catalog cache is invalid: {error}"),
-            }
-        })?;
+            })?;
         let catalog = file.into_catalog();
         if catalog.provider != provider {
             return Err(SpeechStoreError::Unavailable {
@@ -215,20 +215,17 @@ impl SpeechStore {
                 message: "the Voice Catalog cache belongs to a different provider".to_string(),
             });
         }
-        catalog.validate().map_err(|error| {
-            SpeechStoreError::Unavailable {
+        catalog
+            .validate()
+            .map_err(|error| SpeechStoreError::Unavailable {
                 path,
                 message: format!("the Voice Catalog cache is invalid: {error}"),
-            }
-        })?;
+            })?;
         Ok(Some(catalog))
     }
 
     /// 原子写入非秘密的 provider Voice Catalog 缓存。
-    pub fn save_voice_catalog(
-        &self,
-        catalog: &VoiceCatalog,
-    ) -> Result<(), SpeechStoreError> {
+    pub fn save_voice_catalog(&self, catalog: &VoiceCatalog) -> Result<(), SpeechStoreError> {
         catalog
             .validate()
             .map_err(|error| SpeechStoreError::Unavailable {
@@ -247,10 +244,12 @@ impl SpeechStore {
             .map_err(|error| SpeechStoreError::unavailable(&directory, error))?;
         let path = self.voice_catalog_path(&catalog.provider);
         let temporary = path.with_extension("json.tmp");
-        let mut json = serde_json::to_string_pretty(&VoiceCatalogFile::from(catalog))
-            .map_err(|error| SpeechStoreError::Unavailable {
-                path: directory.clone(),
-                message: format!("could not serialize the Voice Catalog: {error}"),
+        let mut json =
+            serde_json::to_string_pretty(&VoiceCatalogFile::from(catalog)).map_err(|error| {
+                SpeechStoreError::Unavailable {
+                    path: directory.clone(),
+                    message: format!("could not serialize the Voice Catalog: {error}"),
+                }
             })?;
         json.push('\n');
         write_synced(&temporary, json.as_bytes())
@@ -266,7 +265,10 @@ impl SpeechStore {
     ///
     /// 写入前先做完整校验，因此磁盘上不会出现无法再次加载的 Profile。
     pub fn save_config(&self, config: &SpeechConfig) -> Result<(), SpeechStoreError> {
-        config.profile.validate().map_err(SpeechStoreError::InvalidConfig)?;
+        config
+            .profile
+            .validate()
+            .map_err(SpeechStoreError::InvalidConfig)?;
         let api_key_env =
             parse_api_key_env(&config.api_key_env).map_err(SpeechStoreError::InvalidConfig)?;
         if config.cache_budget_bytes == 0 {
@@ -284,8 +286,9 @@ impl SpeechStore {
             profile: config.profile.clone(),
             cache_budget_bytes: config.cache_budget_bytes,
         });
-        let mut json = serde_json::to_string_pretty(&file)
-            .map_err(|error| SpeechStoreError::unavailable(root, std::io::Error::other(error.to_string())))?;
+        let mut json = serde_json::to_string_pretty(&file).map_err(|error| {
+            SpeechStoreError::unavailable(root, std::io::Error::other(error.to_string()))
+        })?;
         json.push('\n');
 
         let tmp = self.config_tmp_path();
@@ -309,9 +312,9 @@ fn is_safe_provider_name(provider: &str) -> bool {
     !provider.is_empty()
         && provider != "."
         && provider != ".."
-        && provider
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_'))
+        && provider.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_')
+        })
 }
 
 /// `config.json` 的磁盘 schema。字段名就是文件字段名。
@@ -425,7 +428,9 @@ impl ConfigFile {
         let api_key_env =
             parse_api_key_env(&self.api_key_env).map_err(SpeechStoreError::InvalidConfig)?;
         let profile = self.voice_profile.into_profile()?;
-        profile.validate().map_err(SpeechStoreError::InvalidConfig)?;
+        profile
+            .validate()
+            .map_err(SpeechStoreError::InvalidConfig)?;
         let budget = self
             .cache_budget_bytes
             .unwrap_or(crate::speech::cache::DEFAULT_CACHE_BUDGET_BYTES);
@@ -530,7 +535,9 @@ mod tests {
         );
         assert_eq!(
             store.config_path(),
-            Path::new("/tmp/some-home/Library/Application Support/books-exporter/speech/config.json")
+            Path::new(
+                "/tmp/some-home/Library/Application Support/books-exporter/speech/config.json"
+            )
         );
 
         let other = SpeechStore::from_home(Path::new("/tmp/other-home"));
@@ -549,7 +556,10 @@ mod tests {
             config.profile.verification.status,
             VerificationStatus::Unverified
         );
-        assert!(!store.root().exists(), "loading must not create directories");
+        assert!(
+            !store.root().exists(),
+            "loading must not create directories"
+        );
     }
 
     #[test]
@@ -617,7 +627,10 @@ mod tests {
 
         match error {
             SpeechStoreError::InvalidConfig(profile_error) => {
-                assert_eq!(profile_error.reason, ProfileErrorReason::StoredConfigInvalid);
+                assert_eq!(
+                    profile_error.reason,
+                    ProfileErrorReason::StoredConfigInvalid
+                );
                 assert_eq!(profile_error.field, None);
             }
             other => panic!("unexpected error: {other:?}"),
@@ -629,7 +642,8 @@ mod tests {
         let (_home, store) = store();
         seed(
             &store,
-            &config_json(valid_profile_body()).replace("\"schema_version\": 1", "\"schema_version\": 2"),
+            &config_json(valid_profile_body())
+                .replace("\"schema_version\": 1", "\"schema_version\": 2"),
         );
 
         let error = store.load_config().expect_err("future schema");
@@ -697,16 +711,23 @@ mod tests {
 
         seed(
             &store,
-            &config_json(&valid_profile_body().replace(
-                "\"verification_status\": \"unverified\"",
-                "\"verification_status\": \"verified\"",
-            ).replace(
-                "\"verified_at\": null",
-                "\"verified_at\": \"2026-09-11T00:00:00Z\"",
-            )),
+            &config_json(
+                &valid_profile_body()
+                    .replace(
+                        "\"verification_status\": \"unverified\"",
+                        "\"verification_status\": \"verified\"",
+                    )
+                    .replace(
+                        "\"verified_at\": null",
+                        "\"verified_at\": \"2026-09-11T00:00:00Z\"",
+                    ),
+            ),
         );
         let verified = store.load_config().expect("consistent verified config");
-        assert_eq!(verified.profile.verification.status, VerificationStatus::Verified);
+        assert_eq!(
+            verified.profile.verification.status,
+            VerificationStatus::Verified
+        );
     }
 
     #[test]
@@ -714,7 +735,9 @@ mod tests {
         let (_home, store) = store();
         seed(
             &store,
-            &config_json(&valid_profile_body().replace("\"speed_x100\": 100", "\"speed_x100\": 5000")),
+            &config_json(
+                &valid_profile_body().replace("\"speed_x100\": 100", "\"speed_x100\": 5000"),
+            ),
         );
 
         match store.load_config().expect_err("out of range") {
@@ -731,7 +754,9 @@ mod tests {
         let (_home, store) = store();
         seed(
             &store,
-            &config_json(&valid_profile_body().replace("\"sample_rate\": 32000", "\"sample_rate\": 44100")),
+            &config_json(
+                &valid_profile_body().replace("\"sample_rate\": 32000", "\"sample_rate\": 44100"),
+            ),
         );
 
         match store.load_config().expect_err("unsupported audio") {
@@ -851,8 +876,7 @@ mod tests {
 
     fn seed_catalog(store: &SpeechStore, provider: &str, body: &str) {
         let path = store.voice_catalog_path(provider);
-        std::fs::create_dir_all(path.parent().expect("catalog directory"))
-            .expect("catalog dir");
+        std::fs::create_dir_all(path.parent().expect("catalog directory")).expect("catalog dir");
         std::fs::write(path, body).expect("seed catalog document");
     }
 

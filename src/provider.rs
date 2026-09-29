@@ -107,7 +107,8 @@ impl LLMProvider {
                     anyhow::bail!("LLM API 返回错误 {}: {}", status, error_body);
                 }
 
-                let resp: ChatCompletionResponse = response.json().await.context("解析 LLM 响应失败")?;
+                let resp: ChatCompletionResponse =
+                    response.json().await.context("解析 LLM 响应失败")?;
                 resp.choices
                     .into_iter()
                     .next()

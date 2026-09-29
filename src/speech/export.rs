@@ -15,7 +15,10 @@
 //! `speech export` 从不修改已有 Markdown。音频链接由常规
 //! Markdown/Obsidian 导出（[`crate::exporter`]）在另一次独立动作里读取 manifest 产生。
 
-use crate::speech::cache::{is_valid_clip_id, ClipCache, ClipCacheError, ClipLockError, ClipUseGuard, ClipUseKind, ReadyClip};
+use crate::speech::cache::{
+    is_valid_clip_id, ClipCache, ClipCacheError, ClipLockError, ClipUseGuard, ClipUseKind,
+    ReadyClip,
+};
 use crate::speech::clip::SpeechContentKind;
 use crate::speech::store::{SpeechStore, SpeechStoreError};
 use crate::speech::text::sha256_hex;
@@ -41,7 +44,9 @@ pub const SHORT_FINGERPRINT_LEN: usize = 12;
 
 /// 导出根目录下 manifest 的绝对路径。
 pub fn manifest_path(book_export_root: &Path) -> PathBuf {
-    book_export_root.join(AUDIO_SUBDIRECTORY).join("manifest.json")
+    book_export_root
+        .join(AUDIO_SUBDIRECTORY)
+        .join("manifest.json")
 }
 
 /// 一个 Annotation 的某个内容部分下已导出的所有 Speech Clip 变体。
@@ -134,10 +139,11 @@ impl SpeechExportManifest {
     /// 严格解析 manifest 文本。`deny_unknown_fields` + 显式 schema 版本检查：
     /// 任何多余或缺失的字段都让 manifest 变成「不可信」，而不是被尽力修复。
     pub fn parse(text: &str) -> Result<Self, ExportError> {
-        let manifest: Self = serde_json::from_str(text).map_err(|error| ExportError::ManifestInvalid {
-            reason: "the Speech Export Manifest is not valid JSON for schema version 1",
-            detail: error.to_string(),
-        })?;
+        let manifest: Self =
+            serde_json::from_str(text).map_err(|error| ExportError::ManifestInvalid {
+                reason: "the Speech Export Manifest is not valid JSON for schema version 1",
+                detail: error.to_string(),
+            })?;
         if manifest.schema_version != SPEECH_EXPORT_MANIFEST_SCHEMA_VERSION {
             return Err(ExportError::ManifestInvalid {
                 reason: "the Speech Export Manifest declares an unsupported schema version",
@@ -155,7 +161,10 @@ impl SpeechExportManifest {
         }
         for record in &manifest.records {
             if !record.active_clip_id.is_empty()
-                && !record.clips.iter().any(|clip| clip.clip_id == record.active_clip_id)
+                && !record
+                    .clips
+                    .iter()
+                    .any(|clip| clip.clip_id == record.active_clip_id)
             {
                 return Err(ExportError::ManifestInvalid {
                     reason: "the Speech Export Manifest points at a clip it does not record",
@@ -172,10 +181,14 @@ impl SpeechExportManifest {
     }
 
     /// 找到指定 Annotation + 内容部分的记录。
-    fn record(&self, annotation_id: &str, content_kind: SpeechContentKind) -> Option<&ExportedContentRecord> {
-        self.records
-            .iter()
-            .find(|record| record.annotation_id == annotation_id && record.content_kind == content_kind)
+    fn record(
+        &self,
+        annotation_id: &str,
+        content_kind: SpeechContentKind,
+    ) -> Option<&ExportedContentRecord> {
+        self.records.iter().find(|record| {
+            record.annotation_id == annotation_id && record.content_kind == content_kind
+        })
     }
 
     /// 某个 clip ID 已被记录的相对路径（无论它是否 active）。
@@ -316,12 +329,12 @@ impl From<ClipCacheError> for ExportError {
                 path,
                 reason: reason.to_string(),
             },
-            ClipCacheError::UnsupportedSchemaVersion { path, version } => Self::Storage(
-                SpeechStoreError::Unavailable {
+            ClipCacheError::UnsupportedSchemaVersion { path, version } => {
+                Self::Storage(SpeechStoreError::Unavailable {
                     path,
                     message: format!("unsupported Speech cache schema version {version}"),
-                },
-            ),
+                })
+            }
         }
     }
 }
@@ -412,11 +425,12 @@ fn run_export(
     request: &ExportRequest,
     now: DateTime<Utc>,
 ) -> Result<ExportOutcome, ExportError> {
-    let ready = cache
-        .load_ready_clip(&request.clip_id)?
-        .ok_or_else(|| ExportError::ClipNotFound {
-            clip_id: request.clip_id.clone(),
-        })?;
+    let ready =
+        cache
+            .load_ready_clip(&request.clip_id)?
+            .ok_or_else(|| ExportError::ClipNotFound {
+                clip_id: request.clip_id.clone(),
+            })?;
     let source = read_verified_bytes(&ready)?;
     let asset_id = ready.state.asset_id.clone();
     let annotation_id = ready.state.annotation_id.clone();
@@ -430,7 +444,8 @@ fn run_export(
         })
     })?;
 
-    let mut manifest = SpeechExportManifest::load(root)?.unwrap_or_else(|| SpeechExportManifest::empty(&asset_id));
+    let mut manifest =
+        SpeechExportManifest::load(root)?.unwrap_or_else(|| SpeechExportManifest::empty(&asset_id));
     if manifest.asset_id != asset_id {
         return Err(ExportError::ManifestInvalid {
             reason: "the Speech Export Manifest belongs to a different book",
@@ -441,8 +456,7 @@ fn run_export(
         });
     }
 
-    let (relative_path, reused, replaced) =
-        place_audio(root, &manifest, request, &ready, &source)?;
+    let (relative_path, reused, replaced) = place_audio(root, &manifest, request, &ready, &source)?;
 
     let record = ExportedClipRecord {
         clip_id: request.clip_id.clone(),
@@ -461,15 +475,16 @@ fn run_export(
         .record(&annotation_id, content_kind)
         .map(|record| record.active_clip_id.clone())
         .unwrap_or_else(|| request.clip_id.clone());
-    let audio_path = resolve_contained_path(root, &relative_path)
-        .map_err(|_| ExportError::Storage(SpeechStoreError::Unavailable {
+    let audio_path = resolve_contained_path(root, &relative_path).map_err(|_| {
+        ExportError::Storage(SpeechStoreError::Unavailable {
             path: root.to_path_buf(),
             message: "the just written export path is not contained in the export root".to_string(),
-        }))?;
+        })
+    })?;
 
     // 非权威 locator 投影：更新失败只返回 warning，绝不回滚已经自洽提交的导出目录。
     let mut warnings = Vec::new();
-    if let Err(reason) = update_locator(cache, root, &manifest) {
+    if let Err(reason) = record_export_locator(cache, root, &manifest, now) {
         warnings.push(SpeechWarning {
             code: SpeechWarning::EXPORT_LOCATOR_STALE_CODE,
             reason: "export_locator_not_updated",
@@ -560,9 +575,12 @@ fn place_audio(
 
     let mut prefix_len = SHORT_FINGERPRINT_LEN;
     loop {
-        let candidate = relative_path_for(ready.metadata.content_kind, &request.clip_id, prefix_len);
+        let candidate =
+            relative_path_for(ready.metadata.content_kind, &request.clip_id, prefix_len);
         // 路径被别的 clip 记录在案 → 绝不覆盖（即使带 --overwrite）。
-        let claimed = manifest.owner_of_path(&candidate).is_some_and(|owner| owner != request.clip_id);
+        let claimed = manifest
+            .owner_of_path(&candidate)
+            .is_some_and(|owner| owner != request.clip_id);
         if !claimed {
             let path = resolve_contained_path(root, &candidate)?;
             match read_if_same_content(&path, &source.sha256)? {
@@ -768,7 +786,11 @@ pub fn relative_path_for(
     let prefix = clip_id
         .get(..prefix_len.min(clip_id.len()))
         .unwrap_or(clip_id);
-    format!("{}/{}-{prefix}.mp3", AUDIO_SUBDIRECTORY, content_kind.as_str())
+    format!(
+        "{}/{}-{prefix}.mp3",
+        AUDIO_SUBDIRECTORY,
+        content_kind.as_str()
+    )
 }
 
 /// 把 manifest 里的相对路径解析成导出根目录内的绝对路径。
@@ -867,10 +889,7 @@ pub struct ExportLinkReport {
 /// - 文件缺失、checksum 不匹配、格式不符、路径逃出导出根、manifest 损坏时**省略链接并
 ///   返回结构化 warning**，不修复文件、不修改 manifest、不调用 provider；
 /// - 没有导出语音时不写占位链接。
-pub fn resolve_export_links(
-    book_export_root: &Path,
-    asset_id: &str,
-) -> ExportLinkReport {
+pub fn resolve_export_links(book_export_root: &Path, asset_id: &str) -> ExportLinkReport {
     let mut report = ExportLinkReport::default();
     let manifest = match SpeechExportManifest::load(book_export_root) {
         Ok(Some(manifest)) => manifest,
@@ -1004,14 +1023,78 @@ struct ExportLocatorEntry {
     last_verified_at: String,
 }
 
-fn locator_path(cache: &ClipCache) -> PathBuf {
+/// locator 投影文件 `exports.json` 在 Speech 状态根下的绝对路径。
+pub fn locator_path(cache: &ClipCache) -> PathBuf {
     cache.root().join("exports.json")
 }
 
-fn update_locator(
+/// locator 投影里的一条**候选**导出根。
+///
+/// 候选只是提示：它不证明任何 clip 存在、也不证明音频仍然可信，因此每个候选都必须
+/// 重新读取该根的 manifest 并逐项复核（实施 spec 7.5）。它也**不**用于发现新目录——
+/// 读取它只是读 `exports.json` 这一个文件，不遍历任何用户目录。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExportLocatorCandidate {
+    /// locator 记录该导出根时使用的书籍稳定 ID。
+    pub asset_id: String,
+    /// 最近一次验证过的绝对 export root。
+    pub export_root: PathBuf,
+    /// 记录该候选时看到的 manifest schema 版本。
+    pub manifest_schema_version: u32,
+    /// 记录该候选时看到的 manifest digest。
+    pub manifest_sha256: String,
+}
+
+/// 读取非权威 export locator 投影里记录的全部候选导出根。
+///
+/// 投影不存在、不可解析或 schema 版本不认识时返回空列表：locator 是可丢弃的便利
+/// 投影，读不到它不是错误，只意味着「没有提示可用」，调用方必须显式给
+/// `--export-root` 或走正常生成路径。
+pub fn locator_candidates(cache: &ClipCache) -> Vec<ExportLocatorCandidate> {
+    let path = locator_path(cache);
+    let Ok(text) = fs::read_to_string(&path) else {
+        return Vec::new();
+    };
+    let Ok(locator) = serde_json::from_str::<ExportLocator>(&text) else {
+        return Vec::new();
+    };
+    if locator.schema_version != EXPORT_LOCATOR_SCHEMA_VERSION {
+        return Vec::new();
+    }
+    locator
+        .entries
+        .into_iter()
+        .filter_map(|(asset_id, entry)| {
+            if entry.export_root.is_empty() {
+                return None;
+            }
+            Some(ExportLocatorCandidate {
+                asset_id,
+                export_root: PathBuf::from(entry.export_root),
+                manifest_schema_version: entry.manifest_schema_version,
+                manifest_sha256: entry.manifest_sha256,
+            })
+        })
+        .collect()
+}
+
+/// manifest 内容的稳定 digest：locator 用它判断投影是否过期。
+pub fn manifest_digest(manifest: &SpeechExportManifest) -> Result<String, String> {
+    serde_json::to_vec(manifest)
+        .map(|bytes| sha256_hex(&bytes))
+        .map_err(|error| error.to_string())
+}
+
+/// 记录（或刷新）一个**已验证**导出根的 locator 投影条目。
+///
+/// 只在 manifest 被重新读取并验证之后调用：`--export-root` 指向移动后的新位置时，
+/// 这就是「刷新 locator」的那一步（实施 spec 7.5）。投影可丢弃，写失败只影响便利查找，
+/// 不会回滚已经自洽提交的导出目录。
+pub fn record_export_locator(
     cache: &ClipCache,
     book_export_root: &Path,
     manifest: &SpeechExportManifest,
+    now: DateTime<Utc>,
 ) -> Result<(), String> {
     let path = locator_path(cache);
     let mut locator = match fs::read_to_string(&path) {
@@ -1025,16 +1108,15 @@ fn update_locator(
         },
         Err(error) => return Err(error.to_string()),
     };
-    let manifest_bytes =
-        serde_json::to_vec(manifest).map_err(|error| error.to_string())?;
-    locator
-        .entries
-        .insert(manifest.asset_id.clone(), ExportLocatorEntry {
+    locator.entries.insert(
+        manifest.asset_id.clone(),
+        ExportLocatorEntry {
             export_root: book_export_root.to_string_lossy().into_owned(),
             manifest_schema_version: manifest.schema_version,
-            manifest_sha256: sha256_hex(&manifest_bytes),
-            last_verified_at: format_timestamp(Utc::now()),
-        });
+            manifest_sha256: manifest_digest(manifest)?,
+            last_verified_at: format_timestamp(now),
+        },
+    );
     let mut json = serde_json::to_string_pretty(&locator).map_err(|error| error.to_string())?;
     json.push('\n');
     if let Some(parent) = path.parent() {
@@ -1065,7 +1147,11 @@ mod tests {
                 active_clip_id: CLIP_A.to_string(),
                 clips: vec![ExportedClipRecord {
                     clip_id: CLIP_A.to_string(),
-                    relative_path: relative_path_for(SpeechContentKind::Highlight, CLIP_A, SHORT_FINGERPRINT_LEN),
+                    relative_path: relative_path_for(
+                        SpeechContentKind::Highlight,
+                        CLIP_A,
+                        SHORT_FINGERPRINT_LEN,
+                    ),
                     sha256: "c".repeat(64),
                     size_bytes: 10,
                     format: "mp3".to_string(),
@@ -1097,17 +1183,16 @@ mod tests {
     fn a_short_fingerprint_collision_extends_instead_of_overwriting() {
         let manifest = manifest_with_clips();
         // CLIP_B 与 CLIP_A 共享前 12 位，因此它必须换更长的前缀。
-        assert!(manifest.owner_of_path(&relative_path_for(
-            SpeechContentKind::Highlight,
-            CLIP_B,
-            SHORT_FINGERPRINT_LEN
-        )) == Some(CLIP_A));
-        assert!(manifest.owner_of_path(&relative_path_for(
-            SpeechContentKind::Highlight,
-            CLIP_B,
-            13
-        ))
-        .is_none());
+        assert!(
+            manifest.owner_of_path(&relative_path_for(
+                SpeechContentKind::Highlight,
+                CLIP_B,
+                SHORT_FINGERPRINT_LEN
+            )) == Some(CLIP_A)
+        );
+        assert!(manifest
+            .owner_of_path(&relative_path_for(SpeechContentKind::Highlight, CLIP_B, 13))
+            .is_none());
     }
 
     /// 负向控制：路径穿越、绝对路径与 symlink 一律拒绝。
@@ -1134,8 +1219,7 @@ mod tests {
         ));
         // 中间的 `.` 被规范化掉（仍在根内）；开头的 `.` 显式拒绝，保持唯一规范形式。
         assert_eq!(
-            resolve_contained_path(root, "assets/./audio/x.mp3")
-                .expect("normalized"),
+            resolve_contained_path(root, "assets/./audio/x.mp3").expect("normalized"),
             root.join("assets/audio/x.mp3")
         );
         assert!(matches!(
@@ -1159,8 +1243,7 @@ mod tests {
 
         // 正常相对路径仍然可用。
         assert_eq!(
-            resolve_contained_path(root, "assets/audio/highlight-a1.mp3")
-                .expect("contained"),
+            resolve_contained_path(root, "assets/audio/highlight-a1.mp3").expect("contained"),
             root.join("assets/audio/highlight-a1.mp3")
         );
     }
@@ -1181,7 +1264,9 @@ mod tests {
         ));
         // 未知 schema 版本按损坏处理。
         assert!(matches!(
-            SpeechExportManifest::parse(r#"{"schema_version":99,"asset_id":"book-1","records":[]}"#),
+            SpeechExportManifest::parse(
+                r#"{"schema_version":99,"asset_id":"book-1","records":[]}"#
+            ),
             Err(ExportError::ManifestInvalid { .. })
         ));
         // active 指向未记录的 clip：manifest 自相矛盾。

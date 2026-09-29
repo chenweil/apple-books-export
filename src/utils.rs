@@ -18,9 +18,7 @@ pub fn sanitize_filename(s: &str) -> String {
                 result.push(ch)
             }
             // 保留常见标点（排除文件系统不安全的 : ? " < > | * \）
-            '.' | ',' | '!' | ';' | '\'' | '(' | ')' | '[' | ']' => {
-                result.push(ch)
-            }
+            '.' | ',' | '!' | ';' | '\'' | '(' | ')' | '[' | ']' => result.push(ch),
             _ => result.push('_'),
         }
     }

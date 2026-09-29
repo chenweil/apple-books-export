@@ -216,7 +216,10 @@ type ProfileResult<T> = Result<T, ProfileError>;
 /// 与 Rust 浮点字面量的写法一致）。
 fn is_non_finite_literal(raw: &str) -> bool {
     let unsigned = raw.strip_prefix(['+', '-']).unwrap_or(raw);
-    matches!(unsigned.to_ascii_lowercase().as_str(), "nan" | "inf" | "infinity")
+    matches!(
+        unsigned.to_ascii_lowercase().as_str(),
+        "nan" | "inf" | "infinity"
+    )
 }
 
 /// 把 CLI 原始十进制文本精确解析成百分之一单位。
@@ -225,7 +228,11 @@ fn is_non_finite_literal(raw: &str) -> bool {
 /// 和 `NaN`/`inf` 全部拒绝。
 pub fn parse_hundredths(raw: &str, field: &'static str) -> ProfileResult<Hundredths> {
     if raw.trim().is_empty() {
-        return Err(ProfileError::new(Some(field), ProfileErrorReason::Missing, None));
+        return Err(ProfileError::new(
+            Some(field),
+            ProfileErrorReason::Missing,
+            None,
+        ));
     }
     if is_non_finite_literal(raw) {
         return Err(ProfileError::new(
@@ -245,7 +252,8 @@ pub fn parse_hundredths(raw: &str, field: &'static str) -> ProfileResult<Hundred
         None => (digits, None),
     };
 
-    let digits_only = |text: &str| !text.is_empty() && text.bytes().all(|byte| byte.is_ascii_digit());
+    let digits_only =
+        |text: &str| !text.is_empty() && text.bytes().all(|byte| byte.is_ascii_digit());
     if !digits_only(whole) {
         return Err(ProfileError::new(
             Some(field),
@@ -270,9 +278,9 @@ pub fn parse_hundredths(raw: &str, field: &'static str) -> ProfileResult<Hundred
         }
     }
 
-    let whole: i64 = whole.parse().map_err(|_| {
-        ProfileError::new(Some(field), ProfileErrorReason::OutOfRange, Some(raw))
-    })?;
+    let whole: i64 = whole
+        .parse()
+        .map_err(|_| ProfileError::new(Some(field), ProfileErrorReason::OutOfRange, Some(raw)))?;
     let fraction: i64 = match fraction {
         None => 0,
         Some(single) if single.len() == 1 => single.parse::<i64>().unwrap_or(0) * 10,
@@ -284,9 +292,8 @@ pub fn parse_hundredths(raw: &str, field: &'static str) -> ProfileResult<Hundred
         .and_then(|value| value.checked_add(fraction))
         .ok_or_else(|| ProfileError::new(Some(field), ProfileErrorReason::OutOfRange, Some(raw)))?;
     let signed = if negative { -magnitude } else { magnitude };
-    let value = i32::try_from(signed).map_err(|_| {
-        ProfileError::new(Some(field), ProfileErrorReason::OutOfRange, Some(raw))
-    })?;
+    let value = i32::try_from(signed)
+        .map_err(|_| ProfileError::new(Some(field), ProfileErrorReason::OutOfRange, Some(raw)))?;
 
     Ok(Hundredths::from_x100(value))
 }
@@ -295,7 +302,11 @@ pub fn parse_hundredths(raw: &str, field: &'static str) -> ProfileResult<Hundred
 pub fn parse_pitch(raw: &str) -> ProfileResult<i32> {
     const FIELD: &'static str = "pitch";
     if raw.trim().is_empty() {
-        return Err(ProfileError::new(Some(FIELD), ProfileErrorReason::Missing, None));
+        return Err(ProfileError::new(
+            Some(FIELD),
+            ProfileErrorReason::Missing,
+            None,
+        ));
     }
     if is_non_finite_literal(raw) {
         return Err(ProfileError::new(
@@ -319,9 +330,9 @@ pub fn parse_pitch(raw: &str) -> ProfileResult<i32> {
         return Err(ProfileError::new(Some(FIELD), reason, Some(raw)));
     }
 
-    let magnitude: i64 = digits.parse().map_err(|_| {
-        ProfileError::new(Some(FIELD), ProfileErrorReason::OutOfRange, Some(raw))
-    })?;
+    let magnitude: i64 = digits
+        .parse()
+        .map_err(|_| ProfileError::new(Some(FIELD), ProfileErrorReason::OutOfRange, Some(raw)))?;
     let value = if negative { -magnitude } else { magnitude };
     if !(i64::from(PITCH_MIN)..=i64::from(PITCH_MAX)).contains(&value) {
         return Err(ProfileError::new(
@@ -337,12 +348,17 @@ pub fn parse_pitch(raw: &str) -> ProfileResult<i32> {
 pub fn parse_api_key_env(raw: &str) -> ProfileResult<String> {
     const FIELD: &'static str = "api_key_env";
     if raw.trim().is_empty() {
-        return Err(ProfileError::new(Some(FIELD), ProfileErrorReason::Missing, None));
+        return Err(ProfileError::new(
+            Some(FIELD),
+            ProfileErrorReason::Missing,
+            None,
+        ));
     }
     let mut characters = raw.chars();
     let first = characters.next().unwrap_or(' ');
     let valid_first = first.is_ascii_alphabetic() || first == '_';
-    let valid_rest = characters.all(|character| character.is_ascii_alphanumeric() || character == '_');
+    let valid_rest =
+        characters.all(|character| character.is_ascii_alphanumeric() || character == '_');
     if !valid_first || !valid_rest {
         return Err(ProfileError::new(
             Some(FIELD),
@@ -356,7 +372,11 @@ pub fn parse_api_key_env(raw: &str) -> ProfileResult<String> {
 /// 精确字符串字段校验：不能为空，也不能有首尾空白（避免模糊匹配出不存在的身份）。
 fn parse_exact_string(raw: &str, field: &'static str) -> ProfileResult<String> {
     if raw.trim().is_empty() {
-        return Err(ProfileError::new(Some(field), ProfileErrorReason::Missing, None));
+        return Err(ProfileError::new(
+            Some(field),
+            ProfileErrorReason::Missing,
+            None,
+        ));
     }
     if raw.trim() != raw {
         return Err(ProfileError::new(
@@ -567,7 +587,10 @@ pub struct ProfileDraft {
 ///
 /// 这里刻意不继承任何已验证状态：本切片无法检查 provider 可用性，
 /// 验证结果由 [`crate::speech::catalog`] 的验证步骤决定，避免 `set` 替用户宣称可用。
-pub fn resolve_profile(current: &VoiceProfile, draft: &ProfileDraft) -> ProfileResult<VoiceProfile> {
+pub fn resolve_profile(
+    current: &VoiceProfile,
+    draft: &ProfileDraft,
+) -> ProfileResult<VoiceProfile> {
     resolve_profile_with_options(current, draft, true)
 }
 
@@ -662,7 +685,9 @@ mod tests {
         assert_eq!(profile.audio, AudioSettings::v1());
         assert_eq!(profile.verification.status, VerificationStatus::Unverified);
         assert_eq!(profile.verification.verified_at, None);
-        profile.validate().expect("default profile is locally valid");
+        profile
+            .validate()
+            .expect("default profile is locally valid");
     }
 
     #[test]
@@ -764,13 +789,19 @@ mod tests {
         for x100 in 1..=1200 {
             let value = Hundredths::from_x100(x100);
             let text = serde_json::to_string(&value).expect("serialize hundredths");
-            let fraction = text.split('.').nth(1).expect("decimal point in JSON number");
+            let fraction = text
+                .split('.')
+                .nth(1)
+                .expect("decimal point in JSON number");
             assert!(
                 fraction.len() <= 2,
                 "JSON {text} for {x100} exposes more than two decimal places"
             );
             let round_tripped = parse_hundredths(&text, "speed").expect(&text);
-            assert_eq!(round_tripped, value, "JSON {text} did not round-trip exactly");
+            assert_eq!(
+                round_tripped, value,
+                "JSON {text} did not round-trip exactly"
+            );
         }
     }
 
@@ -794,7 +825,12 @@ mod tests {
             assert_eq!(error.reason, expected);
         }
 
-        for (field, raw) in [("speed", "0.5"), ("speed", "2.0"), ("volume", "0.01"), ("volume", "10.0")] {
+        for (field, raw) in [
+            ("speed", "0.5"),
+            ("speed", "2.0"),
+            ("volume", "0.01"),
+            ("volume", "10.0"),
+        ] {
             let mut profile = VoiceProfile::default();
             if field == "speed" {
                 profile.speed = parse_hundredths(raw, field).expect(raw);
@@ -881,8 +917,8 @@ mod tests {
         current.voice_id = "female_0007_b".to_string();
         current.speed = Hundredths::from_x100(125);
 
-        let unchanged = resolve_generation_profile(&current, &ProfileDraft::default())
-            .expect("no overrides");
+        let unchanged =
+            resolve_generation_profile(&current, &ProfileDraft::default()).expect("no overrides");
         assert_eq!(unchanged.voice_id, "female_0007_b");
         assert_eq!(unchanged.speed, Hundredths::from_x100(125));
         assert_eq!(unchanged.volume, current.volume);
@@ -932,7 +968,11 @@ mod tests {
         assert_eq!(resolved.provider, SENSEAUDIO_PROVIDER);
         assert_eq!(resolved.model, DEFAULT_MODEL);
         assert_eq!(resolved.speed, Hundredths::from_x100(125));
-        assert_eq!(resolved.volume, Hundredths::from_x100(100), "volume keeps its current value");
+        assert_eq!(
+            resolved.volume,
+            Hundredths::from_x100(100),
+            "volume keeps its current value"
+        );
         assert_eq!(resolved.pitch, -2);
         assert_eq!(resolved.emotion_label.as_deref(), Some("平稳"));
         assert_eq!(resolved.style_label, None);
@@ -1058,9 +1098,18 @@ mod tests {
             (ProfileErrorReason::NotAnInteger, "not_an_integer"),
             (ProfileErrorReason::OutOfRange, "out_of_range"),
             (ProfileErrorReason::InvalidFormat, "invalid_format"),
-            (ProfileErrorReason::UnsupportedProvider, "unsupported_provider"),
-            (ProfileErrorReason::UnsupportedAudioSetting, "unsupported_audio_setting"),
-            (ProfileErrorReason::StoredConfigInvalid, "stored_config_invalid"),
+            (
+                ProfileErrorReason::UnsupportedProvider,
+                "unsupported_provider",
+            ),
+            (
+                ProfileErrorReason::UnsupportedAudioSetting,
+                "unsupported_audio_setting",
+            ),
+            (
+                ProfileErrorReason::StoredConfigInvalid,
+                "stored_config_invalid",
+            ),
         ];
 
         for (reason, expected) in cases {

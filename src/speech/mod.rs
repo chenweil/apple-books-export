@@ -13,23 +13,20 @@ pub mod generate;
 pub mod machine;
 pub mod play;
 pub mod profile;
+pub mod rehydrate;
 pub mod senseaudio;
 pub mod store;
 pub mod text;
 
 pub use audio::{decode_audio_hex, inspect_mp3, validate_audio, AudioDecodeError, AudioFacts};
 pub use cache::{
-    AttemptRecord, AttemptPruneReport, AttemptStatus, BudgetMaintenanceReport, CacheClearReport,
-    CacheStatusEntry, CacheStatusReport, ClipCache, ClipCacheError, ClipCacheStatus, ClipLock,
-    ClipLockError, ClipState, ClipUseGuard, ClipUseKind, ClipUseSkip, ClipVersionMetadata,
-    HistoryClearReport, ReadyClip, ATTEMPT_HISTORY_RETENTION_DAYS, ATTEMPT_SCHEMA_VERSION,
-    is_valid_clip_id, usable_cache_budget, CACHE_SAFETY_MARGIN_BYTES, CLIP_LOCK_TIMEOUT,
-    CLIP_STATE_SCHEMA_VERSION, CLIP_VERSION_SCHEMA_VERSION, DEFAULT_CACHE_BUDGET_BYTES,
-    MIN_FREE_BYTES_ENV,
-};
-pub use play::{
-    play_clip, AfplayPlayer, AudioPlayer, NeverPlayer, PlayError, PlayMode, PlayOutcome, PlayRequest,
-    PlaybackSource,
+    is_valid_clip_id, usable_cache_budget, AttemptPruneReport, AttemptRecord, AttemptStatus,
+    BudgetMaintenanceReport, CacheClearReport, CacheStatusEntry, CacheStatusReport, ClipCache,
+    ClipCacheError, ClipCacheStatus, ClipLock, ClipLockError, ClipState, ClipUseGuard, ClipUseKind,
+    ClipUseSkip, ClipVersionMetadata, HistoryClearReport, ReadyClip,
+    ATTEMPT_HISTORY_RETENTION_DAYS, ATTEMPT_SCHEMA_VERSION, CACHE_SAFETY_MARGIN_BYTES,
+    CLIP_LOCK_TIMEOUT, CLIP_STATE_SCHEMA_VERSION, CLIP_VERSION_SCHEMA_VERSION,
+    DEFAULT_CACHE_BUDGET_BYTES, MIN_FREE_BYTES_ENV,
 };
 pub use catalog::{
     CatalogAvailability, CatalogSourceType, CatalogVoice, NoCatalogSource, UnverifiedReason,
@@ -40,9 +37,10 @@ pub use clip::{
     SpeechContentSelection, FINGERPRINT_VERSION,
 };
 pub use export::{
-    export_clip, resolve_export_links, resolve_contained_path, ExportError, ExportLinkReport,
-    ExportOutcome, ExportRequest, ExportedClipRecord, ExportedContentRecord, ResolvedAudioLink,
-    SpeechExportManifest, AUDIO_SUBDIRECTORY, SHORT_FINGERPRINT_LEN,
+    export_clip, locator_candidates, locator_path, record_export_locator, resolve_contained_path,
+    resolve_export_links, ExportError, ExportLinkReport, ExportLocatorCandidate, ExportOutcome,
+    ExportRequest, ExportedClipRecord, ExportedContentRecord, ResolvedAudioLink,
+    SpeechExportManifest, AUDIO_SUBDIRECTORY, EXPORT_LOCATOR_SCHEMA_VERSION, SHORT_FINGERPRINT_LEN,
     SPEECH_EXPORT_MANIFEST_SCHEMA_VERSION,
 };
 pub use generate::{
@@ -52,15 +50,23 @@ pub use generate::{
 };
 pub use machine::{
     SpeechCacheClearReceipt, SpeechCacheClearResponse, SpeechCacheStatusReceipt,
-    SpeechCacheStatusResponse, SpeechGenerateReceipt,
-    SpeechGenerateResponse, SpeechHistoryClearReceipt, SpeechHistoryClearResponse,
-    SpeechPlayReceipt, SpeechPlayResponse, SpeechProfileDto, SpeechProfileResponse,
-    VoiceCatalogResponse, VoiceCatalogReceipt, VoiceCatalogVoiceDto,
+    SpeechCacheStatusResponse, SpeechGenerateReceipt, SpeechGenerateResponse,
+    SpeechHistoryClearReceipt, SpeechHistoryClearResponse, SpeechPlayReceipt, SpeechPlayResponse,
+    SpeechProfileDto, SpeechProfileResponse, VoiceCatalogReceipt, VoiceCatalogResponse,
+    VoiceCatalogVoiceDto,
+};
+pub use play::{
+    play_clip, AfplayPlayer, AudioPlayer, NeverPlayer, PlayError, PlayMode, PlayOutcome,
+    PlayRequest, PlaybackSource,
 };
 pub use profile::{
     resolve_generation_profile, AudioSettings, Hundredths, ProfileDraft, ProfileError,
     ProfileErrorReason, ProfileVerification, VerificationStatus, VoiceProfile, DEFAULT_API_KEY_ENV,
     DEFAULT_MODEL, DEFAULT_VOICE_ID, SENSEAUDIO_PROVIDER,
+};
+pub use rehydrate::{
+    find_verified_exported_clip, ExportCandidateOrigin, ExportLookup, ExportRejection,
+    ExportedBookIdentity, ExportedClipQuery, VerifiedExportedClip,
 };
 pub use senseaudio::{
     load_or_refresh_voice_catalog, CachedVoiceCatalogSource, SenseAudioClient, SenseAudioError,
@@ -72,9 +78,9 @@ pub use store::{
     VOICE_CATALOG_SCHEMA_VERSION,
 };
 pub use text::{
-    escape_provider_control_markup, estimate_billing_characters, normalize_speech_text,
-    sha256_hex, BillingEstimate, SpeechText, SpeechTextError, BILLING_ESTIMATOR_VERSION,
-    CONTROL_MARKUP_GUARD, MAX_SPEECH_TEXT_CHARS, SPEECH_TEXT_POLICY_VERSION,
+    escape_provider_control_markup, estimate_billing_characters, normalize_speech_text, sha256_hex,
+    BillingEstimate, SpeechText, SpeechTextError, BILLING_ESTIMATOR_VERSION, CONTROL_MARKUP_GUARD,
+    MAX_SPEECH_TEXT_CHARS, SPEECH_TEXT_POLICY_VERSION,
 };
 
 use chrono::{DateTime, SecondsFormat, Utc};
@@ -272,7 +278,8 @@ pub fn set_profile(
     now: DateTime<Utc>,
 ) -> Result<ProfileOutcome, SpeechError> {
     let current = store.load_config().map_err(SpeechError::Storage)?;
-    let profile = profile::resolve_profile(&current.profile, draft).map_err(SpeechError::Profile)?;
+    let profile =
+        profile::resolve_profile(&current.profile, draft).map_err(SpeechError::Profile)?;
     let api_key_env = match draft.api_key_env {
         Some(ref raw) => profile::parse_api_key_env(raw).map_err(SpeechError::Profile)?,
         None => current.api_key_env.clone(),
@@ -357,7 +364,9 @@ pub fn clear_speech_history(
 /// 把 clip 缓存错误收敩成稳定的 Speech 存储错误；不引入新的错误码。
 fn storage_error(error: ClipCacheError) -> SpeechStoreError {
     match error {
-        ClipCacheError::Unavailable { path, message } => SpeechStoreError::Unavailable { path, message },
+        ClipCacheError::Unavailable { path, message } => {
+            SpeechStoreError::Unavailable { path, message }
+        }
         ClipCacheError::Corrupt { path, reason } => SpeechStoreError::Unavailable {
             path,
             message: format!("the Speech cache entry is {reason}"),
@@ -455,7 +464,10 @@ mod tests {
         assert!(outcome.warnings.is_empty());
 
         let stored = store.load_config().expect("stored config");
-        assert_eq!(stored.profile.verification.status, VerificationStatus::Verified);
+        assert_eq!(
+            stored.profile.verification.status,
+            VerificationStatus::Verified
+        );
         assert_eq!(
             stored.profile.verification.verified_at.as_deref(),
             Some("2026-09-11T12:00:00Z")
@@ -499,7 +511,12 @@ mod tests {
         assert_eq!(outcome.warnings[0].code, SpeechWarning::UNVERIFIED_CODE);
         assert_eq!(outcome.warnings[0].reason, "stale_catalog");
         assert_eq!(
-            store.load_config().expect("stored").profile.verification.status,
+            store
+                .load_config()
+                .expect("stored")
+                .profile
+                .verification
+                .status,
             VerificationStatus::Unverified
         );
     }
@@ -543,7 +560,12 @@ mod tests {
         let verified_source = FixedSource(catalog_at(now(), &[DEFAULT_VOICE_ID]));
         set_profile(&store, &draft(DEFAULT_VOICE_ID), &verified_source, now()).expect("verify");
         assert_eq!(
-            store.load_config().expect("stored").profile.verification.status,
+            store
+                .load_config()
+                .expect("stored")
+                .profile
+                .verification
+                .status,
             VerificationStatus::Verified
         );
 
@@ -565,7 +587,10 @@ mod tests {
         );
         assert_eq!(outcome.warnings[0].reason, "no_catalog");
         let stored = store.load_config().expect("stored");
-        assert_eq!(stored.profile.verification.status, VerificationStatus::Unverified);
+        assert_eq!(
+            stored.profile.verification.status,
+            VerificationStatus::Unverified
+        );
         assert_eq!(stored.profile.verification.verified_at, None);
     }
 

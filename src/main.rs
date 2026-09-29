@@ -189,7 +189,8 @@ enum SpeechCommands {
     },
 
     /// 为一个 Annotation 的高亮或笔记生成并缓存一个 Speech Clip
-    Generate {        /// 书籍显示序号（人类 CLI；1-based）
+    Generate {
+        /// 书籍显示序号（人类 CLI；1-based）
         #[arg(value_name = "BOOK_INDEX")]
         book_index: Option<usize>,
 
@@ -229,6 +230,13 @@ enum SpeechCommands {
         #[arg(long)]
         regenerate: bool,
 
+        /// 已导出这本书的书籍导出根目录（不是 assets/audio/ 本身）
+        ///
+        /// 缓存没有这个 clip 时，从这里恢复已验证的 Exported Speech Clip：0 次
+        /// provider 调用、不创建 Speech Attempt。验证通过后刷新 locator 投影。
+        #[arg(long, value_name = "BOOK_EXPORT_DIRECTORY")]
+        export_root: Option<PathBuf>,
+
         /// 以稳定的机器可读 JSON 输出
         #[arg(long)]
         json: bool,
@@ -239,6 +247,13 @@ enum SpeechCommands {
         /// 完整 clip ID（64 位小写 sha256 hex）
         #[arg(long, value_name = "CLIP_ID")]
         clip_id: String,
+
+        /// 已导出这本书的书籍导出根目录（不是 assets/audio/ 本身）
+        ///
+        /// 缓存没有这个 clip 时，作为 Active Exported Speech Clip 的候选根；导出
+        /// 目录被搬动后用它刷新 locator 投影。
+        #[arg(long, value_name = "BOOK_EXPORT_DIRECTORY")]
+        export_root: Option<PathBuf>,
 
         /// 以稳定的机器可读 JSON 输出；只返回路径与来源，不启动播放器
         #[arg(long)]
@@ -486,7 +501,10 @@ fn fail_machine(error: MachineError) -> ! {
 
 async fn cmd_speech(command: SpeechCommands) -> anyhow::Result<()> {
     match command {
-        SpeechCommands::Voices { refresh, json: true } => {
+        SpeechCommands::Voices {
+            refresh,
+            json: true,
+        } => {
             finish_machine(speech_voices_json(refresh).await);
             Ok(())
         }
@@ -547,6 +565,7 @@ async fn cmd_speech(command: SpeechCommands) -> anyhow::Result<()> {
             volume,
             pitch,
             regenerate,
+            export_root,
             json,
         } => {
             let arguments = GenerateArguments {
@@ -560,11 +579,16 @@ async fn cmd_speech(command: SpeechCommands) -> anyhow::Result<()> {
                 volume,
                 pitch,
                 regenerate,
+                export_root,
                 json,
             };
             cmd_speech_generate(arguments).await
         }
-        SpeechCommands::Play { clip_id, json } => cmd_speech_play(&clip_id, json),
+        SpeechCommands::Play {
+            clip_id,
+            export_root,
+            json,
+        } => cmd_speech_play(&clip_id, export_root.as_deref(), json),
         SpeechCommands::Export {
             clip_id,
             output,
@@ -605,6 +629,7 @@ struct GenerateArguments {
     volume: Option<String>,
     pitch: Option<String>,
     regenerate: bool,
+    export_root: Option<PathBuf>,
     json: bool,
 }
 
@@ -616,14 +641,22 @@ impl GenerateArguments {
                 return Some("The JSON generate command does not accept a positional book index; use --asset-id.".to_string());
             }
             if self.annotation.is_some() {
-                return Some("The JSON generate command does not accept --annotation; use --annotation-id.".to_string());
+                return Some(
+                    "The JSON generate command does not accept --annotation; use --annotation-id."
+                        .to_string(),
+                );
             }
         } else {
             if self.asset_id.is_some() {
-                return Some("--asset-id 需要与 --json 一起使用；人类模式请用书籍显示序号。".to_string());
+                return Some(
+                    "--asset-id 需要与 --json 一起使用；人类模式请用书籍显示序号。".to_string(),
+                );
             }
             if self.annotation_id.is_some() {
-                return Some("--annotation-id 需要与 --json 一起使用；人类模式请用 --annotation。".to_string());
+                return Some(
+                    "--annotation-id 需要与 --json 一起使用；人类模式请用 --annotation。"
+                        .to_string(),
+                );
             }
         }
         None
@@ -722,7 +755,10 @@ async fn cmd_speech_generate(arguments: GenerateArguments) -> anyhow::Result<()>
     let config = match store.load_config() {
         Ok(config) => config,
         Err(error) => {
-            return Err(fail_speech_setup(SpeechError::Storage(error), arguments.json));
+            return Err(fail_speech_setup(
+                SpeechError::Storage(error),
+                arguments.json,
+            ));
         }
     };
     let api_key = std::env::var(&config.api_key_env)
@@ -745,6 +781,7 @@ async fn cmd_speech_generate(arguments: GenerateArguments) -> anyhow::Result<()>
                 regenerate: arguments.regenerate,
             },
             lock_timeout: speech_lock_timeout(),
+            export_root: arguments.export_root.clone(),
         },
         api_key,
         chrono::Utc::now(),
@@ -760,12 +797,10 @@ async fn cmd_speech_generate(arguments: GenerateArguments) -> anyhow::Result<()>
         Ok(outcome) => {
             if arguments.json {
                 // finish_machine 在失败时退出进程；成功时返回后由调用方结束。
-                finish_machine(Ok(
-                    serde_json::to_string(&speech::SpeechGenerateResponse::new(
-                        outcome.to_receipt(),
-                    ))
-                    .expect("serialize generate receipt"),
-                ));
+                finish_machine(Ok(serde_json::to_string(
+                    &speech::SpeechGenerateResponse::new(outcome.to_receipt()),
+                )
+                .expect("serialize generate receipt")));
                 return Ok(());
             } else {
                 print_generate_outcome(&outcome);
@@ -813,16 +848,31 @@ fn resolve_display_index(index: usize, len: usize, label: &str) -> Result<usize,
 
 /// 人类可读的生成结果：显示内容类型、音色与字符估算，不输出完整 Speech Text。
 fn print_generate_outcome(outcome: &speech::GenerateOutcome) {
-    println!("Speech Clip 已{}", if outcome.source.provider_called() { "生成" } else { "复用缓存" });
+    println!(
+        "Speech Clip 已{}",
+        match outcome.source {
+            // 零 provider 调用：缓存命中或从已验证的导出音频恢复。
+            speech::SpeechClipSource::Cache => "复用缓存",
+            speech::SpeechClipSource::ExportRehydration => "从导出音频恢复缓存（未调用 provider）",
+            speech::SpeechClipSource::Provider => "生成",
+        }
+    );
     println!("  Content: {}", outcome.content_kind.as_str());
     println!("  Voice ID: {}", outcome.profile.voice_id);
-    println!("  Speed: {}  Volume: {}  Pitch: {}", outcome.profile.speed, outcome.profile.volume, outcome.profile.pitch);
+    println!(
+        "  Speed: {}  Volume: {}  Pitch: {}",
+        outcome.profile.speed, outcome.profile.volume, outcome.profile.pitch
+    );
     println!(
         "  Characters: {} (estimated billing {})",
         outcome.billing.unicode_characters, outcome.billing.estimated_billing_characters
     );
     println!("  Source: {}", outcome.source.as_str());
-    println!("  Audio: {} ({} ms)", outcome.audio_path.display(), outcome.audio_duration_ms);
+    println!(
+        "  Audio: {} ({} ms)",
+        outcome.audio_path.display(),
+        outcome.audio_duration_ms
+    );
     if let Some(attempt_id) = outcome.attempt_id.as_deref() {
         println!("  Attempt: {attempt_id}");
     }
@@ -857,7 +907,11 @@ fn speech_lock_timeout() -> Option<std::time::Duration> {
 /// human / machine 分流发生在同一个 use case 之前：human 模式才启动 macOS 系统播放器，
 /// `--json` 传入 [`speech::NeverPlayer`]——它一旦被调用就 panic，因此「machine 不启动
 /// 播放器」是被证明的，而不是一句约定。
-fn cmd_speech_play(clip_id: &str, json: bool) -> anyhow::Result<()> {
+fn cmd_speech_play(
+    clip_id: &str,
+    export_root: Option<&std::path::Path>,
+    json: bool,
+) -> anyhow::Result<()> {
     let store = match speech_store() {
         Ok(store) => store,
         Err(error) => {
@@ -876,6 +930,7 @@ fn cmd_speech_play(clip_id: &str, json: bool) -> anyhow::Result<()> {
         store,
         clip_id: clip_id.to_string(),
         mode,
+        export_root: export_root.map(|root| root.to_path_buf()),
     };
 
     let (outcome, _guard) = if json {
@@ -893,7 +948,9 @@ fn cmd_speech_play(clip_id: &str, json: bool) -> anyhow::Result<()> {
     if json {
         let json = serde_json::to_string(&speech::SpeechPlayResponse::new(&outcome))
             .unwrap_or_else(|error| {
-                fail_machine(MachineError::protocol_serialization_failed(error.to_string()))
+                fail_machine(MachineError::protocol_serialization_failed(
+                    error.to_string(),
+                ))
             });
         finish_machine(Ok(json));
         return Ok(());
@@ -902,7 +959,17 @@ fn cmd_speech_play(clip_id: &str, json: bool) -> anyhow::Result<()> {
     println!("  Content: {}", outcome.content_kind.as_str());
     println!("  Clip ID: {}", outcome.clip_id);
     println!("  Source: {}", outcome.source.as_str());
-    println!("  Audio: {} ({} ms)", outcome.audio_path.display(), outcome.audio_duration_ms);
+    if let Some(origin) = outcome.export_origin {
+        println!("  Export candidate: {}", origin.as_str());
+    }
+    for warning in &outcome.warnings {
+        println!("  Warning [{}]: {}", warning.code, warning.message);
+    }
+    println!(
+        "  Audio: {} ({} ms)",
+        outcome.audio_path.display(),
+        outcome.audio_duration_ms
+    );
     Ok(())
 }
 
@@ -932,25 +999,30 @@ fn cmd_speech_export(
         overwrite,
     };
     // guard 在整个导出期间持有（locks/<clip_id>.export），Drop 时释放。
-    let (outcome, _guard) =
-        speech::export_clip(request, chrono::Utc::now()).map_err(|error| {
-            if json {
-                fail_machine(speech_machine::export_error_response(&error));
-            }
-            anyhow::anyhow!("{}", error.message())
-        })?;
+    let (outcome, _guard) = speech::export_clip(request, chrono::Utc::now()).map_err(|error| {
+        if json {
+            fail_machine(speech_machine::export_error_response(&error));
+        }
+        anyhow::anyhow!("{}", error.message())
+    })?;
 
     if json {
         let document = serde_json::to_string(&speech_machine::SpeechExportResponse::new(&outcome))
             .unwrap_or_else(|error| {
-                fail_machine(MachineError::protocol_serialization_failed(error.to_string()))
+                fail_machine(MachineError::protocol_serialization_failed(
+                    error.to_string(),
+                ))
             });
         finish_machine(Ok(document));
         return Ok(());
     }
     println!(
         "Speech Clip 已{}",
-        if outcome.reused { "复用导出" } else { "导出" }
+        if outcome.reused {
+            "复用导出"
+        } else {
+            "导出"
+        }
     );
     println!("  Content: {}", outcome.content_kind.as_str());
     println!("  Clip ID: {}", outcome.clip_id);
@@ -1000,7 +1072,10 @@ fn cmd_speech_cache_status() -> anyhow::Result<()> {
             .to_string();
         println!(
             "  - {} status={} bytes={} in_use={}",
-            entry.clip_id, entry.status.as_str(), entry.used_bytes, in_use
+            entry.clip_id,
+            entry.status.as_str(),
+            entry.used_bytes,
+            in_use
         );
     }
     Ok(())
@@ -1032,8 +1107,7 @@ fn speech_history_clear_json() -> Result<String, MachineError> {
 
 fn cmd_speech_cache_clear() -> anyhow::Result<()> {
     let store = speech_store().map_err(speech_error)?;
-    let report =
-        speech::clear_speech_cache(&store, chrono::Utc::now()).map_err(speech_error)?;
+    let report = speech::clear_speech_cache(&store, chrono::Utc::now()).map_err(speech_error)?;
     println!("Speech Cache 已清理");
     println!("  Removed: {}", report.removed.len());
     println!("  Skipped (in use): {}", report.skipped.len());
@@ -1072,7 +1146,8 @@ fn speech_store() -> Result<SpeechStore, SpeechError> {
 
 fn speech_profile_show_json() -> Result<String, MachineError> {
     let store = speech_store().map_err(|error| speech_machine::error_response(&error))?;
-    let outcome = speech::show_profile(&store).map_err(|error| speech_machine::error_response(&error))?;
+    let outcome =
+        speech::show_profile(&store).map_err(|error| speech_machine::error_response(&error))?;
     serialize_profile_outcome(&outcome)
 }
 
@@ -1087,7 +1162,8 @@ fn speech_profile_set_json(draft: ProfileDraft) -> Result<String, MachineError> 
 
 fn speech_profile_reset_json() -> Result<String, MachineError> {
     let store = speech_store().map_err(|error| speech_machine::error_response(&error))?;
-    let outcome = speech::reset_profile(&store).map_err(|error| speech_machine::error_response(&error))?;
+    let outcome =
+        speech::reset_profile(&store).map_err(|error| speech_machine::error_response(&error))?;
     serialize_profile_outcome(&outcome)
 }
 
@@ -1097,7 +1173,8 @@ fn serialize_profile_outcome(outcome: &ProfileOutcome) -> Result<String, Machine
 }
 
 fn cmd_speech_profile_show() -> anyhow::Result<()> {
-    let outcome = speech::show_profile(&speech_store().map_err(speech_error)?).map_err(speech_error)?;
+    let outcome =
+        speech::show_profile(&speech_store().map_err(speech_error)?).map_err(speech_error)?;
     print_profile_outcome("Voice Profile", &outcome);
     Ok(())
 }
@@ -1105,13 +1182,8 @@ fn cmd_speech_profile_show() -> anyhow::Result<()> {
 fn cmd_speech_profile_set(draft: ProfileDraft) -> anyhow::Result<()> {
     let store = speech_store().map_err(speech_error)?;
     let source = CachedVoiceCatalogSource::new(store.clone());
-    let outcome = speech::set_profile(
-        &store,
-        &draft,
-        &source,
-        chrono::Utc::now(),
-    )
-    .map_err(speech_error)?;
+    let outcome =
+        speech::set_profile(&store, &draft, &source, chrono::Utc::now()).map_err(speech_error)?;
     print_profile_outcome("Voice Profile 已保存", &outcome);
     Ok(())
 }
@@ -1186,9 +1258,7 @@ fn print_voice_catalog(outcome: &speech::VoiceCatalogOutcome) {
     println!(
         "Voice Catalog ({}) — fetched at {}{}",
         catalog.provider,
-        catalog
-            .fetched_at
-            .to_rfc3339(),
+        catalog.fetched_at.to_rfc3339(),
         if outcome.stale { " [STALE]" } else { "" }
     );
     if catalog.voices.is_empty() {
@@ -1239,7 +1309,10 @@ fn print_profile_outcome(verb: &str, outcome: &ProfileOutcome) {
     println!("  Pitch: {}", profile.pitch);
     println!(
         "  Audio: {} {}Hz {}bps {}ch",
-        profile.audio.format, profile.audio.sample_rate, profile.audio.bitrate, profile.audio.channel
+        profile.audio.format,
+        profile.audio.sample_rate,
+        profile.audio.bitrate,
+        profile.audio.channel
     );
     println!("  Verification: {}", profile.verification.status.as_str());
     if let Some(verified_at) = profile.verification.verified_at.as_deref() {
@@ -1367,19 +1440,18 @@ fn cmd_export_json(
     });
     let export_format = ExportFormat::from(format);
     let llm_results = vec![None; annotations.len()];
-    let export_outcome =
-        apple_books_exporter::export_book_checked_with_speech(
-            &book,
-            &annotations,
-            &llm_results,
-            &output_dir,
-            export_format,
-            overwrite,
-        )
-        .map_err(|error| match error {
-            ExportWriteError::OutputFileExists(path) => MachineError::output_file_exists(&path),
-            ExportWriteError::Other(error) => MachineError::output_unwritable(error.to_string()),
-        })?;
+    let export_outcome = apple_books_exporter::export_book_checked_with_speech(
+        &book,
+        &annotations,
+        &llm_results,
+        &output_dir,
+        export_format,
+        overwrite,
+    )
+    .map_err(|error| match error {
+        ExportWriteError::OutputFileExists(path) => MachineError::output_file_exists(&path),
+        ExportWriteError::Other(error) => MachineError::output_unwritable(error.to_string()),
+    })?;
     serde_json::to_string(&ExportResponse::new(
         &book,
         annotations.len(),
