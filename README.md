@@ -110,7 +110,9 @@ binary，也不调用 AI。
 
 `src-tauri/` 与 `src/lib/` 的 Svelte 源码**保留**在 `main` 上，用于历史比较、迁移
 和回滚；Tauri GUI **不再是** `main` 的默认入口、默认构建目标或发布产物。正式 GUI
-迁移由独立的 `appkit` 分支负责。
+是同一仓库内的 AppKit 应用（见 [`appkit/README.md`](appkit/README.md)），它已在
+`main` 上并受 `appkit` CI job 门禁覆盖；删除 Tauri 源码是 Cutover Gate（issue #19）
+的独立步骤，尚未执行。
 
 **回滚锚点**：Tauri GUI 仍是默认入口的最后一个 `main` 提交是 `6bac3e5`
 （`feat: harden Apple Books agent data skill`），已打标签
@@ -136,6 +138,25 @@ npm run legacy-gui:tauri build   # 构建完整 Tauri 应用（需要 Rust + Nod
 `legacy-gui:dev` / `legacy-gui:build`，所以上面这条路径是自洽的。`package.json`
 顶层原有的 `dev` / `build` / `preview` / `tauri` 四个脚本已随 Headless Mainline
 一起移除——它们过去指向这个被废弃的 GUI。
+
+## AppKit GUI
+
+正式图形界面是同一仓库内的 AppKit 应用，位于 [`appkit/`](appkit/README.md)。它通过
+Rust CLI 的 machine JSON 协议读取 Apple Books 数据，不实现自己的数据库规则。
+
+```bash
+cd appkit
+swift build               # 编译
+swift test                # 47 项 XCTest
+./Scripts/verify-ui.sh    # 106 条 UI 断言回归探针
+```
+
+`appkit` CI job（`macos-14` / Swift 5.10）在每次 push 和 PR 上执行上面三条命令。
+
+运行需要先构建 canonical Rust CLI，并用 `APPLE_BOOKS_EXPORTER_BIN` 指向它
+（解析优先级：`APPLE_BOOKS_EXPORTER_BIN` 环境变量 → App 包内
+`Contents/Resources` → 可执行文件同级 → `PATH`）。二进制解析、能力边界和已知
+限制详见 [`appkit/README.md`](appkit/README.md)。
 
 ## Headless 能力矩阵
 
