@@ -77,6 +77,8 @@ Apple Books 的一条 Annotation 可以同时包含高亮原文和个人笔记�
 - 未来批量生成必须单独展示范围、片段数量和字符估算，并由用户显式启动；
 - 生成结果先成为应用管理的 Cached Speech Clip，用于试听和重复播放。缓存采用总容量预算和
   最近最少使用淘汰，并提供手动清理；默认预算为 1 GiB，且允许配置；
+- `speech cache status` 给出预算、占用、已接受/锁定/损坏 entry 与可回收孤立 version 的
+  只读视图；它不调用 provider，也不删除或修复任何东西；
 - 用户执行导出后，音频成为 Exported Speech Clip，不再受缓存淘汰影响；
 - 与书籍 Markdown 一起导出的音频复制到该书导出目录的 `assets/audio/`，Markdown 使用
   相对链接，不依赖当前机器的中央缓存路径；
@@ -207,8 +209,14 @@ Apple Books 的一条 Annotation 可以同时包含高亮原文和个人笔记�
   付费生成再发现无法落盘；
 - 新 Speech Cache Entry 接受后执行 LRU，使总量回到配置预算内；当前 entry 以及正在生成、
   播放、导出或持有锁的 entry 不参与淘汰；
+- 判定「正在使用」的入口是统一的占用检查：生成看跨进程 writer 锁，播放与导出看同一套
+  usage marker（`locks/<clip_id>.play` / `locks/<clip_id>.export`，由 `ClipUseGuard`
+  维护）。`speech play` 与 `speech export` 尚未实现，但清理与淘汰逻辑已经按 marker 实现，
+  这两个命令落地时通过同一个 guard 取用 marker，不需要再改清理语义；
+- 预算中真正可给缓存内容使用的部分是 `budget - 128 MiB` 安全余量；根目录不可写或
+  可用空间保不住该余量时，在 provider 调用前本地返回 `SPEECH_STORAGE_UNAVAILABLE`；
 - 手动 `speech cache clear` 同样跳过正在生成、播放、导出或持有锁的 entry，并在 Speech
-  Receipt 中报告 `skipped`，不终止正在进行的操作；
+  Receipt 中报告 `skipped` 与占用原因，不终止正在进行的操作；
 - 若没有足够的可淘汰空间，返回 `SPEECH_STORAGE_UNAVAILABLE`，保留所有已接受且正在使用的 entry。
 
 ### 验证边界

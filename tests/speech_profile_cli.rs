@@ -587,7 +587,10 @@ fn stored_config_is_an_allowlisted_non_secret_document() {
         .map(String::as_str)
         .collect();
     keys.sort_unstable();
-    assert_eq!(keys, ["api_key_env", "schema_version", "voice_profile"]);
+    assert_eq!(
+        keys,
+        ["api_key_env", "cache_budget_bytes", "schema_version", "voice_profile"]
+    );
 
     let mut profile_keys: Vec<&str> = config["voice_profile"]
         .as_object()

@@ -29,6 +29,9 @@ thiserror = "1.0"
 anyhow = "1.0"
 glob = "0.3"
 
+# POSIX statvfs：provider 调用前检查 Speech 根的可用空间与安全余量
+libc = "0.2"
+
 # Image generation for cards
 image = { version = "0.24", features = ["png"], default-features = true }
 rusttype = "0.9"

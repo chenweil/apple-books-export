@@ -339,9 +339,16 @@ apple-books-exporter speech cache clear [--json]
 apple-books-exporter speech history clear [--json]
 ```
 
-- `cache status` 返回 budget、used bytes、entry count、locked count 与 corrupt count；
+- `cache status` 返回 budget、used bytes、accepted entry count、absent/blocked entry count、
+  corrupt count、locked count 与 reclaimable orphan version count；`operation=cache_status`。
+  它是只读视图：零 provider 连接，不改写、不删除任何 clip 状态，也不猜测性修复；
+- corrupt 的定义是「状态或音频不可信」：`state.json` 读不出/解析失败、current pointer
+  指向的 version 缺失或校验不匹配、声明 corrupt。reclaimable orphan version 是
+  `versions/` 下没有被 current pointer 引用、且该 clip 当前没有 lock/reference 的
+  version 目录：只报告，等显式维护或 budget 压力下回收；
 - `cache clear` 删除可淘汰 Cached Speech Clip，跳过正在生成、播放、导出或持锁 entry；
-- receipt 返回 `removed` 与 `skipped`；
+- receipt 返回 `removed` 与 `skipped`，`skipped_reasons` 说明每个跳过 entry 的占用操作
+  （`generation` / `playback` / `export`）；
 - `history clear` 只删除 attempt history，不清缓存、unknown gate 或用户导出；
 - 正常维护自动删除超过 90 天的 attempt history。
 
@@ -487,6 +494,7 @@ provider 成功但 MP3 校验或本地提交失败时，不允许普通 `generat
 {
   "schema_version": 1,
   "api_key_env": "SENSEAUDIO_API_KEY",
+  "cache_budget_bytes": 1073741824,
   "voice_profile": {
     "provider": "senseaudio",
     "model": "sensenova-tts-2.0",
@@ -507,6 +515,8 @@ provider 成功但 MP3 校验或本地提交失败时，不允许普通 `generat
   不依赖浮点解析；JSON receipt 仍输出 `speed: 1.0` 这样的数值；
 - `api_key_env` 只保存环境变量名，密钥值永不落盘；
 - `verification_status=verified` 必须带 `verified_at`；`unverified` 不允许携带验证时间；
+- `cache_budget_bytes` 是 Cached Speech Clip 的总容量预算，默认 1 GiB（见 7.4），缺失时
+  回退默认值，因此旧配置文件仍然可读；0 视为非法配置；
 - 其他 issue 新增顶层或 Profile 字段时必须同时更新本节，保持 schema 与 `deny_unknown_fields`
   一致。
 
@@ -541,6 +551,9 @@ updated_at
 
 version 目录一旦可见就不可原地修改。崩溃可能留下未被 `state.json` 引用的 version；维护过程
 可以报告并在确认没有 lock/reference 后回收，但不得根据目录时间猜测 current version。
+回收只发生在确认没有 lock 也没有 reference 之后：`speech cache status` 只报告 orphan 数量，
+budget 维护在超预算时才回收它们（`speech play` / `speech export` 落地后由 `ClipUseGuard`
+维护 usage marker，占用中的 clip 既不被回收也不被淘汰）。
 
 ### 7.3 Attempt history
 
@@ -571,12 +584,20 @@ trace_id?
 
 ### 7.4 Cache budget
 
-- 默认 budget：1 GiB，可由非秘密 speech config 调整；
-- provider 调用前验证根目录可写并保留至少 128 MiB 安全余量；
-- 写入前先清理已过 budget 且可淘汰的旧 entry；
+- 默认 budget：1 GiB，可由非秘密 speech config（`cache_budget_bytes`）调整；
+- provider 调用前验证根目录可写并保留至少 128 MiB 安全余量；可用空间取
+  `statvfs` 报告的 `f_bavail * f_frsize`，并要求它至少不小于安全余量；
+- 预算中真正可给缓存内容使用的部分是 `budget - 128 MiB`；
+- 写入前先清理已过 budget 且可淘汰的旧 entry（含确认没有 lock/reference 的 orphan
+  version）；
 - 新 entry 接受后再执行 LRU，使总量回到 budget；
-- 当前 clip 以及生成、播放、导出或持锁 entry 不可淘汰；
-- 无法获得安全空间时，在 provider 调用前返回 `SPEECH_STORAGE_UNAVAILABLE`；
+- 当前 clip 以及生成、播放、导出或持锁 entry 不可淘汰；判定入口是统一的
+  「占用检查」：生成看跨进程 writer 锁，播放/导出看 `ClipUseGuard` 维护的
+  `locks/<clip_id>.play` / `locks/<clip_id>.export` marker；
+- LRU 的「使用」= `state.last_used_at`（生成、缓存命中、播放、导出都会刷新），
+  缺失时退回 `updated_at`；
+- 无法获得安全空间时，在 provider 调用前返回 `SPEECH_STORAGE_UNAVAILABLE`，已接受且
+  正在使用的 entry 全部保留；
 - 所有临时文件必须位于同一文件系统，保证 rename 原子性。
 
 ### 7.5 Export locator projection

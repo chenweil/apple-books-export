@@ -39,6 +39,222 @@ const LOCK_POLL_INTERVAL: Duration = Duration::from_millis(25);
 /// 超过这个年龄的锁文件被视为崩溃遗留，允许接管。
 const LOCK_STALE_AFTER: Duration = Duration::from_secs(120);
 
+/// Cached Speech Clip 的默认总容量预算：1 GiB（实施 spec 7.4，ADR 0007）。
+pub const DEFAULT_CACHE_BUDGET_BYTES: u64 = 1024 * 1024 * 1024;
+/// 调用 provider 前必须保留的磁盘安全余量：128 MiB（实施 spec 7.4）。
+pub const CACHE_SAFETY_MARGIN_BYTES: u64 = 128 * 1024 * 1024;
+/// 只允许**调高**安全余量的测试/运维注入变量（毫秒形式同 `APPLE_BOOKS_SPEECH_LOCK_TIMEOUT_MS`）。
+///
+/// 默认 128 MiB 已经写死在 [`CACHE_SAFETY_MARGIN_BYTES`]；这个变量让测试和运维可以在
+/// 小磁盘、临界卷上证明「空间不足就本地失败」的 guard 真的会触发，而不能把保护调弱。
+pub const MIN_FREE_BYTES_ENV: &str = "APPLE_BOOKS_SPEECH_MIN_FREE_BYTES";
+
+/// 预算里真正可以给缓存内容使用的部分：budget 减去安全余量。
+pub const fn usable_cache_budget(budget_bytes: u64) -> u64 {
+    budget_bytes.saturating_sub(CACHE_SAFETY_MARGIN_BYTES)
+}
+
+/// phonem 调用前要求保留的空闲空间。
+///
+/// 取默认安全余量与注入值的较大者：注入只能让要求更严格。
+pub fn required_free_bytes() -> u64 {
+    let injected = std::env::var(MIN_FREE_BYTES_ENV)
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u64>().ok())
+        .unwrap_or(0);
+    injected.max(CACHE_SAFETY_MARGIN_BYTES)
+}
+
+/// Speech 根所在文件系统报告的可用空间（bytes）；探测失败时返回 `None`。
+///
+/// 拿不到数字时不猜测失败：真正的写入仍然由原子提交和 `SPEECH_STORAGE_UNAVAILABLE`
+/// 兜底，这里只是「先付费再发现无法落盘」前的提前量。
+pub fn available_bytes(root: &Path) -> Option<u64> {
+    let path = std::ffi::CString::new(root.as_os_str().to_string_lossy().as_bytes()).ok()?;
+    let mut stats: libc::statvfs = unsafe { std::mem::zeroed() };
+    // statvfs 只读，不改文件系统状态；失败（例如路径不存在）时不阻塞调用方。
+    let status = unsafe { libc::statvfs(path.as_ptr(), &mut stats) };
+    if status != 0 {
+        return None;
+    }
+    let block = u64::try_from(stats.f_frsize).ok()?;
+    let available = u64::try_from(stats.f_bavail).ok()?;
+    block.checked_mul(available)
+}
+
+/// 一个 Cached Speech Clip 当前被哪种操作占用。
+///
+/// ADR 0007「存储预算与淘汰」：正在生成、播放、导出或持锁的 entry 不参与淘汰，手动
+/// `speech cache clear` 也同样跳过。`Generation` 由跨进程 writer 锁表达；`Playback`
+/// 与 `Export` 由显式 usage marker 表达——`speech play` / `speech export` 落地时通过
+/// [`ClipUseGuard`] 取用同一套 marker，guard 因此天然覆盖它们。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClipUseKind {
+    /// 正在生成（writer 锁）。
+    Generation,
+    /// 正在播放（usage marker）。
+    Playback,
+    /// 正在导出（usage marker）。
+    Export,
+}
+
+impl ClipUseKind {
+    /// 收据与人类输出里的稳定取值。
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Generation => "generation",
+            Self::Playback => "playback",
+            Self::Export => "export",
+        }
+    }
+
+    fn marker_suffix(self) -> &'static str {
+        match self {
+            Self::Generation => "lock",
+            Self::Playback => "play",
+            Self::Export => "export",
+        }
+    }
+}
+
+/// 播放/导出占用一个 Cached Speech Clip 的跨进程凭证；Drop 时释放。
+///
+/// `speech play` 与 `speech export`（尚未实现）必须持有它：LRU 维护和
+/// `speech cache clear` 因此不会在音频被读取时抽走 entry。
+#[derive(Debug)]
+pub struct ClipUseGuard {
+    path: PathBuf,
+}
+
+impl ClipUseGuard {
+    /// 占用指定 clip；`kind` 只能是 [`ClipUseKind::Playback`] 或 [`ClipUseKind::Export`]。
+    pub fn acquire(
+        cache: &ClipCache,
+        clip_id: &str,
+        kind: ClipUseKind,
+        now: DateTime<Utc>,
+    ) -> Result<Self, ClipLockError> {
+        if matches!(kind, ClipUseKind::Generation) {
+            // 生成必须走 writer 锁：single flight 才不会被 marker 旁路。
+            return Err(ClipLockError::Unavailable(
+                cache.locks_dir(),
+                std::io::Error::other("generation must use the writer lock"),
+            ));
+        }
+        let path = cache.usage_marker_path(clip_id, kind)?;
+        if fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .is_err()
+        {
+            // marker 已经存在（或写入目录失败）：占不到就不放行，绝不覆盖别人的凭证。
+            if cache.usage_marker_is_stale(&path) {
+                let _ = fs::remove_file(&path);
+            } else {
+                return Err(ClipLockError::InProgress);
+            }
+        }
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .map_err(|error| ClipLockError::Unavailable(path.clone(), error))?;
+        let body = format!(
+            "{{\"kind\":\"{}\",\"acquired_at\":\"{}\"}}\n",
+            kind.as_str(),
+            now.to_rfc3339()
+        );
+        file.write_all(body.as_bytes())
+            .map_err(|error| ClipLockError::Unavailable(path.clone(), error))?;
+        let _ = file.sync_all();
+        Ok(Self { path })
+    }
+}
+
+impl Drop for ClipUseGuard {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
+/// `speech cache status` 的本地视图：预算、占用与异常 entry。
+///
+/// 只读，不调用 provider，也不改写任何 clip 状态（实施 spec 5.7）。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CacheStatusReport {
+    /// 配置的总预算。
+    pub budget_bytes: u64,
+    /// 调用 provider 前必须保留的安全余量。
+    pub safety_margin_bytes: u64,
+    /// 预算中可给缓存内容使用的部分（budget - margin）。
+    pub usable_budget_bytes: u64,
+    /// 当前缓存占用（`clips/` 下所有文件的 apparent 大小之和）。
+    pub used_bytes: u64,
+    /// 已接受 entry 数：current pointer 指向一个通过校验的不可变 version。
+    pub accepted_entries: usize,
+    /// 没有有效音频的 entry 数（absent / unknown gate 等）。
+    pub absent_entries: usize,
+    /// 被 generation gate 阻塞的 entry 数。
+    pub blocked_entries: usize,
+    /// 状态不可信或音频校验失败的 entry 数。
+    pub corrupt_entries: usize,
+    /// 正在生成/播放/导出或持锁的 entry 数。
+    pub locked_entries: usize,
+    /// 可回收的孤立 version 目录数（没有 lock、没有被 current pointer 引用）。
+    pub reclaimable_versions: usize,
+    /// 每个 clip 的明细，按 clip ID 排序，便于稳定输出。
+    pub entries: Vec<CacheStatusEntry>,
+}
+
+/// 单个 clip 的状态明细。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CacheStatusEntry {
+    /// 完整 clip ID。
+    pub clip_id: String,
+    /// `ready` / `absent` / `corrupt`。
+    pub status: ClipCacheStatus,
+    /// 是否已接受：current pointer 指向通过校验的 version。
+    pub accepted: bool,
+    /// clip 级 generation gate（unknown / provider-succeeded-no-artifact）。
+    pub generation_blocked: bool,
+    /// 占用该 entry 的操作，没有占用时为 `null`。
+    pub in_use: Option<ClipUseKind>,
+    /// 该 clip 占用的字节。
+    pub used_bytes: u64,
+    /// 该 clip 下未被 current pointer 引用的 version 目录数。
+    pub reclaimable_versions: usize,
+    /// 最近一次被使用（生成/播放/导出/复用）的时间。
+    pub last_used_at: Option<String>,
+}
+
+/// LRU / budget 维护的报告。
+///
+/// 只删除「没有 lock/reference 且可淘汰」的内容：当前 clip、正在生成、播放、导出或
+/// 持锁的 entry 一律保留，并在 `skipped` 里说明原因。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BudgetMaintenanceReport {
+    /// 配置的总预算。
+    pub budget_bytes: u64,
+    /// 安全余量。
+    pub safety_margin_bytes: u64,
+    /// 可给缓存内容使用的部分。
+    pub usable_budget_bytes: u64,
+    /// 维护前占用。
+    pub used_bytes_before: u64,
+    /// 维护后占用。
+    pub used_bytes_after: u64,
+    /// 被 LRU 淘汰的 clip ID。
+    pub evicted: Vec<String>,
+    /// 因正在生成/播放/导出或持锁而保留的 clip ID。
+    pub skipped: Vec<String>,
+    /// 被回收的孤立 version 目录数。
+    pub reclaimed_versions: usize,
+    /// 回收后是否仍然保住安全余量（budget - margin）。
+    pub safety_margin_preserved: bool,
+}
+
 /// clip 缓存读不到、写不了或状态不可信。
 #[derive(Debug)]
 pub enum ClipCacheError {
@@ -137,6 +353,12 @@ pub struct ClipState {
     pub generation_blocked: bool,
     /// 最近一次状态变更时间（RFC 3339）。
     pub updated_at: String,
+    /// 最近一次被使用的时间（生成、缓存命中、播放、导出）。
+    ///
+    /// LRU 的「使用」定义在 ADR 0007「存储预算与淘汰」：只有真的被读走的 entry 才算
+    /// 最近使用过。缺失时退回 `updated_at`，因此旧 state.json 不需要迁移即可排序。
+    #[serde(default)]
+    pub last_used_at: Option<String>,
 }
 
 /// clip 的缓存状态。
@@ -324,10 +546,21 @@ pub struct ReadyClip {
 pub struct CacheClearReport {
     /// 被删除的 clip ID（完整 sha256 hex）。
     pub removed: Vec<String>,
-    /// 因持锁（正在生成/播放/导出）而跳过的 clip ID。
+    /// 因正在生成/播放/导出或持锁而跳过的 clip ID。
     pub skipped: Vec<String>,
+    /// 每个被跳过的 clip 的占用原因；与 `skipped` 同序。
+    pub skipped_reasons: Vec<ClipUseSkip>,
     /// 被显式清除的 generation gate 数量。
     pub cleared_generation_gates: usize,
+}
+
+/// 被跳过（保留）的 entry 与占用它的操作。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClipUseSkip {
+    /// 完整 clip ID。
+    pub clip_id: String,
+    /// 占用该 entry 的操作。
+    pub in_use: ClipUseKind,
 }
 
 /// `speech history clear` 的报告。
@@ -793,10 +1026,328 @@ impl ClipCache {
         self.store.root().join("attempts")
     }
 
+    /// 配置的 Cached Speech Clip 总预算。
+    pub fn cache_budget_bytes(&self) -> Result<u64, ClipCacheError> {
+        self.store
+            .load_config()
+            .map(|config| config.cache_budget_bytes)
+            .map_err(store_error)
+    }
+
+    /// 播放/导出 usage marker 的路径（`locks/<clip_id>.play` / `.export`）。
+    pub fn usage_marker_path(&self, clip_id: &str, kind: ClipUseKind) -> Result<PathBuf, ClipCacheError> {
+        Ok(self
+            .locks_dir()
+            .join(format!("{clip_id}.{}", kind.marker_suffix())))
+    }
+
+    /// marker 文件年龄超过阈值即视为崩溃遗留。
+    fn usage_marker_is_stale(&self, path: &Path) -> bool {
+        is_stale_lock(path)
+    }
+
+    /// 该 clip 是否仍被显式占用（播放/导出 marker）。
+    fn usage_marker(&self, clip_id: &str, kind: ClipUseKind) -> Option<PathBuf> {
+        let path = self.usage_marker_path(clip_id, kind).ok()?;
+        if !path.exists() {
+            return None;
+        }
+        if self.usage_marker_is_stale(&path) {
+            // 崩溃遗留的凭证不永久钉住 entry：清掉后按未占用处理。
+            let _ = fs::remove_file(&path);
+            return None;
+        }
+        Some(path)
+    }
+
+    /// 该 entry 是否正在被生成、播放或导出（含持锁）。
+    ///
+    /// 生成由跨进程 writer 锁表达；播放与导出由 [`ClipUseGuard`] 维护的 usage marker
+    /// 表达。`speech play` / `speech export` 尚未实现：它们落地时通过
+    /// [`ClipUseGuard`] 取用同一套 marker，这个 guard 因此天然覆盖这两种操作，
+    /// 现在也已经被注入 marker 的测试直接证明（见 `clear_or_eviction_skips_*`）。
+    pub fn clip_in_use(&self, clip_id: &str) -> Option<ClipUseKind> {
+        match ClipLock::acquire_with_timeout(self, clip_id, Utc::now(), Duration::ZERO) {
+            // 拿不到 writer 锁：同一个 clip 正在生成（或别的进程持锁）。
+            Err(ClipLockError::InProgress) => Some(ClipUseKind::Generation),
+            Err(ClipLockError::Unavailable(..)) => None,
+            // 锁在 Drop 时立刻释放；这里只回答「现在有没有人占着」。
+            Ok(_lock) => self
+                .usage_marker(clip_id, ClipUseKind::Export)
+                .map(|_| ClipUseKind::Export)
+                .or_else(|| self.usage_marker(clip_id, ClipUseKind::Playback).map(|_| ClipUseKind::Playback)),
+        }
+    }
+
+    /// 记录一次「使用」：缓存命中、播放、导出都算最近使用过（LRU 的 U）。
+    ///
+    /// 尽力而为：写不进 `state.json` 不能取消一次已经成功的读，排序退回 `updated_at`。
+    pub fn touch_clip(&self, clip_id: &str, now: DateTime<Utc>) {
+        let Ok(Some(mut state)) = self.load_state(clip_id) else {
+            return;
+        };
+        let stamp = now.to_rfc3339();
+        if state.last_used_at.as_deref() == Some(stamp.as_str()) {
+            return;
+        }
+        state.last_used_at = Some(stamp);
+        let _ = self.save_state(&state);
+    }
+
+    /// LRU 排序键：优先 `last_used_at`，缺失退回 `updated_at`。
+    fn recency_key(state: &ClipState) -> &str {
+        state
+            .last_used_at
+            .as_deref()
+            .unwrap_or(state.updated_at.as_str())
+    }
+
+    /// 按 clip ID 排序的所有 clip 目录名；不猜测、不删除非 sha256 的残留。
+    fn sorted_clip_ids(&self) -> Result<Vec<String>, ClipCacheError> {
+        let clips_dir = self.clips_dir();
+        let entries = match fs::read_dir(&clips_dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(ClipCacheError::unavailable(&clips_dir, error)),
+        };
+        let mut clip_ids = Vec::new();
+        for entry in entries {
+            let entry = entry.map_err(|error| ClipCacheError::unavailable(&clips_dir, error))?;
+            if !entry.path().is_dir() {
+                continue;
+            }
+            let clip_id = entry.file_name().to_string_lossy().into_owned();
+            if is_clip_id(&clip_id) {
+                clip_ids.push(clip_id);
+            }
+        }
+        clip_ids.sort();
+        Ok(clip_ids)
+    }
+
+    /// 该 clip 占用的字节（`state.json` + 所有 version 的 apparent 大小）。
+    pub fn clip_used_bytes(&self, clip_id: &str) -> Result<u64, ClipCacheError> {
+        Ok(dir_size(&self.clip_dir(clip_id)?))
+    }
+
+    /// `speech cache status`：本地 budget / 占用 / 异常 entry 视图。
+    ///
+    /// 只读：不调用 provider，不改写任何 clip 状态，也不删除任何东西。当前不可信的
+    /// entry（state 读不出、音频校验失败）和未被 current pointer 引用的 version 目录
+    /// 都只报告，不做猜测性修复（实施 spec 5.7 / 7.2）。
+    pub fn cache_status(&self) -> Result<CacheStatusReport, ClipCacheError> {
+        let budget_bytes = self.cache_budget_bytes()?;
+        let mut report = CacheStatusReport {
+            budget_bytes,
+            safety_margin_bytes: CACHE_SAFETY_MARGIN_BYTES,
+            usable_budget_bytes: usable_cache_budget(budget_bytes),
+            ..CacheStatusReport::default()
+        };
+        for clip_id in self.sorted_clip_ids()? {
+            let clip_dir = self.clip_dir(&clip_id)?;
+            let used_bytes = dir_size(&clip_dir);
+            let in_use = self.clip_in_use(&clip_id);
+            let referenced = self
+                .load_state(&clip_id)
+                .ok()
+                .flatten()
+                .and_then(|state| state.current_audio_sha256);
+            // 孤立 version 只在确认没有 lock / reference 后才可回收：生成中或持锁的 clip
+            // 不计入 reclaimable，避免把正在放置的新 version 当成垃圾。
+            let orphans = version_dirs(&clip_dir)
+                .into_iter()
+                .filter(|sha| Some(sha) != referenced.as_ref())
+                .count();
+            let reclaimable_versions = if in_use.is_none() { orphans } else { 0 };
+
+            let (status, accepted, blocked) = match self.load_ready_clip(&clip_id) {
+                Ok(Some(_)) => (ClipCacheStatus::Ready, true, false),
+                Ok(None) => match self.load_state(&clip_id)? {
+                    Some(state) => {
+                        let status = if state.current_cache_status == ClipCacheStatus::Corrupt {
+                            ClipCacheStatus::Corrupt
+                        } else {
+                            ClipCacheStatus::Absent
+                        };
+                        (status, false, state.generation_blocked)
+                    }
+                    // clip 目录里没有 current pointer：既不是缓存也不是 gate，只能报告。
+                    None => (ClipCacheStatus::Corrupt, false, false),
+                },
+                // 音频/metadata 与 pointer 矛盾：报 corrupt，不猜测、不调用 provider。
+                Err(_) => (ClipCacheStatus::Corrupt, false, false),
+            };
+
+            report.used_bytes += used_bytes;
+            match status {
+                ClipCacheStatus::Ready if accepted => report.accepted_entries += 1,
+                ClipCacheStatus::Corrupt => report.corrupt_entries += 1,
+                _ => report.absent_entries += 1,
+            }
+            if blocked {
+                report.blocked_entries += 1;
+            }
+            if in_use.is_some() {
+                report.locked_entries += 1;
+            }
+            report.reclaimable_versions += reclaimable_versions;
+            let last_used_at = self
+                .load_state(&clip_id)
+                .ok()
+                .flatten()
+                .and_then(|state| state.last_used_at);
+            report.entries.push(CacheStatusEntry {
+                clip_id,
+                status,
+                accepted,
+                generation_blocked: blocked,
+                in_use,
+                used_bytes,
+                reclaimable_versions,
+                last_used_at,
+            });
+        }
+        Ok(report)
+    }
+
+    /// LRU / budget 维护：先把总量压回 `usable_budget`，再报告是否保住安全余量。
+    ///
+    /// `keep` 是调用方**已经持锁**的 clip（例如当前正在生成的 clip）：它们与正在播放、
+    /// 导出或持锁的 entry 一样不可淘汰。可淘汰的候选按最近最少使用排序；没有可淘汰
+    /// 候选时停止并如实报告 `safety_margin_preserved = false`，由调用方决定是否本地失败
+    /// （provider 调用前必须失败，不能先计费再发现无处落盘）。
+    ///
+    /// 只有确认没有 lock/reference 的 version 目录会被回收（实施 spec 7.2）。
+    pub fn maintain_budget(
+        &self,
+        keep: &[&str],
+        now: DateTime<Utc>,
+    ) -> Result<BudgetMaintenanceReport, ClipCacheError> {
+        let budget_bytes = self.cache_budget_bytes()?;
+        let usable_budget_bytes = usable_cache_budget(budget_bytes);
+        let mut report = BudgetMaintenanceReport {
+            budget_bytes,
+            safety_margin_bytes: CACHE_SAFETY_MARGIN_BYTES,
+            usable_budget_bytes,
+            ..BudgetMaintenanceReport::default()
+        };
+
+        /// 一个可淘汰候选：占用字节 + LRU 排序键。
+        struct Candidate {
+            clip_id: String,
+            used_bytes: u64,
+            recency: String,
+        }
+        let mut candidates: Vec<Candidate> = Vec::new();
+        let mut in_use: Vec<(String, ClipUseKind)> = Vec::new();
+        for clip_id in self.sorted_clip_ids()? {
+            let clip_dir = self.clip_dir(&clip_id)?;
+            let size = dir_size(&clip_dir);
+            if keep.contains(&clip_id.as_str()) {
+                // 调用方持有该 clip 的 writer 锁：它自己不会淘汰自己，但它已经提交的
+                // 孤立 version 可以安全回收（pointer 提交成功后才会有孤立版本）。
+                report.reclaimed_versions += self.reclaim_unreferenced_versions(&clip_id)?;
+                continue;
+            }
+            match self.clip_in_use(&clip_id) {
+                Some(kind) => in_use.push((clip_id, kind)),
+                None => {
+                    report.reclaimed_versions += self.reclaim_unreferenced_versions(&clip_id)?;
+                    let recency = self
+                        .load_state(&clip_id)
+                        .ok()
+                        .flatten()
+                        .map(|state| Self::recency_key(&state).to_string())
+                        .unwrap_or_default();
+                    candidates.push(Candidate {
+                        clip_id,
+                        used_bytes: size,
+                        recency,
+                    });
+                }
+            }
+        }
+        let mut used_bytes = self.total_used_bytes()?;
+        report.used_bytes_before = used_bytes;
+
+        while used_bytes > usable_budget_bytes {
+            // 最近最少使用优先淘汰；排序键相同时按 clip ID 决定，保证输出稳定。
+            let Some(next) = candidates
+                .iter()
+                .enumerate()
+                .min_by(|(_, left), (_, right)| {
+                    left.recency
+                        .cmp(&right.recency)
+                        .then_with(|| left.clip_id.cmp(&right.clip_id))
+                })
+                .map(|(index, _)| index)
+            else {
+                break;
+            };
+            let candidate = candidates.swap_remove(next);
+            let clip_dir = self.clip_dir(&candidate.clip_id)?;
+            fs::remove_dir_all(&clip_dir)
+                .map_err(|error| ClipCacheError::unavailable(&clip_dir, error))?;
+            used_bytes = used_bytes.saturating_sub(candidate.used_bytes);
+            report.evicted.push(candidate.clip_id);
+        }
+
+        report.used_bytes_after = used_bytes;
+        report.skipped = in_use.into_iter().map(|(clip_id, _)| clip_id).collect();
+        report.safety_margin_preserved =
+            used_bytes.saturating_add(CACHE_SAFETY_MARGIN_BYTES) <= budget_bytes;
+        let _ = now;
+        Ok(report)
+    }
+
+    /// `clips/` 下所有文件的 apparent 大小之和。
+    fn total_used_bytes(&self) -> Result<u64, ClipCacheError> {
+        let clips_dir = self.clips_dir();
+        match fs::read_dir(&clips_dir) {
+            Ok(entries) => {
+                let mut total = 0;
+                for entry in entries {
+                    let entry =
+                        entry.map_err(|error| ClipCacheError::unavailable(&clips_dir, error))?;
+                    if entry.path().is_dir() {
+                        total += dir_size(&entry.path());
+                    }
+                }
+                Ok(total)
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(0),
+            Err(error) => Err(ClipCacheError::unavailable(&clips_dir, error)),
+        }
+    }
+
+    /// 回收没有被 current pointer 引用的 version 目录。
+    ///
+    /// 只按「没有 reference」判断，调用方负责先确认没有 lock（或自己持锁）：生成中的
+    /// clip 会先完成 `state.json` 切换，孤立 version 只可能出现在 pointer 提交成功之后
+    /// （实施 spec 7.2「旧 version 只在 pointer 提交成功后进入垃圾回收」）。
+    fn reclaim_unreferenced_versions(&self, clip_id: &str) -> Result<usize, ClipCacheError> {
+        let clip_dir = self.clip_dir(clip_id)?;
+        let referenced = self
+            .load_state(clip_id)?
+            .and_then(|state| state.current_audio_sha256);
+        let mut reclaimed = 0;
+        for sha in version_dirs(&clip_dir) {
+            if Some(&sha) == referenced.as_ref() {
+                continue;
+            }
+            let version_dir = clip_dir.join("versions").join(&sha);
+            fs::remove_dir_all(&version_dir)
+                .map_err(|error| ClipCacheError::unavailable(&version_dir, error))?;
+            reclaimed += 1;
+        }
+        Ok(reclaimed)
+    }
+
     /// `speech cache clear`：删除可淘汰 clip，显式清除无有效音频的阻塞门。
     ///
-    /// 每个 clip 先用零超时尝试同一把 writer 锁：拿不到锁说明该 entry 正在生成、播放、
-    /// 导出或持锁，跳过并计入 `skipped`；拿到锁才删除，因此并发生成不会被清掉。
+    /// 每个 clip 先问 [`ClipCache::clip_in_use`]：正在生成（writer 锁）、播放或导出
+    /// （usage marker）的 entry 跳过并计入 `skipped`，不终止正在进行的操作；没有被占用
+    /// 才删除，因此并发生成不会被清掉（ADR 0007「存储预算与淘汰」）。
     pub fn clear_cache(&self, now: DateTime<Utc>) -> Result<CacheClearReport, ClipCacheError> {
         let mut report = CacheClearReport::default();
         let clips_dir = self.clips_dir();
@@ -820,8 +1371,18 @@ impl ClipCache {
         clip_ids.sort();
 
         for clip_id in clip_ids {
+            // 先问占用：正在生成（writer 锁）、播放或导出（usage marker）的 entry 一律
+            // 跳过，不终止正在进行的操作（ADR 0007「存储预算与淘汰」）。
+            if let Some(kind) = self.clip_in_use(&clip_id) {
+                report.skipped.push(clip_id.clone());
+                report.skipped_reasons.push(ClipUseSkip {
+                    clip_id,
+                    in_use: kind,
+                });
+                continue;
+            }
+            // 没人占用时再取 writer 锁：删除期间并发生成会被锁挡住而不是被删掉。
             match ClipLock::acquire_with_timeout(self, &clip_id, now, Duration::ZERO) {
-                // 持锁 entry 不可淘汰：锁在 Drop 时释放，不留下孤儿锁文件。
                 Ok(_lock) => {
                     let clip_dir = self.clip_dir(&clip_id)?;
                     let blocked = self
@@ -836,7 +1397,13 @@ impl ClipCache {
                     }
                     report.removed.push(clip_id);
                 }
-                Err(ClipLockError::InProgress) => report.skipped.push(clip_id),
+                Err(ClipLockError::InProgress) => {
+                    report.skipped.push(clip_id.clone());
+                    report.skipped_reasons.push(ClipUseSkip {
+                        clip_id,
+                        in_use: ClipUseKind::Generation,
+                    });
+                }
                 Err(ClipLockError::Unavailable(path, error)) => {
                     return Err(ClipCacheError::unavailable(&path, error))
                 }
@@ -989,6 +1556,60 @@ impl Drop for ClipLock {
     }
 }
 
+/// 把 store 错误收敩成 clip 缓存错误；不引入新的错误码，也不泄漏秘密。
+fn store_error(error: crate::speech::store::SpeechStoreError) -> ClipCacheError {
+    match error {
+        crate::speech::store::SpeechStoreError::Unavailable { path, message } => {
+            ClipCacheError::Unavailable { path, message }
+        }
+        crate::speech::store::SpeechStoreError::InvalidConfig(_) => ClipCacheError::Corrupt {
+            path: PathBuf::new(),
+            reason: "the speech configuration is not a valid Voice Profile",
+        },
+        crate::speech::store::SpeechStoreError::UnsupportedSchemaVersion(version) => {
+            ClipCacheError::UnsupportedSchemaVersion {
+                path: PathBuf::new(),
+                version,
+            }
+        }
+    }
+}
+
+/// 一个 clip 目录下所有 version 目录名（audio sha256）；顺序不保证。
+fn version_dirs(clip_dir: &Path) -> Vec<String> {
+    let versions_dir = clip_dir.join("versions");
+    let Ok(entries) = fs::read_dir(&versions_dir) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter(|entry| entry.path().is_dir())
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect()
+}
+
+/// 目录树的 apparent 字节数（`metadata.len()` 之和）。
+///
+/// 用 apparent 大小而不是磁盘块：LRU 比较的是「占用了多少预算」，稀疏文件也如实计入。
+fn dir_size(root: &Path) -> u64 {
+    fn walk(directory: &Path, total: &mut u64) {
+        let Ok(entries) = fs::read_dir(directory) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, total);
+            } else if let Ok(metadata) = fs::metadata(&path) {
+                *total += metadata.len();
+            }
+        }
+    }
+    let mut total = 0;
+    walk(root, &mut total);
+    total
+}
+
 /// 锁文件年龄超过阈值即视为崩溃遗留。
 fn is_stale_lock(path: &Path) -> bool {
     let Ok(metadata) = fs::metadata(path) else {
@@ -1133,6 +1754,7 @@ mod tests {
             latest_error_code: None,
             generation_blocked: false,
             updated_at: now().to_rfc3339(),
+            last_used_at: None,
         }
     }
 

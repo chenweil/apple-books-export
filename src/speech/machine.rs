@@ -325,6 +325,69 @@ impl SpeechGenerateReceipt {
     }
 }
 
+/// `speech cache status` 的成功响应。
+#[derive(Debug, Serialize)]
+pub struct SpeechCacheStatusResponse {
+    /// 与现有 Machine JSON 协议一致的 schema 版本。
+    pub schema_version: u32,
+    /// 结构化收据。
+    pub receipt: SpeechCacheStatusReceipt,
+}
+
+/// `speech cache status` 的收据：预算、占用与异常 entry。
+///
+/// 不含原文、密钥或音频字节；`in_use` 说明每个 entry 正被哪种操作占用。
+#[derive(Debug, Serialize)]
+pub struct SpeechCacheStatusReceipt {
+    /// 稳定操作名。
+    pub operation: &'static str,
+    /// 配置的总预算（bytes）。
+    pub budget_bytes: u64,
+    /// 调用 provider 前必须保留的安全余量（bytes）。
+    pub safety_margin_bytes: u64,
+    /// 预算中可给缓存内容使用的部分（budget - margin）。
+    pub usable_budget_bytes: u64,
+    /// 当前缓存占用（bytes）。
+    pub used_bytes: u64,
+    /// 已接受 entry 数。
+    pub accepted_entries: usize,
+    /// 没有有效音频的 entry 数。
+    pub absent_entries: usize,
+    /// 被 generation gate 阻塞的 entry 数。
+    pub blocked_entries: usize,
+    /// 状态不可信或音频校验失败的 entry 数。
+    pub corrupt_entries: usize,
+    /// 正在生成/播放/导出或持锁的 entry 数。
+    pub locked_entries: usize,
+    /// 可回收的孤立 version 目录数。
+    pub reclaimable_versions: usize,
+    /// 每个 clip 的明细。
+    pub entries: Vec<crate::speech::CacheStatusEntry>,
+    /// 结构化 warning。
+    pub warnings: Vec<SpeechWarning>,
+}
+
+impl SpeechCacheStatusReceipt {
+    /// 从只读报告构造收据；不调用 provider，不删除任何内容。
+    pub fn new(report: &crate::speech::CacheStatusReport) -> Self {
+        Self {
+            operation: "cache_status",
+            budget_bytes: report.budget_bytes,
+            safety_margin_bytes: report.safety_margin_bytes,
+            usable_budget_bytes: report.usable_budget_bytes,
+            used_bytes: report.used_bytes,
+            accepted_entries: report.accepted_entries,
+            absent_entries: report.absent_entries,
+            blocked_entries: report.blocked_entries,
+            corrupt_entries: report.corrupt_entries,
+            locked_entries: report.locked_entries,
+            reclaimable_versions: report.reclaimable_versions,
+            entries: report.entries.clone(),
+            warnings: Vec::new(),
+        }
+    }
+}
+
 /// `speech cache clear` 的成功响应。
 #[derive(Debug, Serialize)]
 pub struct SpeechCacheClearResponse {
@@ -341,8 +404,10 @@ pub struct SpeechCacheClearReceipt {
     pub operation: &'static str,
     /// 被删除的 clip ID。
     pub removed: Vec<String>,
-    /// 因持锁（正在生成/播放/导出）而跳过的 clip ID。
+    /// 因正在生成/播放/导出或持锁而跳过的 clip ID。
     pub skipped: Vec<String>,
+    /// 每个被跳过的 clip 的占用原因；与 `skipped` 同序。
+    pub skipped_reasons: Vec<crate::speech::ClipUseSkip>,
     /// 被显式清除的 generation gate 数量。
     pub cleared_generation_gates: usize,
     /// 结构化 warning。
@@ -356,6 +421,7 @@ impl SpeechCacheClearReceipt {
             operation: "cache_clear",
             removed: report.removed.clone(),
             skipped: report.skipped.clone(),
+            skipped_reasons: report.skipped_reasons.clone(),
             cleared_generation_gates: report.cleared_generation_gates,
             warnings: Vec::new(),
         }

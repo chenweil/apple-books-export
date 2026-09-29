@@ -2732,3 +2732,211 @@ fn expired_attempt_history_is_pruned_automatically_without_touching_the_gate_or_
     assert_eq!(cached["receipt"]["source"], "cache");
     assert_eq!(replay.finish().len(), 0);
 }
+
+/// 生成两个 clip 并返回它们的 clip ID（human 参数即可，身份由 clip_id 收据给出）。
+fn generate_two_cached_clips(fixture: &Fixture) -> (String, String) {
+    let provider = provider_with_catalog_and_synthesis("trace-status-1");
+    let first = succeeded(&fixture.run_with(
+        &[
+            "speech", "generate", "--asset-id", "book-1", "--annotation-id", "annotation-41",
+            "--content", "highlight", "--json",
+        ],
+        &provider,
+        Some(TEST_KEY),
+    ));
+    assert_eq!(MockProvider::synthesis_count(&provider.finish()), 1);
+    let other = provider_with_catalog_and_synthesis("trace-status-2");
+    let second = succeeded(&fixture.run_with(
+        &[
+            "speech", "generate", "--asset-id", "book-1", "--annotation-id", "annotation-42",
+            "--content", "highlight", "--json",
+        ],
+        &other,
+        Some(TEST_KEY),
+    ));
+    assert_eq!(MockProvider::synthesis_count(&other.finish()), 1);
+    (
+        first["receipt"]["clip_id"].as_str().expect("clip id").to_string(),
+        second["receipt"]["clip_id"].as_str().expect("clip id").to_string(),
+    )
+}
+
+/// `speech cache status`：预算、占用、已接受、锁定 entry 与零 provider 连接。
+#[test]
+fn cache_status_reports_budget_usage_and_in_use_entries() {
+    let fixture = Fixture::new();
+    let (first, second) = generate_two_cached_clips(&fixture);
+    // 占住第一个 clip 的 writer 锁：它必须被算成「占用中」而不是「已接受」之外的新类别。
+    fixture.occupy_lock(&first);
+
+    let provider = provider_with_catalog_and_synthesis("trace-status-3");
+    let value = succeeded(&fixture.run_with(&["speech", "cache", "status", "--json"], &provider, Some(TEST_KEY)));
+    let records = provider.finish();
+
+    assert_eq!(
+        records.len(),
+        0,
+        "cache status is read-only and must not contact the provider"
+    );
+    assert_eq!(value["schema_version"], 1);
+    let receipt = &value["receipt"];
+    assert_eq!(receipt["operation"], "cache_status");
+    assert_eq!(
+        receipt["budget_bytes"],
+        1024_u64 * 1024 * 1024,
+        "the default cache budget is 1 GiB"
+    );
+    assert_eq!(receipt["safety_margin_bytes"], 128_u64 * 1024 * 1024);
+    assert_eq!(
+        receipt["usable_budget_bytes"],
+        1024_u64 * 1024 * 1024 - 128 * 1024 * 1024,
+        "the usable budget is the budget minus the safety margin"
+    );
+    assert!(
+        receipt["used_bytes"].as_u64().expect("used bytes") > 0,
+        "two cached clips must occupy bytes"
+    );
+    assert_eq!(receipt["accepted_entries"], 2);
+    assert_eq!(receipt["absent_entries"], 0);
+    assert_eq!(receipt["corrupt_entries"], 0);
+    assert_eq!(receipt["blocked_entries"], 0);
+    assert_eq!(receipt["locked_entries"], 1);
+    assert_eq!(receipt["reclaimable_versions"], 0);
+    let entries = receipt["entries"].as_array().expect("entries");
+    assert_eq!(entries.len(), 2);
+    let locked = entries
+        .iter()
+        .find(|entry| entry["clip_id"] == first.as_str())
+        .expect("first clip entry");
+    assert_eq!(locked["status"], "ready");
+    assert_eq!(locked["accepted"], true);
+    assert_eq!(locked["in_use"], "generation");
+    let other = entries
+        .iter()
+        .find(|entry| entry["clip_id"] == second.as_str())
+        .expect("second clip entry");
+    assert_eq!(other["in_use"], Value::Null);
+
+    // 人类输出同样给出这些数字。
+    let human_provider = provider_with_catalog_and_synthesis("trace-status-4");
+    let human = fixture.run_with(&["speech", "cache", "status"], &human_provider, Some(TEST_KEY));
+    let stdout = String::from_utf8_lossy(&human.stdout);
+    assert!(human.status.success(), "{stdout}");
+    assert!(stdout.contains("Speech Cache 状态"), "{stdout}");
+    assert!(stdout.contains("已接受 entry: 2"), "{stdout}");
+    assert!(stdout.contains("占用中的 entry: 1"), "{stdout}");
+    assert!(stdout.contains("损坏 entry: 0"), "{stdout}");
+    assert_eq!(human_provider.finish().len(), 0);
+
+    fixture.release_lock(&first);
+}
+
+/// 损坏 entry 与未被引用的 version 只被报告：没有 provider 调用，也没有猜测性删除。
+#[test]
+fn cache_status_reports_corruption_and_orphans_without_provider_calls() {
+    let fixture = Fixture::new();
+    let (first, _) = generate_two_cached_clips(&fixture);
+    let versions = fixture.speech_root().join("clips").join(&first).join("versions");
+    let referenced = fixture.current_audio_sha256(&first);
+
+    // 一个字节被改写：校验失败的 entry 必须算损坏，不能被当成有效缓存。
+    let mut audio = std::fs::read(versions.join(&referenced).join("audio.mp3")).expect("audio");
+    let last = audio.len() - 1;
+    audio[last] ^= 0xFF;
+    std::fs::write(versions.join(&referenced).join("audio.mp3"), &audio).expect("tamper");
+
+    // 一个没有被 current pointer 引用的 version 目录：孤立、可回收，但不能被猜成 current。
+    let orphan = versions.join("b".repeat(64));
+    std::fs::create_dir_all(&orphan).expect("orphan version dir");
+    std::fs::write(orphan.join("audio.mp3"), b"orphan").expect("orphan audio");
+
+    let provider = provider_with_catalog_and_synthesis("trace-status-5");
+    let value = succeeded(&fixture.run_with(&["speech", "cache", "status", "--json"], &provider, Some(TEST_KEY)));
+    assert_eq!(
+        provider.finish().len(),
+        0,
+        "reporting corruption must not contact the provider"
+    );
+    assert_eq!(value["receipt"]["corrupt_entries"], 1);
+    assert_eq!(value["receipt"]["accepted_entries"], 1);
+    assert_eq!(value["receipt"]["reclaimable_versions"], 1);
+    let corrupt = value["receipt"]["entries"]
+        .as_array()
+        .expect("entries")
+        .iter()
+        .find(|entry| entry["clip_id"] == first.as_str())
+        .expect("first clip entry")
+        .clone();
+    assert_eq!(corrupt["status"], "corrupt");
+    assert_eq!(corrupt["accepted"], false);
+    assert_eq!(corrupt["reclaimable_versions"], 1);
+
+    // 状态命令不得自己修复任何东西：孤立 version 仍然在原处，等显式维护处理。
+    assert!(orphan.join("audio.mp3").exists());
+}
+
+/// `cache clear` 正在播放/导出的 entry：跳过并说明原因，缓存继续可用。
+///
+/// `speech play` / `speech export` 尚未实现，因此这里直接用它们将来会取用的同一套
+/// usage marker 占用 entry：guard 的判据就是 marker，落地时不需要改清理逻辑。
+#[test]
+fn cache_clear_skips_entries_held_for_playback_or_export() {
+    let fixture = Fixture::new();
+    let (first, second) = generate_two_cached_clips(&fixture);
+    for (clip_id, marker) in [
+        (&first, "play"),
+        (&second, "export"),
+    ] {
+        let path = fixture
+            .speech_root()
+            .join("locks")
+            .join(format!("{clip_id}.{marker}"));
+        std::fs::create_dir_all(path.parent().expect("locks dir")).expect("locks dir");
+        std::fs::write(
+            &path,
+            format!("{{\"kind\":\"{marker}\",\"acquired_at\":\"{}\"}}\n", chrono::Utc::now().to_rfc3339()),
+        )
+        .expect("occupy usage marker");
+    }
+
+    let provider = provider_with_catalog_and_synthesis("trace-use-1");
+    let value = succeeded(&fixture.run_with(&["speech", "cache", "clear", "--json"], &provider, Some(TEST_KEY)));
+    assert_eq!(provider.finish().len(), 0);
+    assert_eq!(value["receipt"]["removed"].as_array().map(Vec::len), Some(0));
+    assert_eq!(value["receipt"]["skipped"].as_array().map(Vec::len), Some(2));
+    let reasons: Vec<(&str, &str)> = value["receipt"]["skipped_reasons"]
+        .as_array()
+        .expect("skipped_reasons")
+        .iter()
+        .map(|skip| {
+            (
+                skip["clip_id"].as_str().expect("clip id"),
+                skip["in_use"].as_str().expect("in use"),
+            )
+        })
+        .collect();
+    assert!(reasons.contains(&(first.as_str(), "playback")), "{reasons:?}");
+    assert!(reasons.contains(&(second.as_str(), "export")), "{reasons:?}");
+
+    // 被跳过的 entry 在 marker 释放后仍然是有效缓存：零 provider 连接。
+    for (clip_id, marker) in [(&first, "play"), (&second, "export")] {
+        std::fs::remove_file(
+            fixture
+                .speech_root()
+                .join("locks")
+                .join(format!("{clip_id}.{marker}")),
+        )
+        .expect("release usage marker");
+    }
+    let replay = provider_with_catalog_and_synthesis("trace-use-2");
+    let cached = succeeded(&fixture.run_with(
+        &[
+            "speech", "generate", "--asset-id", "book-1", "--annotation-id", "annotation-41",
+            "--content", "highlight", "--json",
+        ],
+        &replay,
+        Some(TEST_KEY),
+    ));
+    assert_eq!(cached["receipt"]["source"], "cache");
+    assert_eq!(replay.finish().len(), 0);
+}

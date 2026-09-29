@@ -7,6 +7,7 @@
 //! 配置文件只保存非秘密字段：Voice Profile 与 API Key 的**环境变量名**。
 //! 任何密钥值都不会进入这个文件。
 
+use crate::speech::cache::DEFAULT_CACHE_BUDGET_BYTES;
 use crate::speech::catalog::VoiceCatalog;
 use crate::speech::profile::{
     parse_api_key_env, ProfileError, ProfileVerification, VerificationStatus, VoiceProfile,
@@ -35,6 +36,8 @@ pub struct SpeechConfig {
     pub api_key_env: String,
     /// 全局 Voice Profile。
     pub profile: VoiceProfile,
+    /// Cached Speech Clip 的总容量预算（bytes）；由非秘密 speech config 调整。
+    pub cache_budget_bytes: u64,
 }
 
 impl Default for SpeechConfig {
@@ -42,6 +45,7 @@ impl Default for SpeechConfig {
         Self {
             api_key_env: DEFAULT_API_KEY_ENV.to_string(),
             profile: VoiceProfile::default(),
+            cache_budget_bytes: crate::speech::cache::DEFAULT_CACHE_BUDGET_BYTES,
         }
     }
 }
@@ -266,6 +270,12 @@ impl SpeechStore {
         config.profile.validate().map_err(SpeechStoreError::InvalidConfig)?;
         let api_key_env =
             parse_api_key_env(&config.api_key_env).map_err(SpeechStoreError::InvalidConfig)?;
+        if config.cache_budget_bytes == 0 {
+            // 0 预算意味着缓存无处可写：不落盘，避免随后每次生成都在 provider 前失败。
+            return Err(SpeechStoreError::InvalidConfig(
+                ProfileError::stored_config_invalid(),
+            ));
+        }
 
         let root = self.root();
         fs::create_dir_all(root).map_err(|error| SpeechStoreError::unavailable(root, error))?;
@@ -273,6 +283,7 @@ impl SpeechStore {
         let file = ConfigFile::from(&SpeechConfig {
             api_key_env,
             profile: config.profile.clone(),
+            cache_budget_bytes: config.cache_budget_bytes,
         });
         let mut json = serde_json::to_string_pretty(&file)
             .map_err(|error| SpeechStoreError::unavailable(root, std::io::Error::other(error.to_string())))?;
@@ -311,6 +322,9 @@ struct ConfigFile {
     schema_version: u32,
     api_key_env: String,
     voice_profile: ProfileFile,
+    /// Cached Speech Clip 总预算；缺失时用默认 1 GiB，因此旧配置文件仍然可读。
+    #[serde(default)]
+    cache_budget_bytes: Option<u64>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -379,6 +393,7 @@ impl From<&SpeechConfig> for ConfigFile {
             schema_version: SPEECH_CONFIG_SCHEMA_VERSION,
             api_key_env: config.api_key_env.clone(),
             voice_profile: ProfileFile::from(&config.profile),
+            cache_budget_bytes: Some(config.cache_budget_bytes),
         }
     }
 }
@@ -412,9 +427,19 @@ impl ConfigFile {
             parse_api_key_env(&self.api_key_env).map_err(SpeechStoreError::InvalidConfig)?;
         let profile = self.voice_profile.into_profile()?;
         profile.validate().map_err(SpeechStoreError::InvalidConfig)?;
+        let budget = self
+            .cache_budget_bytes
+            .unwrap_or(crate::speech::cache::DEFAULT_CACHE_BUDGET_BYTES);
+        if budget == 0 {
+            // 0 预算让缓存永远无处可写：宁可在这里拒绝，也不要让 provider 先计费再失败。
+            return Err(SpeechStoreError::InvalidConfig(
+                ProfileError::stored_config_invalid(),
+            ));
+        }
         Ok(SpeechConfig {
             api_key_env,
             profile,
+            cache_budget_bytes: budget,
         })
     }
 }
@@ -542,6 +567,7 @@ mod tests {
         let config = SpeechConfig {
             api_key_env: "CUSTOM_KEY_NAME".to_string(),
             profile: profile.clone(),
+            cache_budget_bytes: DEFAULT_CACHE_BUDGET_BYTES,
         };
 
         store.save_config(&config).expect("save config");
@@ -768,7 +794,19 @@ mod tests {
 
         let mut keys: Vec<&str> = object.keys().map(String::as_str).collect();
         keys.sort_unstable();
-        assert_eq!(keys, ["api_key_env", "schema_version", "voice_profile"]);
+        assert_eq!(
+            keys,
+            [
+                "api_key_env",
+                "cache_budget_bytes",
+                "schema_version",
+                "voice_profile"
+            ]
+        );
+        assert_eq!(
+            object["cache_budget_bytes"],
+            serde_json::Value::Number(DEFAULT_CACHE_BUDGET_BYTES.into())
+        );
         assert_eq!(
             object["api_key_env"],
             serde_json::Value::String(DEFAULT_API_KEY_ENV.to_string())
@@ -783,6 +821,7 @@ mod tests {
             .save_config(&SpeechConfig {
                 api_key_env: "SENSEAUDIO_API_KEY".to_string(),
                 profile,
+                cache_budget_bytes: DEFAULT_CACHE_BUDGET_BYTES,
             })
             .expect("save config");
 

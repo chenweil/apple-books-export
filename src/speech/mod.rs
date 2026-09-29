@@ -17,10 +17,12 @@ pub mod text;
 
 pub use audio::{decode_audio_hex, inspect_mp3, validate_audio, AudioDecodeError, AudioFacts};
 pub use cache::{
-    AttemptRecord, AttemptPruneReport, AttemptStatus, CacheClearReport, ClipCache, ClipCacheError,
-    ClipCacheStatus, ClipLock, ClipLockError, ClipState, ClipVersionMetadata, HistoryClearReport,
-    ReadyClip, ATTEMPT_HISTORY_RETENTION_DAYS, ATTEMPT_SCHEMA_VERSION, CLIP_LOCK_TIMEOUT,
-    CLIP_STATE_SCHEMA_VERSION, CLIP_VERSION_SCHEMA_VERSION,
+    AttemptRecord, AttemptPruneReport, AttemptStatus, BudgetMaintenanceReport, CacheClearReport,
+    CacheStatusEntry, CacheStatusReport, ClipCache, ClipCacheError, ClipCacheStatus, ClipLock,
+    ClipLockError, ClipState, ClipUseGuard, ClipUseKind, ClipUseSkip, ClipVersionMetadata,
+    HistoryClearReport, ReadyClip, ATTEMPT_HISTORY_RETENTION_DAYS, ATTEMPT_SCHEMA_VERSION,
+    CACHE_SAFETY_MARGIN_BYTES, CLIP_LOCK_TIMEOUT, CLIP_STATE_SCHEMA_VERSION,
+    CLIP_VERSION_SCHEMA_VERSION, DEFAULT_CACHE_BUDGET_BYTES, MIN_FREE_BYTES_ENV,
 };
 pub use catalog::{
     CatalogAvailability, CatalogSourceType, CatalogVoice, NoCatalogSource, UnverifiedReason,
@@ -36,7 +38,8 @@ pub use generate::{
     SpeechSynthesisRequest,
 };
 pub use machine::{
-    SpeechCacheClearReceipt, SpeechCacheClearResponse, SpeechGenerateReceipt,
+    SpeechCacheClearReceipt, SpeechCacheClearResponse, SpeechCacheStatusReceipt,
+    SpeechCacheStatusResponse, SpeechGenerateReceipt,
     SpeechGenerateResponse, SpeechHistoryClearReceipt, SpeechHistoryClearResponse,
     SpeechProfileDto, SpeechProfileResponse, VoiceCatalogResponse, VoiceCatalogReceipt,
     VoiceCatalogVoiceDto,
@@ -277,6 +280,8 @@ pub fn set_profile(
     let config = SpeechConfig {
         api_key_env,
         profile,
+        // 预算是独立维护项：profile set 不得悄悄把它重置回默认值。
+        cache_budget_bytes: current.cache_budget_bytes,
     };
     store.save_config(&config).map_err(SpeechError::Storage)?;
     Ok(finish(ProfileOperation::Set, config, store, warnings))
@@ -305,6 +310,16 @@ pub fn clear_speech_cache(
 ) -> Result<CacheClearReport, SpeechError> {
     ClipCache::new(store.clone())
         .clear_cache(now)
+        .map_err(|error| SpeechError::Storage(storage_error(error)))
+}
+
+/// `speech cache status`：只读的本地预算/占用视图（实施 spec 5.7）。
+///
+/// 不联网、不删除、不改写 clip 状态：budget、used bytes、已接受/锁定/损坏 entry 数与
+/// 可回收的孤立 version 目录数都在这里报告。
+pub fn speech_cache_status(store: &SpeechStore) -> Result<CacheStatusReport, SpeechError> {
+    ClipCache::new(store.clone())
+        .cache_status()
         .map_err(|error| SpeechError::Storage(storage_error(error)))
 }
 

@@ -917,6 +917,7 @@ fn load_or_init_state(
         latest_error_code: None,
         generation_blocked: false,
         updated_at: now.to_rfc3339(),
+        last_used_at: Some(now.to_rfc3339()),
     };
     cache.save_state(&state).map_err(storage_error)?;
     Ok(state)

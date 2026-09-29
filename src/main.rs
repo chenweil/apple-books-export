@@ -249,7 +249,14 @@ enum SpeechCommands {
 
 #[derive(Subcommand)]
 enum SpeechCacheCommands {
-    /// 删除可淘汰 Cached Speech Clip，并显式清除没有有效音频的阻塞门；跳过持锁 entry
+    /// 显示 Cached Speech Clip 的预算、占用与异常 entry（只读，不联网）
+    Status {
+        /// 以稳定的机器可读 JSON 输出
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// 删除可淘汰 Cached Speech Clip，并显式清除没有有效音频的阻塞门；跳过正在生成/播放/导出或持锁 entry
     Clear {
         /// 以稳定的机器可读 JSON 输出
         #[arg(long)]
@@ -528,6 +535,11 @@ async fn cmd_speech(command: SpeechCommands) -> anyhow::Result<()> {
             cmd_speech_generate(arguments).await
         }
         SpeechCommands::Cache { command } => match command {
+            SpeechCacheCommands::Status { json: true } => {
+                finish_machine(speech_cache_status_json());
+                Ok(())
+            }
+            SpeechCacheCommands::Status { json: false } => cmd_speech_cache_status(),
             SpeechCacheCommands::Clear { json: true } => {
                 finish_machine(speech_cache_clear_json());
                 Ok(())
@@ -803,6 +815,46 @@ fn speech_lock_timeout() -> Option<std::time::Duration> {
     allowed.then_some(timeout)
 }
 
+/// `speech cache status --json`：只读的本地 budget / 占用视图，零 provider 连接。
+fn speech_cache_status_json() -> Result<String, MachineError> {
+    let store = speech_store().map_err(|error| speech_machine::error_response(&error))?;
+    let report = speech::speech_cache_status(&store)
+        .map_err(|error| speech_machine::error_response(&error))?;
+    serde_json::to_string(&speech::SpeechCacheStatusResponse {
+        schema_version: 1,
+        receipt: speech::SpeechCacheStatusReceipt::new(&report),
+    })
+    .map_err(|error| MachineError::protocol_serialization_failed(error.to_string()))
+}
+
+fn cmd_speech_cache_status() -> anyhow::Result<()> {
+    let store = speech_store().map_err(speech_error)?;
+    let report = speech::speech_cache_status(&store).map_err(speech_error)?;
+    println!("Speech Cache 状态");
+    println!("  预算: {} bytes", report.budget_bytes);
+    println!("  安全余量: {} bytes", report.safety_margin_bytes);
+    println!("  可用预算: {} bytes", report.usable_budget_bytes);
+    println!("  已占用: {} bytes", report.used_bytes);
+    println!("  已接受 entry: {}", report.accepted_entries);
+    println!("  无有效音频 entry: {}", report.absent_entries);
+    println!("  阻塞中的 entry: {}", report.blocked_entries);
+    println!("  损坏 entry: {}", report.corrupt_entries);
+    println!("  占用中的 entry: {}", report.locked_entries);
+    println!("  可回收孤立 version: {}", report.reclaimable_versions);
+    for entry in &report.entries {
+        let in_use = entry
+            .in_use
+            .map(|kind| kind.as_str())
+            .unwrap_or("-")
+            .to_string();
+        println!(
+            "  - {} status={} bytes={} in_use={}",
+            entry.clip_id, entry.status.as_str(), entry.used_bytes, in_use
+        );
+    }
+    Ok(())
+}
+
 /// `speech cache clear --json`：不联网，只维护本地 Speech 状态。
 fn speech_cache_clear_json() -> Result<String, MachineError> {
     let store = speech_store().map_err(|error| speech_machine::error_response(&error))?;
@@ -833,7 +885,10 @@ fn cmd_speech_cache_clear() -> anyhow::Result<()> {
         speech::clear_speech_cache(&store, chrono::Utc::now()).map_err(speech_error)?;
     println!("Speech Cache 已清理");
     println!("  Removed: {}", report.removed.len());
-    println!("  Skipped (locked): {}", report.skipped.len());
+    println!("  Skipped (in use): {}", report.skipped.len());
+    for skip in &report.skipped_reasons {
+        println!("    {} ({})", skip.clip_id, skip.in_use.as_str());
+    }
     println!(
         "  Cleared generation gates: {}",
         report.cleared_generation_gates
