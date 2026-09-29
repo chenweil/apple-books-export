@@ -39,9 +39,13 @@ APPLE_BOOKS_EXPORTER_BIN="/path/to/rust-mainline/target/release/apple-books-expo
 ./Scripts/verify-ui.sh    # UI 回归验证
 ```
 
-本地运行时也可以把 `APPLE_BOOKS_EXPORTER_BIN` 指向 `target/debug/apple-books-exporter`。
-应用不会自动下载或执行未知 binary。打包后使用
-`Contents/Resources/apple-books-exporter`，该路径优先于 `APPLE_BOOKS_EXPORTER_BIN`。
+本地运行时可以把 `APPLE_BOOKS_EXPORTER_BIN` 指向 `target/debug/apple-books-exporter`。
+应用不会自动下载或执行未知 binary。
+
+解析顺序见 `RustCLIClient.makeForCurrentApp`：`APPLE_BOOKS_EXPORTER_BIN` **优先**，
+其次是打包进 `Contents/Resources/apple-books-exporter`，再次是 App 可执行文件旁的同名
+文件，最后是 `PATH`。也就是说环境变量是一个显式的开发期覆盖项——能向已安装 App 的
+环境注入该变量，就能把它指向任意可执行文件；正常安装路径下走的始终是随包分发的那份。
 
 或用 Xcode 打开 `appkit/Package.swift` 后按 Run。
 
@@ -150,6 +154,17 @@ Apple Books 不把「笔记」存成独立对象——笔记就是给高亮加�
 排序、筛选、归类等逻辑抽成纯函数（`BookListSorter` / `AnnotationFilter` /
 `AnnotationClassifier`），可以脱离 UI 直接断言。Share Cards 通过 `ShareCardService`
 暴露生成和导出 seam，视图层不直接处理分页、命名或绘图。
+
+### 已知能力边界：筛选导出仍走本地路径
+
+导出整本书时走 canonical Rust exporter（`BookService` 调 `rustCLIClient.export`）。
+但**按当前筛选导出**时，`annotations.count != book.totalAnnotations`，会退回
+AppKit 本地生成 Markdown 并直接 `write(to:)`——因为机器导出契约目前只接受整本书的
+`asset_id`，刻意没有提供标注选择参数。
+
+这条本地路径**绕过整个机器导出契约**：没有 `ExportReceipt`，不参与 `--overwrite`
+语义，没有稳定错误码，也不携带 main 线新增的 `audio_links` / `warnings`。这是
+Cutover 时需要显式处置的能力分歧，代码里的注释与本节说明保持一致。
 
 ## 测试现状
 
