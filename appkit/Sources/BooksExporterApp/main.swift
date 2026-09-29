@@ -1,0 +1,3 @@
+import BooksExporterCore
+
+runBooksExporter()
