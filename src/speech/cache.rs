@@ -1145,11 +1145,11 @@ impl ClipCache {
             let clip_dir = self.clip_dir(&clip_id)?;
             let used_bytes = dir_size(&clip_dir);
             let in_use = self.clip_in_use(&clip_id);
-            let referenced = self
-                .load_state(&clip_id)
-                .ok()
-                .flatten()
-                .and_then(|state| state.current_audio_sha256);
+            // 只读一次 state：pointer、blocked 与最近使用时间都从这一份来。
+            let stored = self.load_state(&clip_id)?;
+            let referenced = stored
+                .as_ref()
+                .and_then(|state| state.current_audio_sha256.clone());
             // 孤立 version 只在确认没有 lock / reference 后才可回收：生成中或持锁的 clip
             // 不计入 reclaimable，避免把正在放置的新 version 当成垃圾。
             let orphans = version_dirs(&clip_dir)
@@ -1157,10 +1157,13 @@ impl ClipCache {
                 .filter(|sha| Some(sha) != referenced.as_ref())
                 .count();
             let reclaimable_versions = if in_use.is_none() { orphans } else { 0 };
+            let last_used_at = stored
+                .as_ref()
+                .and_then(|state| state.last_used_at.clone());
 
             let (status, accepted, blocked) = match self.load_ready_clip(&clip_id) {
                 Ok(Some(_)) => (ClipCacheStatus::Ready, true, false),
-                Ok(None) => match self.load_state(&clip_id)? {
+                Ok(None) => match &stored {
                     Some(state) => {
                         let status = if state.current_cache_status == ClipCacheStatus::Corrupt {
                             ClipCacheStatus::Corrupt
@@ -1189,11 +1192,6 @@ impl ClipCache {
                 report.locked_entries += 1;
             }
             report.reclaimable_versions += reclaimable_versions;
-            let last_used_at = self
-                .load_state(&clip_id)
-                .ok()
-                .flatten()
-                .and_then(|state| state.last_used_at);
             report.entries.push(CacheStatusEntry {
                 clip_id,
                 status,
@@ -1269,13 +1267,6 @@ impl ClipCache {
         if used_bytes > usable_budget_bytes {
             for candidate in &candidates {
                 report.reclaimed_versions += self.reclaim_unreferenced_versions(&candidate.clip_id)?;
-            }
-            for clip_id in keep {
-                // 调用方持有这些 clip 的 writer 锁，因此它们没有「别人的 lock」；超预算时
-                // 其中未被 pointer 引用的旧 version 同样可以回收。
-                if self.clip_in_use(clip_id).is_none() {
-                    report.reclaimed_versions += self.reclaim_unreferenced_versions(clip_id)?;
-                }
             }
             used_bytes = self.total_used_bytes()?;
         }
@@ -2623,37 +2614,66 @@ mod tests {
         drop(lock);
     }
 
-    /// 孤立 version 只在超预算时回收：没有压力就不做隐性删除。
+    /// 孤立 version 只在超预算时回收：没有压力就不做隐性删除，引用中的 version 永不回收。
     #[test]
     fn budget_maintenance_reclaims_orphan_versions_only_under_pressure() {
-        let (_home, cache) = cache_with_budget(1024 * 1024 * 1024);
-        let clip_id = "a".repeat(64);
-        let (_, referenced) = committed_clip(&cache, &clip_id);
+        let (_home, cache) = cache_with_budget(200 * 1024 * 1024);
+        let orphaned = "a".repeat(64);
+        let stale = "b".repeat(64);
+        let (_, referenced) = committed_clip(&cache, &orphaned);
+        committed_clip(&cache, &stale);
         let orphan = cache
-            .clip_dir(&clip_id)
+            .clip_dir(&orphaned)
             .expect("clip dir")
             .join("versions")
-            .join("b".repeat(64));
+            .join("c".repeat(64));
         fs::create_dir_all(&orphan).expect("orphan dir");
         fs::write(orphan.join("audio.mp3"), b"orphan").expect("orphan audio");
+        for (clip_id, used_at) in [
+            (&orphaned, "2026-09-20T00:00:00Z"),
+            (&stale, "2026-09-01T00:00:00Z"),
+        ] {
+            pad(&cache, clip_id, 60 * 1024 * 1024);
+            let mut state = cache.load_state(clip_id).expect("state").expect("state");
+            state.last_used_at = Some(used_at.to_string());
+            cache.save_state(&state).expect("save");
+        }
 
-        // 没有压力：什么都不动。
-        let relaxed = cache.maintain_budget(&[], now()).expect("maintain budget");
-        assert_eq!(relaxed.reclaimed_versions, 0);
-        assert!(orphan.exists(), "no pressure must not delete anything");
+        // 没有压力（默认 1 GiB 预算）：什么都不动。
+        let relaxed_home = tempfile::tempdir().expect("temp home");
+        let relaxed_store = SpeechStore::from_home(relaxed_home.path());
+        let relaxed = ClipCache::new(relaxed_store);
+        let relaxed_id = "d".repeat(64);
+        let (_, relaxed_referenced) = committed_clip(&relaxed, &relaxed_id);
+        let relaxed_orphan = relaxed
+            .clip_dir(&relaxed_id)
+            .expect("clip dir")
+            .join("versions")
+            .join("e".repeat(64));
+        fs::create_dir_all(&relaxed_orphan).expect("relaxed orphan dir");
+        let relaxed_report = relaxed.maintain_budget(&[], now()).expect("maintain budget");
+        assert_eq!(relaxed_report.reclaimed_versions, 0);
+        assert!(
+            relaxed_orphan.exists(),
+            "without pressure nothing may be deleted"
+        );
+        assert!(
+            relaxed
+                .clip_dir(&relaxed_id)
+                .expect("clip dir")
+                .join("versions")
+                .join(&relaxed_referenced)
+                .exists()
+        );
 
-        // 超预算：调用方持有该 clip 的锁（keep），因此 clip 本身不淘汰，
-        // 但其中没有被 pointer 引用的 version 会被回收。
-        pad(&cache, &clip_id, 1024 * 1024 * 1024);
-        let pressured = cache
-            .maintain_budget(&[&clip_id], now())
-            .expect("maintain budget");
+        // 超预算（200 MiB 预算 → 72 MiB 可用）：先回收无引用的孤立 version，再淘汰 clip。
+        let pressured = cache.maintain_budget(&[], now()).expect("maintain budget");
         assert_eq!(pressured.reclaimed_versions, 1);
-        assert!(pressured.evicted.is_empty(), "the kept clip is never evicted");
         assert!(!orphan.exists(), "an unreferenced version is reclaimable");
+        assert_eq!(pressured.evicted, vec![stale.clone()]);
         assert!(
             cache
-                .clip_dir(&clip_id)
+                .clip_dir(&orphaned)
                 .expect("clip dir")
                 .join("versions")
                 .join(&referenced)
