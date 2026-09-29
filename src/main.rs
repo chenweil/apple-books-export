@@ -187,6 +187,53 @@ enum SpeechCommands {
         #[command(subcommand)]
         command: SpeechProfileCommands,
     },
+
+    /// 为一个 Annotation 的高亮或笔记生成并缓存一个 Speech Clip
+    Generate {
+        /// 书籍显示序号（人类 CLI；1-based）
+        #[arg(value_name = "BOOK_INDEX")]
+        book_index: Option<usize>,
+
+        /// Annotation 显示序号（人类 CLI；1-based）
+        #[arg(long, value_name = "ANNOTATION_INDEX")]
+        annotation: Option<usize>,
+
+        /// 书籍稳定 ID（机器 CLI）
+        #[arg(long)]
+        asset_id: Option<String>,
+
+        /// Annotation 稳定 ID（机器 CLI）
+        #[arg(long)]
+        annotation_id: Option<String>,
+
+        /// 内容部分：highlight 或 note
+        #[arg(long)]
+        content: Option<String>,
+
+        /// 覆盖音色 ID（精确匹配）
+        #[arg(long)]
+        voice_id: Option<String>,
+
+        /// 覆盖语速，0.5-2.0
+        #[arg(long, allow_hyphen_values = true)]
+        speed: Option<String>,
+
+        /// 覆盖音量，0.01-10.0
+        #[arg(long, allow_hyphen_values = true)]
+        volume: Option<String>,
+
+        /// 覆盖声调，-12 到 12
+        #[arg(long, allow_hyphen_values = true)]
+        pitch: Option<String>,
+
+        /// 显式越过 unknown gate 并替换有效缓存
+        #[arg(long)]
+        regenerate: bool,
+
+        /// 以稳定的机器可读 JSON 输出
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -363,6 +410,12 @@ fn finish_machine(result: Result<String, MachineError>) {
     }
 }
 
+/// 输出失败 JSON 到 stderr 并以非零状态退出；用于 already-known 失败路径。
+fn fail_machine(error: MachineError) -> ! {
+    finish_machine(Err(error));
+    std::process::exit(1);
+}
+
 async fn cmd_speech(command: SpeechCommands) -> anyhow::Result<()> {
     match command {
         SpeechCommands::Voices { refresh, json: true } => {
@@ -415,7 +468,279 @@ async fn cmd_speech(command: SpeechCommands) -> anyhow::Result<()> {
             }
             SpeechProfileCommands::Reset { json: false } => cmd_speech_profile_reset(),
         },
+        SpeechCommands::Generate {
+            book_index,
+            annotation,
+            asset_id,
+            annotation_id,
+            content,
+            voice_id,
+            speed,
+            volume,
+            pitch,
+            regenerate,
+            json,
+        } => {
+            let arguments = GenerateArguments {
+                book_index,
+                annotation,
+                asset_id,
+                annotation_id,
+                content,
+                voice_id,
+                speed,
+                volume,
+                pitch,
+                regenerate,
+                json,
+            };
+            cmd_speech_generate(arguments).await
+        }
     }
+}
+
+/// `speech generate` 的原始 CLI 参数；human/machine 分流在 use case 之前完成。
+struct GenerateArguments {
+    book_index: Option<usize>,
+    annotation: Option<usize>,
+    asset_id: Option<String>,
+    annotation_id: Option<String>,
+    content: Option<String>,
+    voice_id: Option<String>,
+    speed: Option<String>,
+    volume: Option<String>,
+    pitch: Option<String>,
+    regenerate: bool,
+    json: bool,
+}
+
+impl GenerateArguments {
+    /// 人类模式与机器模式的参数互斥检查，冲突返回稳定的 `INVALID_ARGUMENT`。
+    fn conflict(&self) -> Option<String> {
+        if self.json {
+            if self.book_index.is_some() {
+                return Some("The JSON generate command does not accept a positional book index; use --asset-id.".to_string());
+            }
+            if self.annotation.is_some() {
+                return Some("The JSON generate command does not accept --annotation; use --annotation-id.".to_string());
+            }
+        } else {
+            if self.asset_id.is_some() {
+                return Some("--asset-id 需要与 --json 一起使用；人类模式请用书籍显示序号。".to_string());
+            }
+            if self.annotation_id.is_some() {
+                return Some("--annotation-id 需要与 --json 一起使用；人类模式请用 --annotation。".to_string());
+            }
+        }
+        None
+    }
+
+    fn overrides(&self) -> speech::GenerationOverrides {
+        speech::GenerationOverrides {
+            voice_id: self.voice_id.clone(),
+            speed: self.speed.clone(),
+            volume: self.volume.clone(),
+            pitch: self.pitch.clone(),
+        }
+    }
+}
+
+/// `speech generate`：先做 human/machine 分流，再进入同一个稳定身份合同。
+async fn cmd_speech_generate(arguments: GenerateArguments) -> anyhow::Result<()> {
+    if let Some(message) = arguments.conflict() {
+        if arguments.json {
+            fail_machine(MachineError::invalid_argument(message));
+        }
+        anyhow::bail!(message);
+    }
+
+    let content_kind = match arguments.content.as_deref() {
+        Some(raw) => match speech::SpeechContentKind::parse(raw) {
+            Some(kind) => kind,
+            None => {
+                let message = format!("--content 必须是 highlight 或 note，收到 '{raw}'");
+                if arguments.json {
+                    fail_machine(MachineError::invalid_argument(message));
+                }
+                anyhow::bail!(message);
+            }
+        },
+        None => {
+            let message = "--content 必须是 highlight 或 note".to_string();
+            if arguments.json {
+                fail_machine(MachineError::invalid_argument(message));
+            }
+            anyhow::bail!(message);
+        }
+    };
+
+    let (asset_id, annotation_id) = if arguments.json {
+        let missing = || {
+            anyhow::anyhow!(
+                "The JSON generate command requires --asset-id, --annotation-id and --content."
+            )
+        };
+        let asset_id = arguments.asset_id.clone().ok_or_else(missing)?;
+        let annotation_id = arguments.annotation_id.clone().ok_or_else(missing)?;
+        (asset_id, annotation_id)
+    } else {
+        let book_index = match arguments.book_index {
+            Some(index) => index,
+            None => fail_machine(MachineError::invalid_argument(
+                "人类模式需要书籍显示序号：speech generate BOOK_INDEX --annotation N --content KIND",
+            )),
+        };
+        let annotation_index = match arguments.annotation {
+            Some(index) => index,
+            None => fail_machine(MachineError::invalid_argument(
+                "人类模式需要 --annotation 显示序号：speech generate BOOK_INDEX --annotation N --content KIND",
+            )),
+        };
+        let db = DB::open_apple_books()?;
+        let books = db.list_books()?;
+        // 人类显示序号是 1-based：0、越界或缺失都必须是稳定错误，
+        // 绝不能用 saturating_sub 悄悄落到第一个条目上产生付费错误目标。
+        let book_index = match resolve_display_index(book_index, books.len(), "书籍") {
+            Ok(index) => index,
+            Err(error) => fail_machine(error),
+        };
+        let book = books
+            .get(book_index)
+            .ok_or_else(|| anyhow::anyhow!("无效的书籍序号：{book_index}"))?;
+        let annotations = db.get_annotations(&book.asset_id)?;
+        let annotation_index =
+            match resolve_display_index(annotation_index, annotations.len(), "Annotation") {
+                Ok(index) => index,
+                Err(error) => fail_machine(error),
+            };
+        let annotation = annotations
+            .get(annotation_index)
+            .ok_or_else(|| anyhow::anyhow!("无效的 Annotation 序号：{annotation_index}"))?;
+        (book.asset_id.clone(), annotation.id.clone())
+    };
+
+    // Speech 状态根与配置也必须在任何 provider 连接之前可用；machine 模式同样要拿到
+    // 稳定的错误信封，而不是一句纯文本。
+    let store = match speech_store() {
+        Ok(store) => store,
+        Err(error) => return Err(fail_speech_setup(error, arguments.json)),
+    };
+    let config = match store.load_config() {
+        Ok(config) => config,
+        Err(error) => {
+            return Err(fail_speech_setup(SpeechError::Storage(error), arguments.json));
+        }
+    };
+    let api_key = std::env::var(&config.api_key_env)
+        .ok()
+        .filter(|value| !value.trim().is_empty());
+    let client = speech::SenseAudioClient::from_environment(&config.api_key_env)
+        .map_err(|_| anyhow::anyhow!("无法构造 SenseAudio 客户端"))?;
+    // catalog 与合成用两个独立客户端副本：两者都只为单次请求读取密钥。
+    let synthesis_client = client.clone();
+
+    let outcome = speech::generate_clip(
+        speech::GenerationInput {
+            store,
+            annotations: generation_annotations(&asset_id)?,
+            request: speech::GenerationRequest {
+                asset_id,
+                annotation_id,
+                content_kind: Some(content_kind),
+                overrides: arguments.overrides(),
+                regenerate: arguments.regenerate,
+            },
+        },
+        api_key,
+        chrono::Utc::now(),
+        || client.fetch_catalog(),
+        |request| {
+            let request = speech::to_adapter_request(&request);
+            async move { synthesis_client.synthesize(&request).await }
+        },
+    )
+    .await;
+
+    match outcome {
+        Ok(outcome) => {
+            if arguments.json {
+                // finish_machine 在失败时退出进程；成功时返回后由调用方结束。
+                finish_machine(Ok(
+                    serde_json::to_string(&speech::SpeechGenerateResponse::new(
+                        outcome.to_receipt(),
+                    ))
+                    .expect("serialize generate receipt"),
+                ));
+                return Ok(());
+            } else {
+                print_generate_outcome(&outcome);
+            }
+            Ok(())
+        }
+        Err(error) => {
+            if arguments.json {
+                fail_machine(speech_machine::generate_error_response(&error));
+            }
+            Err(speech_generate_error(error))
+        }
+    }
+}
+
+/// 只读取内容选择需要的 Annotation 行；不写入任何状态。
+fn generation_annotations(asset_id: &str) -> anyhow::Result<Vec<Annotation>> {
+    let db = DB::open_apple_books()?;
+    db.get_annotations(asset_id)
+        .map_err(|error| anyhow::anyhow!("无法读取 Annotation：{error}"))
+}
+
+/// Speech 状态根 / 配置不可用时的稳定失败：JSON 模式输出机器错误信封，
+/// human 模式给出一句可读说明；两种情况都以非零状态退出，绝不 panic。
+fn fail_speech_setup(error: SpeechError, json: bool) -> anyhow::Error {
+    if json {
+        fail_machine(speech_machine::error_response(&error));
+    }
+    speech_error(error)
+}
+
+/// 把人类显示序号（1-based）解析成 0-based 下标。///
+/// 0、越界或缺失都返回稳定的 `INVALID_ARGUMENT` 错误，而不是 panic，也绝不像
+/// `saturating_sub` 那样把 0 悄悄降级成第一个条目：那会让 `speech generate`
+/// 对错误的书籍或 Annotation 发起付费请求。`len` 是当前列表长度，错误信息里
+/// 给出合法范围，人类与机器调用方都能稳定解析。
+fn resolve_display_index(index: usize, len: usize, label: &str) -> Result<usize, MachineError> {
+    if index == 0 || index > len {
+        return Err(MachineError::invalid_argument(format!(
+            "无效的{label}序号：{index}；{label}显示序号必须是 1..={len} 之间的正整数。"
+        )));
+    }
+    Ok(index - 1)
+}
+
+/// 人类可读的生成结果：显示内容类型、音色与字符估算，不输出完整 Speech Text。
+fn print_generate_outcome(outcome: &speech::GenerateOutcome) {
+    println!("Speech Clip 已{}", if outcome.source.provider_called() { "生成" } else { "复用缓存" });
+    println!("  Content: {}", outcome.content_kind.as_str());
+    println!("  Voice ID: {}", outcome.profile.voice_id);
+    println!("  Speed: {}  Volume: {}  Pitch: {}", outcome.profile.speed, outcome.profile.volume, outcome.profile.pitch);
+    println!(
+        "  Characters: {} (estimated billing {})",
+        outcome.billing.unicode_characters, outcome.billing.estimated_billing_characters
+    );
+    println!("  Source: {}", outcome.source.as_str());
+    println!("  Audio: {} ({} ms)", outcome.audio_path.display(), outcome.audio_duration_ms);
+    if let Some(attempt_id) = outcome.attempt_id.as_deref() {
+        println!("  Attempt: {attempt_id}");
+    }
+    if let Some(trace_id) = outcome.trace_id.as_deref() {
+        println!("  Trace: {trace_id}");
+    }
+    for warning in &outcome.warnings {
+        println!("  Warning [{}]: {}", warning.reason, warning.message);
+    }
+}
+
+fn speech_generate_error(error: speech::GenerationError) -> anyhow::Error {
+    anyhow::anyhow!(error.message())
 }
 
 /// Speech 状态根只由用户主目录推导，不跟随当前工作目录、`--config` 或导出目录。
@@ -437,8 +762,7 @@ fn speech_profile_show_json() -> Result<String, MachineError> {
 
 fn speech_profile_set_json(draft: ProfileDraft) -> Result<String, MachineError> {
     let store = speech_store().map_err(|error| speech_machine::error_response(&error))?;
-    // Profile only reads the cache-backed source; it never refreshes or makes
-    // an implicit provider request.
+    // Profile 只读缓存目录来源；不会刷新，也不会隐式请求供应商。
     let source = CachedVoiceCatalogSource::new(store.clone());
     let outcome = speech::set_profile(&store, &draft, &source, chrono::Utc::now())
         .map_err(|error| speech_machine::error_response(&error))?;
@@ -538,8 +862,7 @@ fn speech_error(error: SpeechError) -> anyhow::Error {
     }
 }
 
-/// Human catalog output groups provider entries by their returned display name
-/// while retaining every concrete ID and provider-owned label.
+/// 人类可读的目录输出：按供应商展示名分组，同时保留每条精确 ID 和供应商标签。
 fn print_voice_catalog(outcome: &speech::VoiceCatalogOutcome) {
     use std::collections::BTreeMap;
 
@@ -552,6 +875,9 @@ fn print_voice_catalog(outcome: &speech::VoiceCatalogOutcome) {
             .to_rfc3339(),
         if outcome.stale { " [STALE]" } else { "" }
     );
+    if catalog.voices.is_empty() {
+        println!("账号未返回音色");
+    }
 
     let mut groups: BTreeMap<&str, Vec<&speech::CatalogVoice>> = BTreeMap::new();
     for voice in &catalog.voices {

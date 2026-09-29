@@ -4,33 +4,59 @@
 //! Profile 命令只读取注入的目录来源；真实网络请求只由显式的 speech voices
 //! use case 发起。
 
+pub mod audio;
+pub mod cache;
 pub mod catalog;
+pub mod clip;
+pub mod generate;
 pub mod machine;
 pub mod profile;
 pub mod senseaudio;
 pub mod store;
+pub mod text;
 
+pub use audio::{decode_audio_hex, inspect_mp3, validate_audio, AudioDecodeError, AudioFacts};
+pub use cache::{
+    AttemptRecord, AttemptStatus, ClipCache, ClipCacheError, ClipCacheStatus, ClipLock,
+    ClipLockError, ClipState, ClipVersionMetadata, ReadyClip, ATTEMPT_HISTORY_RETENTION_DAYS,
+    ATTEMPT_SCHEMA_VERSION, CLIP_LOCK_TIMEOUT, CLIP_STATE_SCHEMA_VERSION,
+    CLIP_VERSION_SCHEMA_VERSION,
+};
 pub use catalog::{
     CatalogAvailability, CatalogSourceType, CatalogVoice, NoCatalogSource, UnverifiedReason,
     VoiceCatalog, VoiceCatalogSource, VoiceVerification, CATALOG_FRESHNESS_HOURS,
 };
+pub use clip::{
+    clip_id, select_speech_content, ClipFingerprint, SpeechContentError, SpeechContentKind,
+    SpeechContentSelection, FINGERPRINT_VERSION,
+};
+pub use generate::{
+    generate_clip, to_adapter_request, GenerateOutcome, GenerationError, GenerationInput,
+    GenerationOverrides, GenerationRequest, SpeechClipSource, SpeechSynthesisOutcome,
+    SpeechSynthesisRequest,
+};
 pub use machine::{
-    SpeechProfileDto, SpeechProfileResponse, VoiceCatalogResponse, VoiceCatalogReceipt,
-    VoiceCatalogVoiceDto,
+    SpeechGenerateReceipt, SpeechGenerateResponse, SpeechProfileDto, SpeechProfileResponse,
+    VoiceCatalogResponse, VoiceCatalogReceipt, VoiceCatalogVoiceDto,
 };
 pub use profile::{
-    AudioSettings, Hundredths, ProfileDraft, ProfileError, ProfileErrorReason, ProfileVerification,
-    VerificationStatus, VoiceProfile, DEFAULT_API_KEY_ENV, DEFAULT_MODEL, DEFAULT_VOICE_ID,
-    SENSEAUDIO_PROVIDER,
+    resolve_generation_profile, AudioSettings, Hundredths, ProfileDraft, ProfileError,
+    ProfileErrorReason, ProfileVerification, VerificationStatus, VoiceProfile, DEFAULT_API_KEY_ENV,
+    DEFAULT_MODEL, DEFAULT_VOICE_ID, SENSEAUDIO_PROVIDER,
 };
 pub use senseaudio::{
     load_or_refresh_voice_catalog, CachedVoiceCatalogSource, SenseAudioClient, SenseAudioError,
-    VoiceCatalogError, VoiceCatalogOutcome, SENSEAUDIO_API_BASE_URL_ENV,
-    SENSEAUDIO_DEFAULT_BASE_URL,
+    SynthesisRequest, SynthesisResponse, VoiceCatalogError, VoiceCatalogOutcome,
+    SENSEAUDIO_API_BASE_URL_ENV, SENSEAUDIO_DEFAULT_BASE_URL,
 };
 pub use store::{
     SpeechConfig, SpeechStore, SpeechStoreError, SPEECH_CONFIG_SCHEMA_VERSION,
     VOICE_CATALOG_SCHEMA_VERSION,
+};
+pub use text::{
+    escape_provider_control_markup, estimate_billing_characters, normalize_speech_text,
+    sha256_hex, BillingEstimate, SpeechText, SpeechTextError, BILLING_ESTIMATOR_VERSION,
+    CONTROL_MARKUP_GUARD, MAX_SPEECH_TEXT_CHARS, SPEECH_TEXT_POLICY_VERSION,
 };
 
 use chrono::{DateTime, SecondsFormat, Utc};
@@ -73,8 +99,10 @@ pub struct SpeechWarning {
 impl SpeechWarning {
     /// 未验证 Voice Profile 的 warning code。
     pub const UNVERIFIED_CODE: &'static str = "SPEECH_VOICE_UNVERIFIED";
-    /// Refreshing a catalog failed and an older cached copy is being shown.
+    /// 刷新失败、正在展示旧缓存目录时的 warning code。
     pub const STALE_CATALOG_CODE: &'static str = "SPEECH_VOICE_CATALOG_STALE";
+    /// 账号目录三组全缺、当前没有任何可用音色时的 warning code。
+    pub const EMPTY_CATALOG_CODE: &'static str = "SPEECH_VOICE_CATALOG_EMPTY";
 
     /// 构造未验证 warning；`reason` 为 `None` 表示磁盘上的 Voice Profile 本来就没被验证过。
     pub fn unverified(reason: Option<UnverifiedReason>) -> Self {
@@ -105,7 +133,7 @@ impl SpeechWarning {
         }
     }
 
-    /// Construct the honest warning used for stale Voice Catalog fallback.
+    /// 构造 stale Voice Catalog 回退时的诚实 warning。
     pub fn stale_catalog(fetched_at: DateTime<Utc>, refresh_reason: &str) -> Self {
         let fetched_at = fetched_at.to_rfc3339();
         Self {
@@ -114,6 +142,15 @@ impl SpeechWarning {
             message: format!(
                 "Voice Catalog refresh failed ({refresh_reason}); showing the catalog fetched at {fetched_at}. It is stale and is not current permission evidence."
             ),
+        }
+    }
+
+    /// 账号可见目录为空：合法，但不能当成任何音色的权限证据。
+    pub fn empty_catalog() -> Self {
+        Self {
+            code: Self::EMPTY_CATALOG_CODE,
+            reason: "empty_catalog",
+            message: "账号未返回音色。This catalog contains no voices and cannot authorize a Speech Attempt.".to_string(),
         }
     }
 }
@@ -125,7 +162,7 @@ pub enum SpeechError {
     Storage(SpeechStoreError),
     /// Profile 本地校验失败。
     Profile(ProfileError),
-    /// Voice Catalog cache or provider access failed.
+    /// Voice Catalog 缓存或供应商访问失败。
     VoiceCatalog(senseaudio::VoiceCatalogError),
     /// 新鲜 Voice Catalog 明确没有这个音色。
     VoiceUnavailable {

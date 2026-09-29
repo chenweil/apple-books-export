@@ -1,8 +1,7 @@
-//! SenseAudio Voice Catalog adapter and cache use case.
+//! SenseAudio Voice Catalog 适配器与缓存 use case。
 //!
-//! This module owns the provider-specific HTTP shape. The cache is persisted
-//! through the existing SpeechStore so profile validation and catalog browsing
-//! share one state root and one catalog document.
+//! 本模块拥有供应商特有的 HTTP 形状。缓存通过现有 SpeechStore 落盘，
+//! 因此 Profile 校验和目录浏览共用一个状态根、一份目录文档。
 
 use super::catalog::{CatalogSourceType, CatalogVoice, VoiceCatalog, VoiceCatalogSource};
 use super::store::{SpeechStore, SpeechStoreError};
@@ -14,44 +13,52 @@ use std::env;
 use std::future::Future;
 use std::time::Duration;
 
-/// Environment variable used only as a non-secret local endpoint override for
-/// contract tests and controlled environments.
+/// 非秘密的本地 endpoint 覆盖；只给合同测试和受控环境用。
 pub const SENSEAUDIO_API_BASE_URL_ENV: &str = "SENSEAUDIO_API_BASE_URL";
-/// Default SenseAudio API origin.
+/// 默认 SenseAudio API origin。
 pub const SENSEAUDIO_DEFAULT_BASE_URL: &str = "https://api.senseaudio.cn";
 const VOICE_LIST_PATH: &str = "/v1/get_voice";
+/// 同步合成 endpoint。
+const TTS_PATH: &str = "/v1/t2a_v2";
 
-/// Provider failures are intentionally coarse so diagnostics never echo an
-/// Authorization header or an untrusted response body.
+/// 供应商失败刻意保持粗粒度：诊断信息不得回显 Authorization 头或不受信的响应体。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SenseAudioError {
-    /// The configured API-key environment variable is absent or empty.
+    /// 配置的 API Key 环境变量缺失或为空。
     MissingApiKey,
-    /// The provider rejected the configured credentials.
+    /// 供应商拒绝了当前凭证。
     AuthenticationFailed,
-    /// The provider asked the caller to slow down.
+    /// 供应商要求调用方降速。
     RateLimited,
-    /// The request could not obtain a response.
+    /// 请求未能拿到响应。
     Transport,
-    /// The provider response did not match the accepted catalog contract.
+    /// 供应商响应不符合已接受的目录合同。
     InvalidResponse,
-    /// The provider returned a non-success status or provider error status.
+    /// 供应商返回了非成功状态或明确的失败状态。
     ProviderFailed,
+    /// HTTP/API 成功，但 `data.audio` 缺失或不是严格 hex，无法形成音频产物。
+    InvalidAudio,
 }
 
 impl SenseAudioError {
-    /// Stable Machine JSON error code.
+    /// 稳定的 Machine JSON 错误码。
+    ///
+    /// 这是免费目录请求的默认映射：transport 失败归为 `SPEECH_PROVIDER_FAILED`。
+    /// 计费的合成请求必须用 [`SenseAudioError::is_unknown`] 与
+    /// [`SenseAudioError::is_artifact_missing`] 区分 `SPEECH_RESULT_UNKNOWN` 与
+    /// `SPEECH_AUDIO_INVALID`，不能把不确定结果当成明确失败自动重放。
     pub const fn machine_code(&self) -> &'static str {
         match self {
             Self::MissingApiKey | Self::AuthenticationFailed => "SPEECH_AUTH_FAILED",
             Self::RateLimited => "SPEECH_RATE_LIMITED",
+            Self::InvalidAudio => "SPEECH_AUDIO_INVALID",
             Self::Transport | Self::InvalidResponse | Self::ProviderFailed => {
                 "SPEECH_PROVIDER_FAILED"
             }
         }
     }
 
-    /// Short, non-sensitive reason used only in a stale warning.
+    /// 短且不含秘密的原因码；只进入 stale warning 与 attempt history。
     pub const fn reason_code(&self) -> &'static str {
         match self {
             Self::MissingApiKey => "missing_api_key",
@@ -60,7 +67,18 @@ impl SenseAudioError {
             Self::Transport => "transport_failed",
             Self::InvalidResponse => "invalid_response",
             Self::ProviderFailed => "provider_failed",
+            Self::InvalidAudio => "invalid_audio",
         }
+    }
+
+    /// 是否代表「请求可能已到达供应商但结果不确定」：不得自动重放。
+    pub const fn is_unknown(&self) -> bool {
+        matches!(self, Self::Transport)
+    }
+
+    /// 是否代表「供应商成功但本地无法形成有效音频产物」。
+    pub const fn is_artifact_missing(&self) -> bool {
+        matches!(self, Self::InvalidAudio)
     }
 }
 
@@ -71,26 +89,29 @@ impl std::fmt::Display for SenseAudioError {
                 "SenseAudio authentication requires an API key in the configured environment variable"
             }
             Self::AuthenticationFailed => "SenseAudio authentication failed",
-            Self::RateLimited => "SenseAudio rate-limited the Voice Catalog request",
-            Self::Transport => "the SenseAudio Voice Catalog request failed before a response was received",
-            Self::InvalidResponse => "SenseAudio returned a malformed Voice Catalog response",
-            Self::ProviderFailed => "SenseAudio rejected the Voice Catalog request",
+            Self::RateLimited => "SenseAudio rate-limited the request",
+            Self::Transport => "the SenseAudio request failed before a response was received",
+            Self::InvalidResponse => "SenseAudio returned a malformed response",
+            Self::ProviderFailed => "SenseAudio rejected the request",
+            Self::InvalidAudio => {
+                "SenseAudio reported success but the synthesized audio payload is missing or not valid hexadecimal"
+            }
         };
         f.write_str(message)
     }
 }
 
-/// Errors from the cache boundary or the SenseAudio provider.
+/// 缓存边界或 SenseAudio 供应商失败。
 #[derive(Debug)]
 pub enum VoiceCatalogError {
-    /// Local catalog state could not be read or written.
+    /// 本地目录状态读不到或写不了。
     Storage(SpeechStoreError),
-    /// The provider request or response failed.
+    /// 供应商请求或响应失败。
     Provider(SenseAudioError),
 }
 
 impl VoiceCatalogError {
-    /// Stable Machine JSON error code.
+    /// 稳定的 Machine JSON 错误码。
     pub const fn machine_code(&self) -> &'static str {
         match self {
             Self::Storage(_) => "SPEECH_STORAGE_UNAVAILABLE",
@@ -98,7 +119,7 @@ impl VoiceCatalogError {
         }
     }
 
-    /// Provider error, if this failure came from the remote adapter.
+    /// 远程适配器失败时的供应商错误。
     pub fn provider_error(&self) -> Option<&SenseAudioError> {
         match self {
             Self::Storage(_) => None,
@@ -128,7 +149,7 @@ impl std::fmt::Display for VoiceCatalogError {
     }
 }
 
-/// Small provider adapter for the explicit Voice Catalog operation.
+/// 显式 Voice Catalog 操作的小型供应商适配器。
 #[derive(Clone)]
 pub struct SenseAudioClient {
     client: reqwest::Client,
@@ -146,8 +167,7 @@ impl std::fmt::Debug for SenseAudioClient {
 }
 
 impl SenseAudioClient {
-    /// Construct a client with an explicit endpoint and environment variable
-    /// name. No key is read or retained until a request is explicitly made.
+    /// 用显式 endpoint 和环境变量名构造客户端。在真正发起请求前不读、不保留密钥。
     pub fn new(
         base_url: impl Into<String>,
         api_key_env: impl Into<String>,
@@ -168,8 +188,7 @@ impl SenseAudioClient {
         })
     }
 
-    /// Construct a client using the documented default endpoint unless a
-    /// controlled endpoint override is present.
+    /// 使用文档默认 endpoint；仅当存在受控覆盖时改走本地地址。
     pub fn from_environment(api_key_env: impl Into<String>) -> Result<Self, SenseAudioError> {
         let base_url = env::var(SENSEAUDIO_API_BASE_URL_ENV)
             .ok()
@@ -178,9 +197,8 @@ impl SenseAudioClient {
         Self::new(base_url, api_key_env)
     }
 
-    /// Fetch the account-visible Voice Catalog from the explicit all-voices
-    /// endpoint. The key is read only for this request and never enters an
-    /// error value or a returned catalog.
+    /// 从显式的全部音色 endpoint 拉取账号可见目录。密钥只为这次请求读取，
+    /// 永不进入错误值或返回的目录。
     pub async fn fetch_catalog(&self) -> Result<Vec<CatalogVoice>, SenseAudioError> {
         let api_key = env::var(&self.api_key_env)
             .ok()
@@ -213,10 +231,204 @@ impl SenseAudioClient {
         }
         parse_voice_catalog_response_with_secret(status.as_u16(), &body, Some(&api_key))
     }
+
+    /// 发起一次同步合成请求。密钥只为这次请求读取，永不进入错误值或返回结果。
+    ///
+    /// 请求体固定为 ADR 0007 的形状：`stream=false`、已解析的具体 `voice_id` 与首版固定
+    /// MP3 音频规格。情感/风格展示标签不进入请求；真正影响声音的是 `voice_id`。
+    pub async fn synthesize(
+        &self,
+        request: &SynthesisRequest,
+    ) -> Result<SynthesisResponse, SenseAudioError> {
+        let api_key = env::var(&self.api_key_env)
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .ok_or(SenseAudioError::MissingApiKey)?;
+        let url = format!("{}{}", self.base_url, TTS_PATH);
+        let payload = serde_json::json!({
+            "model": request.model,
+            "text": request.text,
+            "stream": false,
+            "voice_setting": {
+                "voice_id": request.voice_id,
+                "speed": request.speed,
+                "vol": request.volume,
+                "pitch": request.pitch,
+            },
+            "audio_setting": {
+                "format": request.audio_format,
+                "sample_rate": request.sample_rate,
+                "bitrate": request.bitrate,
+                "channel": request.channel,
+            },
+        });
+        let response = self
+            .client
+            .post(url)
+            .header("Authorization", format!("Bearer {api_key}"))
+            .header("Content-Type", "application/json")
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|_| SenseAudioError::Transport)?;
+        let status = response.status();
+        let body = response
+            .bytes()
+            .await
+            .map_err(|_| SenseAudioError::Transport)?;
+
+        if status == StatusCode::UNAUTHORIZED {
+            return Err(SenseAudioError::AuthenticationFailed);
+        }
+        if status == StatusCode::TOO_MANY_REQUESTS {
+            return Err(SenseAudioError::RateLimited);
+        }
+        if !status.is_success() {
+            return Err(SenseAudioError::ProviderFailed);
+        }
+        parse_synthesis_response(status.as_u16(), &body, Some(&api_key))
+    }
 }
 
-/// Parse a successful or failed provider response without retaining its raw
-/// JSON. This is a public pure seam for fixture and contract tests.
+/// 一次同步合成的 provider-safe 请求。字段已由产品层解析、校验并转义。
+#[derive(Debug, Clone, PartialEq)]
+pub struct SynthesisRequest {
+    /// 供应商模型。
+    pub model: String,
+    /// 已插入控制标记守卫的 Speech Text；原文从不删除。
+    pub text: String,
+    /// 已解析的具体音色 ID。
+    pub voice_id: String,
+    /// 语速（`voice_setting.speed`）。
+    pub speed: f64,
+    /// 音量，映射为 `voice_setting.vol`。
+    pub volume: f64,
+    /// 声调（`voice_setting.pitch`）。
+    pub pitch: i32,
+    /// 音频格式（`audio_setting.format`）。
+    pub audio_format: String,
+    /// 采样率（`audio_setting.sample_rate`）。
+    pub sample_rate: u32,
+    /// 码率（`audio_setting.bitrate`）。
+    pub bitrate: u32,
+    /// 声道数（`audio_setting.channel`）。
+    pub channel: u32,
+}
+
+/// 一次成功合成后的音频字节与供应商用量/trace 元数据。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SynthesisResponse {
+    /// 严格 hex 解码后的音频字节；格式校验由产品层完成。
+    pub audio_bytes: Vec<u8>,
+    /// 供应商 trace ID；进入 receipt 与 attempt history，不含原文或密钥。
+    pub trace_id: Option<String>,
+    /// 供应商返回的实际用量字符数；只作记录，不当成最终账单。
+    pub usage_characters: Option<u64>,
+    /// 供应商声明的音频时长（毫秒）。
+    pub audio_length: Option<u64>,
+    /// 供应商声明的采样率。
+    pub audio_sample_rate: Option<u32>,
+    /// 供应商声明的声道数。
+    pub audio_channel: Option<u32>,
+    /// 供应商声明的音频格式。
+    pub audio_format: Option<String>,
+    /// 供应商声明的码率。
+    pub audio_bitrate: Option<u32>,
+}
+
+/// 解析同步合成响应，不保留原始 JSON。这是给 fixture 和合同测试用的纯函数缝。
+///
+/// 处理顺序固定（实施 spec 8.2）：HTTP 状态 → envelope → `base_resp.status_code == 0` →
+/// `data.audio` 非空 → 严格 hex 解码 → 记录 trace 与用量。
+pub fn parse_synthesis_response(
+    http_status: u16,
+    body: &[u8],
+    secret: Option<&str>,
+) -> Result<SynthesisResponse, SenseAudioError> {
+    if let Some(secret) = secret.filter(|secret| !secret.is_empty()) {
+        if body
+            .windows(secret.len())
+            .any(|window| window == secret.as_bytes())
+        {
+            return Err(SenseAudioError::InvalidResponse);
+        }
+    }
+    if http_status == StatusCode::UNAUTHORIZED.as_u16() {
+        return Err(SenseAudioError::AuthenticationFailed);
+    }
+    if http_status == StatusCode::TOO_MANY_REQUESTS.as_u16() {
+        return Err(SenseAudioError::RateLimited);
+    }
+    if !(200..300).contains(&http_status) {
+        return Err(SenseAudioError::ProviderFailed);
+    }
+
+    let response: SenseAudioSynthesisResponse =
+        serde_json::from_slice(body).map_err(|_| SenseAudioError::InvalidResponse)?;
+    let base_resp = response.base_resp.ok_or(SenseAudioError::InvalidResponse)?;
+    if base_resp.status_code != 0 {
+        return Err(SenseAudioError::ProviderFailed);
+    }
+    let audio_hex = response
+        .data
+        .and_then(|data| data.audio)
+        .filter(|audio| !audio.trim().is_empty())
+        .ok_or(SenseAudioError::InvalidAudio)?;
+    let audio_bytes = crate::speech::audio::decode_audio_hex(&audio_hex)
+        .map_err(|_| SenseAudioError::InvalidAudio)?;
+
+    let trace_id = response.trace_id.filter(|value| !value.trim().is_empty());
+    let extra = response.extra_info;
+    Ok(SynthesisResponse {
+        audio_bytes,
+        trace_id,
+        usage_characters: extra.as_ref().and_then(|info| info.usage_characters),
+        audio_length: extra.as_ref().and_then(|info| info.audio_length),
+        audio_sample_rate: extra.as_ref().and_then(|info| info.audio_sample_rate),
+        audio_channel: extra.as_ref().and_then(|info| info.audio_channel),
+        audio_format: extra
+            .as_ref()
+            .and_then(|info| info.audio_format.clone())
+            .filter(|value| !value.trim().is_empty()),
+        audio_bitrate: extra.as_ref().and_then(|info| info.bitrate),
+    })
+}
+
+#[derive(Debug, Deserialize)]
+struct SenseAudioSynthesisResponse {
+    #[serde(default)]
+    data: Option<SenseAudioSynthesisData>,
+    #[serde(default)]
+    extra_info: Option<SenseAudioExtraInfo>,
+    #[serde(default)]
+    trace_id: Option<String>,
+    #[serde(default)]
+    base_resp: Option<BaseResponse>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SenseAudioSynthesisData {
+    #[serde(default)]
+    audio: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SenseAudioExtraInfo {
+    #[serde(default)]
+    usage_characters: Option<u64>,
+    #[serde(default)]
+    audio_length: Option<u64>,
+    #[serde(default)]
+    audio_sample_rate: Option<u32>,
+    #[serde(default)]
+    audio_channel: Option<u32>,
+    #[serde(default)]
+    audio_format: Option<String>,
+    #[serde(default)]
+    bitrate: Option<u32>,
+}
+
+/// 解析成功或失败的供应商响应，不保留原始 JSON。这是给 fixture 和合同测试用的纯函数缝。
 pub fn parse_voice_catalog_response(
     http_status: u16,
     body: &[u8],
@@ -348,26 +560,25 @@ struct BaseResponse {
     status_code: i64,
 }
 
-/// Result of reading a fresh catalog or showing a stale fallback.
+/// 读到新鲜目录，或展示 stale 回退时的结果。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VoiceCatalogOutcome {
-    /// Account-visible catalog entries.
+    /// 账号可见的目录条目。
     pub catalog: VoiceCatalog,
-    /// True only when the latest refresh was requested or required and failed.
+    /// 仅当最近一次刷新被请求或必须刷新且失败时为 true。
     pub stale: bool,
-    /// Honest warning(s) accompanying a stale fallback.
+    /// 伴随 stale 回退或空目录的诚实 warning。
     pub warnings: Vec<SpeechWarning>,
 }
 
-/// Read the fresh cache, or explicitly refresh it through an injected fetcher.
+/// 读取新鲜缓存，或通过注入的 fetcher 显式刷新。
 ///
 /// 缓存文档不可读（缺失、损坏、schema 不匹配、读取失败）一律按“没有可用缓存”处理，
 /// 不能在刷新前短路，否则 `--refresh` 会卡在损坏文件上。只有真的读到可用旧目录时，
 /// 刷新失败才回退到 stale；否则如实返回供应商失败。
 ///
-/// The injected future is the public mock seam: tests can exercise cache,
-/// stale fallback and provider failures without putting credentials or network
-/// calls into the store.
+/// 注入的 future 是公开 mock 缝：测试可以覆盖缓存、stale 回退和供应商失败，
+/// 而不把凭证或网络调用放进 store。
 pub async fn load_or_refresh_voice_catalog<F, Fut>(
     store: &SpeechStore,
     provider: &str,
@@ -386,10 +597,16 @@ where
         Err(_) => None,
     };
     if !force_refresh && cached.as_ref().is_some_and(|catalog| catalog.is_fresh(now)) {
+        let catalog = cached.expect("fresh cache exists");
+        let warnings = if catalog.voices.is_empty() {
+            vec![SpeechWarning::empty_catalog()]
+        } else {
+            Vec::new()
+        };
         return Ok(VoiceCatalogOutcome {
-            catalog: cached.expect("fresh cache exists"),
+            catalog,
             stale: false,
-            warnings: Vec::new(),
+            warnings,
         });
     }
 
@@ -404,35 +621,45 @@ where
                 .validate()
                 .map_err(|_| SenseAudioError::InvalidResponse)?;
             store.save_voice_catalog(&catalog)?;
+            let warnings = if catalog.voices.is_empty() {
+                vec![SpeechWarning::empty_catalog()]
+            } else {
+                Vec::new()
+            };
             Ok(VoiceCatalogOutcome {
                 catalog,
                 stale: false,
-                warnings: Vec::new(),
+                warnings,
             })
         }
         Err(error) => match cached {
-            Some(catalog) => Ok(VoiceCatalogOutcome {
-                warnings: vec![SpeechWarning::stale_catalog(
+            Some(catalog) => {
+                let mut warnings = vec![SpeechWarning::stale_catalog(
                     catalog.fetched_at,
                     error.reason_code(),
-                )],
-                catalog,
-                stale: true,
-            }),
+                )];
+                if catalog.voices.is_empty() {
+                    warnings.push(SpeechWarning::empty_catalog());
+                }
+                Ok(VoiceCatalogOutcome {
+                    warnings,
+                    catalog,
+                    stale: true,
+                })
+            }
             None => Err(VoiceCatalogError::Provider(error)),
         },
     }
 }
 
-/// Read-only catalog source used by Profile validation. It never refreshes or
-/// performs network I/O; an absent or invalid cache remains unavailable.
+/// Profile 校验用的只读目录来源。从不刷新，也不做网络 I/O；缺失或无效缓存保持不可用。
 #[derive(Debug, Clone)]
 pub struct CachedVoiceCatalogSource {
     store: SpeechStore,
 }
 
 impl CachedVoiceCatalogSource {
-    /// Create a cache-backed source from the existing SpeechStore.
+    /// 用现有 SpeechStore 构造缓存目录来源。
     pub fn new(store: SpeechStore) -> Self {
         Self { store }
     }
@@ -599,6 +826,26 @@ mod tests {
             ),
             Err(SenseAudioError::InvalidResponse)
         );
+    }
+
+    #[tokio::test]
+    async fn an_empty_provider_catalog_is_valid_and_warns() {
+        let (_home, store) = store();
+        let now = timestamp("2026-09-11T12:00:00Z");
+
+        let outcome =
+            load_or_refresh_voice_catalog(&store, SENSEAUDIO_PROVIDER, now, false, || async {
+                Ok(Vec::new())
+            })
+            .await
+            .expect("empty catalog");
+
+        assert!(!outcome.stale);
+        assert!(outcome.catalog.voices.is_empty());
+        assert_eq!(outcome.warnings.len(), 1);
+        assert_eq!(outcome.warnings[0].code, SpeechWarning::EMPTY_CATALOG_CODE);
+        assert_eq!(outcome.warnings[0].reason, "empty_catalog");
+        assert!(outcome.warnings[0].message.contains("账号未返回音色"));
     }
 
     #[tokio::test]
@@ -825,5 +1072,107 @@ mod tests {
             timestamp("2026-09-11T12:00:00.123Z").to_rfc3339(),
             "2026-09-11T12:00:00.123+00:00"
         );
+    }
+
+    fn synthesis_response(audio_hex: &str) -> Vec<u8> {
+        serde_json::to_vec(&serde_json::json!({
+            "data": {"audio": audio_hex, "status": 2},
+            "extra_info": {
+                "audio_length": 108,
+                "audio_sample_rate": 32000,
+                "audio_size": audio_hex.len() / 2,
+                "bitrate": 128000,
+                "audio_format": "mp3",
+                "audio_channel": 2,
+                "word_count": 4,
+                "usage_characters": 8
+            },
+            "trace_id": "trace-1",
+            "base_resp": {"status_code": 0, "status_msg": "success"}
+        }))
+        .expect("response JSON")
+    }
+
+    #[test]
+    fn synthesis_parser_keeps_audio_trace_and_usage() {
+        let body = synthesis_response("49443304");
+
+        let response = parse_synthesis_response(200, &body, None).expect("synthesis");
+
+        assert_eq!(response.audio_bytes, vec![0x49, 0x44, 0x33, 0x04]);
+        assert_eq!(response.trace_id.as_deref(), Some("trace-1"));
+        assert_eq!(response.usage_characters, Some(8));
+        assert_eq!(response.audio_sample_rate, Some(32000));
+        assert_eq!(response.audio_channel, Some(2));
+        assert_eq!(response.audio_bitrate, Some(128000));
+        assert_eq!(response.audio_length, Some(108));
+    }
+
+    /// 负向控制：provider 成功响应里的坏 hex 绝不能变成音频产物。
+    #[test]
+    fn synthesis_parser_rejects_missing_and_malformed_audio_payloads() {
+        let empty = serde_json::to_vec(&serde_json::json!({
+            "data": {"audio": "", "status": 2},
+            "base_resp": {"status_code": 0}
+        }))
+        .expect("empty audio JSON");
+        assert_eq!(
+            parse_synthesis_response(200, &empty, None),
+            Err(SenseAudioError::InvalidAudio)
+        );
+
+        for payload in ["4944330", "zz443304", "not-hex"] {
+            let body = synthesis_response(payload);
+            assert_eq!(
+                parse_synthesis_response(200, &body, None),
+                Err(SenseAudioError::InvalidAudio),
+                "{payload} must not be accepted as audio"
+            );
+        }
+
+        let failed_status = serde_json::to_vec(&serde_json::json!({
+            "base_resp": {"status_code": 1001, "status_msg": "failed"}
+        }))
+        .expect("failed status JSON");
+        assert_eq!(
+            parse_synthesis_response(200, &failed_status, None),
+            Err(SenseAudioError::ProviderFailed)
+        );
+
+        assert_eq!(
+            parse_synthesis_response(200, b"not json", None),
+            Err(SenseAudioError::InvalidResponse)
+        );
+    }
+
+    #[test]
+    fn synthesis_failures_map_to_stable_codes_without_retry_semantics() {
+        assert_eq!(SenseAudioError::MissingApiKey.machine_code(), "SPEECH_AUTH_FAILED");
+        assert_eq!(
+            SenseAudioError::AuthenticationFailed.machine_code(),
+            "SPEECH_AUTH_FAILED"
+        );
+        assert_eq!(SenseAudioError::RateLimited.machine_code(), "SPEECH_RATE_LIMITED");
+        assert_eq!(SenseAudioError::ProviderFailed.machine_code(), "SPEECH_PROVIDER_FAILED");
+        assert_eq!(SenseAudioError::InvalidAudio.machine_code(), "SPEECH_AUDIO_INVALID");
+
+        // transport 失败是「不确定」：调用方必须返回 SPEECH_RESULT_UNKNOWN 而不是自动重放。
+        assert!(SenseAudioError::Transport.is_unknown());
+        assert!(!SenseAudioError::ProviderFailed.is_unknown());
+        assert!(SenseAudioError::InvalidAudio.is_artifact_missing());
+        assert!(!SenseAudioError::InvalidAudio.is_unknown());
+    }
+
+    #[test]
+    fn synthesis_parser_never_echoes_the_api_key() {
+        let secret = "synthesis-secret-not-for-output";
+        let body = synthesis_response("49443304");
+        let mut leaked = body.clone();
+        leaked.extend_from_slice(secret.as_bytes());
+
+        let error = parse_synthesis_response(200, &leaked, Some(secret)).expect_err("leak");
+
+        assert_eq!(error, SenseAudioError::InvalidResponse);
+        assert!(!format!("{error:?}").contains(secret));
     }
 }

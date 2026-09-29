@@ -11,20 +11,20 @@ use serde::{Deserialize, Serialize};
 /// Voice Catalog 的新鲜期：ADR 0007 规定本地缓存 24 小时。
 pub const CATALOG_FRESHNESS_HOURS: i64 = 24;
 
-/// Provider-neutral source group for a catalog entry.
+/// 与供应商无关的目录分组。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum CatalogSourceType {
-    /// Provider-owned/system voices.
+    /// 供应商自有/系统音色。
     System,
-    /// Voices cloned for the current account.
+    /// 当前账号的克隆音色。
     Cloned,
-    /// Voices generated for the current account.
+    /// 当前账号的生成音色。
     Generated,
 }
 
 impl CatalogSourceType {
-    /// Stable machine-readable value.
+    /// 稳定的机器可读取值。
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::System => "system",
@@ -38,7 +38,7 @@ impl CatalogSourceType {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CatalogVoice {
-    /// Provider-neutral account response group.
+    /// 账号响应里的分组。
     pub source_type: CatalogSourceType,
     /// 供应商的精确音色 ID；用户选择的永远是它。
     pub voice_id: String,
@@ -48,11 +48,10 @@ pub struct CatalogVoice {
     pub emotion_label: Option<String>,
     /// provider 拥有的风格标签。
     pub style_label: Option<String>,
-    /// Provider-owned display descriptions. These are preserved verbatim and
-    /// are never synthesized from the voice ID.
+    /// 供应商拥有的展示描述；原样保留，绝不从 `voice_id` 拼出来。
     #[serde(default)]
     pub description: Vec<String>,
-    /// Provider creation timestamp, when returned by the account catalog.
+    /// 供应商返回的创建时间。
     #[serde(default)]
     pub created_time: Option<String>,
 }
@@ -70,8 +69,7 @@ pub struct VoiceCatalog {
 }
 
 impl VoiceCatalog {
-    /// Validate the persisted catalog shape before it becomes permission
-    /// evidence or is written back to disk.
+    /// 落盘或当作权限证据前，校验缓存目录的形状。
     pub fn validate(&self) -> Result<(), &'static str> {
         if self.provider.trim().is_empty() {
             return Err("provider is empty");

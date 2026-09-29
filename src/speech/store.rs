@@ -17,13 +17,13 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-/// config.json schema version.
+/// `config.json` 的 schema 版本。
 pub const SPEECH_CONFIG_SCHEMA_VERSION: u32 = 1;
-/// Voice Catalog cache schema version.
+/// Voice Catalog 缓存的 schema 版本。
 pub const VOICE_CATALOG_SCHEMA_VERSION: u32 = 1;
 /// 配置文件文件名。
 const CONFIG_FILE_NAME: &str = "config.json";
-/// Voice Catalog directory name.
+/// Voice Catalog 缓存目录名。
 const VOICE_CATALOG_DIR_NAME: &str = "voices";
 /// 同文件系统的临时文件；rename 保证提交是原子的。
 const CONFIG_TMP_FILE_NAME: &str = "config.json.tmp";
@@ -118,11 +118,10 @@ impl SpeechStore {
         self.root.join(CONFIG_FILE_NAME)
     }
 
-    /// Provider Voice Catalog cache path.
+    /// 某个 provider 的 Voice Catalog 缓存路径。
     ///
-    /// Provider names are part of the application contract, not arbitrary
-    /// filesystem paths. Unknown path characters are collapsed to a safe
-    /// placeholder so a malformed caller can never escape the Speech root.
+    /// provider 名是应用合同的一部分，不是任意文件系统路径。不安全字符会收成占位符，
+    /// 畸形调用方不能逃出 Speech 根目录。
     pub fn voice_catalog_path(&self, provider: &str) -> PathBuf {
         let safe_provider = if is_safe_provider_name(provider) {
             provider
@@ -166,7 +165,7 @@ impl SpeechStore {
         file.into_config()
     }
 
-    /// Read a provider Voice Catalog cache without creating the Speech root.
+    /// 读取某个 provider 的 Voice Catalog 缓存；不创建 Speech 根目录。
     pub fn load_voice_catalog(
         &self,
         provider: &str,
@@ -222,7 +221,7 @@ impl SpeechStore {
         Ok(Some(catalog))
     }
 
-    /// Atomically persist a non-secret provider Voice Catalog cache.
+    /// 原子写入非秘密的 provider Voice Catalog 缓存。
     pub fn save_voice_catalog(
         &self,
         catalog: &VoiceCatalog,

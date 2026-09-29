@@ -568,6 +568,25 @@ pub struct ProfileDraft {
 /// 这里刻意不继承任何已验证状态：本切片无法检查 provider 可用性，
 /// 验证结果由 [`crate::speech::catalog`] 的验证步骤决定，避免 `set` 替用户宣称可用。
 pub fn resolve_profile(current: &VoiceProfile, draft: &ProfileDraft) -> ProfileResult<VoiceProfile> {
+    resolve_profile_with_options(current, draft, true)
+}
+
+/// `speech generate` 的覆盖解析：没有显式 `--voice-id` 时沿用当前 Profile。
+///
+/// 与 `set` 的唯一区别是 `voice_id` 可以缺省；本地结构/范围校验与
+/// [`resolve_profile`] 完全一致，因此生成前就能拒绝无效 Profile。
+pub fn resolve_generation_profile(
+    current: &VoiceProfile,
+    draft: &ProfileDraft,
+) -> ProfileResult<VoiceProfile> {
+    resolve_profile_with_options(current, draft, false)
+}
+
+fn resolve_profile_with_options(
+    current: &VoiceProfile,
+    draft: &ProfileDraft,
+    require_voice_id: bool,
+) -> ProfileResult<VoiceProfile> {
     let provider = match draft.provider {
         Some(ref provider) => parse_exact_string(provider, "provider")?,
         None => current.provider.clone(),
@@ -578,13 +597,14 @@ pub fn resolve_profile(current: &VoiceProfile, draft: &ProfileDraft) -> ProfileR
     };
     let voice_id = match draft.voice_id {
         Some(ref voice_id) => parse_exact_string(voice_id, "voice_id")?,
-        None => {
+        None if require_voice_id => {
             return Err(ProfileError::new(
                 Some("voice_id"),
                 ProfileErrorReason::Missing,
                 None,
             ))
         }
+        None => current.voice_id.clone(),
     };
     let emotion_label = match draft.emotion_label {
         Some(ref label) => Some(parse_exact_string(label, "emotion_label")?),
@@ -853,6 +873,48 @@ mod tests {
         };
         let resolved = resolve_profile(&current, &draft).expect("exact id");
         assert_eq!(resolved.voice_id, "female_0007_b");
+    }
+
+    #[test]
+    fn resolve_generation_profile_keeps_the_stored_voice_when_no_override_is_given() {
+        let mut current = VoiceProfile::default();
+        current.voice_id = "female_0007_b".to_string();
+        current.speed = Hundredths::from_x100(125);
+
+        let unchanged = resolve_generation_profile(&current, &ProfileDraft::default())
+            .expect("no overrides");
+        assert_eq!(unchanged.voice_id, "female_0007_b");
+        assert_eq!(unchanged.speed, Hundredths::from_x100(125));
+        assert_eq!(unchanged.volume, current.volume);
+
+        let overridden = resolve_generation_profile(
+            &current,
+            &ProfileDraft {
+                speed: Some("0.5".to_string()),
+                pitch: Some("-12".to_string()),
+                ..ProfileDraft::default()
+            },
+        )
+        .expect("speed and pitch only");
+        assert_eq!(overridden.voice_id, "female_0007_b");
+        assert_eq!(overridden.speed, Hundredths::from_x100(50));
+        assert_eq!(overridden.pitch, -12);
+        assert_eq!(
+            overridden.verification.status,
+            VerificationStatus::Unverified,
+            "generation must not inherit a verified claim from stored state"
+        );
+
+        let invalid = resolve_generation_profile(
+            &VoiceProfile::default(),
+            &ProfileDraft {
+                speed: Some("2.01".to_string()),
+                ..ProfileDraft::default()
+            },
+        )
+        .expect_err("out of range speed");
+        assert_eq!(invalid.field, Some("speed"));
+        assert_eq!(invalid.reason, ProfileErrorReason::OutOfRange);
     }
 
     #[test]
