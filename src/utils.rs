@@ -7,6 +7,23 @@ pub fn home_dir() -> Option<PathBuf> {
     std::env::var_os("HOME").map(PathBuf::from)
 }
 
+/// 判断目录当前是否可写。
+///
+/// 真正的可写性取决于文件系统权限位与挂载选项（例如只读卷），所以用一次
+/// 真实的创建-删除探测，而不是只看权限位。探测文件在返回前一定被删除。
+pub fn dir_is_writable(dir: &std::path::Path) -> bool {
+    use std::io::Write;
+
+    let probe = dir.join(format!(".exporter-write-probe-{}", std::process::id()));
+    let created = (|| -> std::io::Result<()> {
+        let mut file = std::fs::File::create(&probe)?;
+        file.write_all(b"")?;
+        file.sync_all()
+    })();
+    let _ = std::fs::remove_file(&probe);
+    created.is_ok()
+}
+
 /// 安全文件名（支持中文 CJK 字符）
 pub fn sanitize_filename(s: &str) -> String {
     let mut result = String::new();

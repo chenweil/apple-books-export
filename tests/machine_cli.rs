@@ -527,3 +527,86 @@ fn human_list_and_positional_export_remain_compatible() {
     );
     assert!(String::from_utf8_lossy(&export.stdout).contains("导出完成"));
 }
+
+/// #14 doctor 环境预检：必须报告输出目录可写性与默认输出目录解析，
+/// 让 AppKit / TUI / Skill 消费者在真正写文件前就能发现问题。
+#[test]
+fn doctor_json_reports_environment_preflight_beyond_the_databases() {
+    let fixture = Fixture::new();
+    let output = fixture.run(&["doctor", "--json"]);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value: Value = serde_json::from_slice(&output.stdout).expect("stdout is JSON only");
+
+    assert_eq!(value["schema_version"], 1);
+    assert_eq!(value["status"], "ok");
+
+    let environment = &value["environment"];
+    assert!(
+        environment.is_object(),
+        "doctor must report an environment preflight, not only databases: {value}"
+    );
+    assert_eq!(
+        environment["home"]["status"], "ok",
+        "an injected HOME must be reported as usable"
+    );
+    assert!(
+        environment["home"]["path"].as_str().is_some_and(|p| !p.is_empty()),
+        "the resolved HOME path must be reported"
+    );
+    // `~/books-exported` 在全新机器上并不存在，这不算故障：只要它可被创建，
+    // doctor 就该报 `missing`（尚未导出）而不是 `unwritable`。
+    let output_dir = &environment["default_output_dir"];
+    assert_eq!(
+        output_dir["status"], "missing",
+        "a not-yet-created default output directory is a normal state: {value}"
+    );
+    assert_eq!(
+        output_dir["writable"], true,
+        "the parent must be writable so the directory can be created: {value}"
+    );
+    assert!(
+        output_dir["path"].as_str().is_some_and(|p| p.ends_with("books-exported")),
+        "the default output directory must be reported: {value}"
+    );
+    assert!(
+        environment["free_bytes"].as_u64().is_some(),
+        "doctor must report free bytes for the output volume: {value}"
+    );
+}
+
+/// 负向控制：默认输出目录不可写时，doctor 必须直说，不能报成可写。
+#[cfg(unix)]
+#[test]
+fn doctor_json_reports_an_unwritable_default_output_directory() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture = Fixture::new();
+    // 保留 Fixture 的数据库，只把默认输出目录本身变成不可写。
+    let output_dir = fixture.home().join("books-exported");
+    std::fs::create_dir_all(&output_dir).expect("output dir");
+    std::fs::set_permissions(&output_dir, std::fs::Permissions::from_mode(0o500))
+        .expect("chmod output dir");
+
+    let output = fixture.run(&["doctor", "--json"]);
+
+    // 恢复权限，避免 TempDir 清理失败。
+    std::fs::set_permissions(&output_dir, std::fs::Permissions::from_mode(0o755))
+        .expect("restore chmod");
+
+    assert!(
+        output.status.success(),
+        "doctor must still succeed and report the problem: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value: Value = serde_json::from_slice(&output.stdout).expect("stdout is JSON only");
+    let dir = &value["environment"]["default_output_dir"];
+    assert_eq!(
+        dir["status"], "unwritable",
+        "a read-only output directory must be reported, not hidden: {value}"
+    );
+    assert_eq!(dir["writable"], false);
+}
