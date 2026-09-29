@@ -1,0 +1,179 @@
+name: Release
+
+# 触发条件: 推送 v 开头的 tag (例如 v0.3.3, v1.0.0)
+on:
+  push:
+    tags:
+      - 'v*'
+
+# 防止重复 release 跑挂
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write  # 创建 release 需要写权限
+
+jobs:
+  # ─────────────────────────────────────────────────
+  # 1. 构建矩阵: 两个 macOS 平台构建 CLI
+  #    (Linux 已移除 — Apple Books 仅存在于 macOS)
+  # ─────────────────────────────────────────────────
+  build:
+    name: Build (${{ matrix.label }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false  # 一个平台失败不影响其他平台
+      matrix:
+        include:
+          # macOS Apple Silicon (M1/M2/M3)
+          - target: aarch64-apple-darwin
+            os: macos-14
+            label: macos-arm64
+            binary_name: apple-books-exporter-aarch64-apple-darwin
+          # macOS Intel
+          - target: x86_64-apple-darwin
+            os: macos-13
+            label: macos-x86_64
+            binary_name: apple-books-exporter-x86_64-apple-darwin
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          # tests/headless_mainline.sh verifies the documented Tauri GUI rollback
+          # tag resolves and is still an ancestor, which needs real history.
+          fetch-depth: 0
+
+      - name: Validate headless mainline
+        run: bash tests/headless_mainline.sh
+
+      # ── CLI 构建准备 ──────────────────────────────
+      - name: Install Rust toolchain (CLI)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Check Rust formatting
+        run: cargo fmt --all -- --check
+
+      - name: Cache cargo registry & build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ matrix.target }}-
+            ${{ runner.os }}-cargo-
+
+      - name: Run Rust tests
+        run: cargo test --all-targets --locked
+
+      - name: Validate bundled Skill binary
+        run: |
+          case "${{ matrix.target }}" in
+            aarch64-apple-darwin)
+              BINARY="skills/apple-books-export-rust/scripts/apple-books-exporter-aarch64-apple-darwin"
+              ;;
+            x86_64-apple-darwin)
+              BINARY="skills/apple-books-export-rust/scripts/apple-books-exporter-x86_64-apple-darwin"
+              ;;
+            *)
+              echo "unsupported release target: ${{ matrix.target }}" >&2
+              exit 1
+              ;;
+          esac
+          APPLE_BOOKS_EXPORTER_BIN="$BINARY" \
+            skills/apple-books-export-rust/scripts/validate.sh --print-path
+
+      # ── CLI 构建 ──────────────────────────────────
+      - name: Build CLI release binary
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Locate CLI binary
+        id: locate-cli
+        run: |
+          CLI="target/${{ matrix.target }}/release/apple-books-exporter"
+          OUTPUT="${{ matrix.binary_name }}"
+          if [ ! -f "$CLI" ]; then
+            echo "❌ CLI binary not found: $CLI"
+            exit 1
+          fi
+          cp "$CLI" "$OUTPUT"
+          echo "binary_path=$OUTPUT" >> "$GITHUB_OUTPUT"
+          echo "✅ Built: $OUTPUT ($(du -h "$OUTPUT" | cut -f1))"
+
+      - name: Upload CLI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-${{ matrix.binary_name }}
+          path: ${{ steps.locate-cli.outputs.binary_path }}
+          if-no-files-found: error
+          retention-days: 7
+
+  # ─────────────────────────────────────────────────
+  # 2. 收集所有 artifact, 创建/更新 GitHub Release
+  # ─────────────────────────────────────────────────
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          # tests/headless_mainline.sh verifies the documented Tauri GUI rollback
+          # tag resolves and is still an ancestor, which needs real history.
+          fetch-depth: 0
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List downloaded artifacts
+        run: |
+          echo "=== 全部产物 ==="
+          find dist -maxdepth 4 -type f -o -type d | head -50
+
+      - name: Generate SHA256 checksums (files only)
+        working-directory: dist
+        run: |
+          # 对所有可下载文件生成 checksum
+          find . -maxdepth 2 -type f -name "apple-books-exporter-*" \
+            -exec sha256sum {} \; | tee SHA256SUMS
+          echo ""
+          echo "=== 文件清单 ==="
+          find . -maxdepth 2 -type f | sort
+
+      - name: Extract version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+
+      - name: Create / Update Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: v${{ steps.version.outputs.VERSION }}
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(steps.version.outputs.VERSION, '-') }}  # 含 - 视为预发布
+          files: |
+            dist/apple-books-exporter-aarch64-apple-darwin
+            dist/apple-books-exporter-x86_64-apple-darwin
+            dist/SHA256SUMS
+          fail_on_unmatched_files: true
+          overwrite_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify release
+        if: success()
+        run: |
+          echo "✅ Release v${{ steps.version.outputs.VERSION }} published"
+          gh release view "v${{ steps.version.outputs.VERSION }}" --json name,assets,url
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
