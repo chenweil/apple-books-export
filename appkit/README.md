@@ -183,4 +183,5 @@ Alternative Cards，以及 Apple Books WAL 中最新标注的读取、共享数�
 Entry，以及真实 `BookDetailViewController` 入口打开编辑器后的默认预览。它是 UI
 回归探针，不是 XCTest。
 
-可见变更记录见仓库根 [`CHANGELOG.md`](../CHANGELOG.md)。
+仓库级的入口说明、Headless 能力矩阵与 Tauri 回滚方式见根
+[`README.md`](../README.md)；可见变更记录见根 [`CHANGELOG.md`](../CHANGELOG.md)。
