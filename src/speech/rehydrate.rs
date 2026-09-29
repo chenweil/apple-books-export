@@ -25,8 +25,8 @@ use crate::speech::audio::inspect_mp3;
 use crate::speech::cache::ClipCache;
 use crate::speech::clip::SpeechContentKind;
 use crate::speech::export::{
-    locator_candidates, locator_path, record_export_locator, resolve_contained_path,
-    ExportedClipRecord, ExportedContentRecord, SpeechExportManifest, AUDIO_SUBDIRECTORY,
+    locator_candidates, record_export_locator, resolve_contained_path, ExportedClipRecord,
+    ExportedContentRecord, SpeechExportManifest, AUDIO_SUBDIRECTORY,
 };
 use crate::speech::SpeechWarning;
 use chrono::{DateTime, Utc};
@@ -349,9 +349,6 @@ fn verify_candidate(
         None => {
             let mut matched: Option<(&ExportedContentRecord, &ExportedClipRecord)> = None;
             for record in &manifest.records {
-                if query.require_active && record.active_clip_id != query.clip_id {
-                    continue;
-                }
                 if let Some(clip) = record
                     .clips
                     .iter()
@@ -365,12 +362,23 @@ fn verify_candidate(
                 return Err(reject(
                     "clip_not_recorded",
                     format!(
-                        "the manifest records no {}exported clip with id {}",
-                        if query.require_active { "active " } else { "" },
+                        "the manifest records no exported clip with id {}",
                         query.clip_id
                     ),
                 ));
             };
+            if query.require_active && record.active_clip_id != query.clip_id {
+                return Err(reject(
+                    "clip_not_active",
+                    format!(
+                        "the recorded active clip for annotation {} ({}) is {} rather than {}",
+                        record.annotation_id,
+                        record.content_kind.as_str(),
+                        record.active_clip_id,
+                        query.clip_id
+                    ),
+                ));
+            }
             let active = record.active_clip_id == query.clip_id;
             (
                 record.annotation_id.clone(),
@@ -489,8 +497,8 @@ fn manifest_clip(clip: &ExportedClipRecord) -> RehydratedManifestClip {
 mod tests {
     use super::*;
     use crate::speech::export::{
-        relative_path_for, ExportedClipRecord, ExportedContentRecord, SpeechExportManifest,
-        AUDIO_SUBDIRECTORY, EXPORT_LOCATOR_SCHEMA_VERSION, SHORT_FINGERPRINT_LEN,
+        locator_path, relative_path_for, SpeechExportManifest, AUDIO_SUBDIRECTORY,
+        EXPORT_LOCATOR_SCHEMA_VERSION, SHORT_FINGERPRINT_LEN,
         SPEECH_EXPORT_MANIFEST_SCHEMA_VERSION,
     };
     use crate::speech::store::SpeechStore;
