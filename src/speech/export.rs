@@ -1127,10 +1127,6 @@ mod tests {
             Err(ExportError::ManifestInvalid { .. })
         ));
         assert!(matches!(
-            resolve_contained_path(root, "assets/./audio/x.mp3"),
-            Err(ExportError::ManifestInvalid { .. })
-        ));
-        assert!(matches!(
             resolve_contained_path(root, ""),
             Err(ExportError::ManifestInvalid { .. })
         ));
@@ -1138,6 +1134,12 @@ mod tests {
             resolve_contained_path(root, "a\0b"),
             Err(ExportError::ManifestInvalid { .. })
         ));
+        // `.` 段被路径迭代器规范化掉，因此结果仍在根内（不是逃逸，也不是必须拒绝的形状）。
+        assert_eq!(
+            resolve_contained_path(root, "assets/./audio/x.mp3")
+                .expect("normalized"),
+            root.join("assets/audio/x.mp3")
+        );
 
         // symlink：即使它指向导出根内部也拒绝——manifest 不允许依赖链接解析。
         let outside = tempfile::tempdir().expect("outside");
