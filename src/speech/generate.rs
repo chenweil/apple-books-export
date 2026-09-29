@@ -2050,4 +2050,356 @@ mod tests {
             DEFAULT_VOICE_ID
         );
     }
+
+    /// 读取 clip state；测试里用于构造「已经有过 attempt」的现场。
+    fn stored_state(store: &SpeechStore, clip_id: &str) -> ClipState {
+        ClipCache::new(store.clone())
+            .load_state(clip_id)
+            .expect("load state")
+            .expect("state exists")
+    }
+
+    /// 手动占用 writer 锁文件：模拟另一个进程正在生成（O_EXCL 语义与真实 writer 相同）。
+    fn occupy_lock(store: &SpeechStore, clip_id: &str) {
+        let cache = ClipCache::new(store.clone());
+        std::fs::create_dir_all(cache.locks_dir()).expect("locks dir");
+        std::fs::write(
+            cache.locks_dir().join(format!("{clip_id}.lock")),
+            format!("{}\n", now().to_rfc3339()),
+        )
+        .expect("occupy lock");
+    }
+
+    fn version_count(store: &SpeechStore, clip_id: &str) -> usize {
+        ClipCache::new(store.clone())
+            .clip_dir(clip_id)
+            .expect("clip dir")
+            .join("versions")
+            .read_dir()
+            .map(|entries| entries.count())
+            .unwrap_or(0)
+    }
+
+    fn attempt_files(store: &SpeechStore) -> Vec<PathBuf> {
+        let attempts = store.root().join("attempts");
+        let mut files = Vec::new();
+        if let Ok(days) = std::fs::read_dir(&attempts) {
+            for day in days.flatten() {
+                if let Ok(entries) = std::fs::read_dir(day.path()) {
+                    files.extend(entries.flatten().map(|entry| entry.path()));
+                }
+            }
+        }
+        files.sort();
+        files
+    }
+
+    #[tokio::test]
+    async fn a_lock_timeout_returns_a_stable_in_progress_error_with_the_attempt_id() {
+        let home = tempfile::tempdir().expect("home");
+        let store = SpeechStore::from_home(home.path());
+        let (catalog_fetch, synthesize, _) = fake(Ok(success_response("trace-1")));
+        let first = generate_clip(
+            input(store.clone(), SpeechContentKind::Highlight),
+            Some("test-key".to_string()),
+            now(),
+            catalog_fetch,
+            synthesize,
+        )
+        .await
+        .expect("first generation");
+
+        // 另一个进程正在生成同一 clip：锁文件存在且是新鲜的（不是崩溃遗留）。
+        occupy_lock(&store, &first.clip_id);
+
+        let mut waiting = input(store.clone(), SpeechContentKind::Highlight);
+        waiting.request.regenerate = true;
+        waiting.lock_timeout = Some(Duration::from_millis(40));
+        let (catalog_fetch, synthesize, counters) = fake(Ok(success_response("trace-2")));
+        let error = generate_clip(
+            waiting,
+            Some("test-key".to_string()),
+            now(),
+            catalog_fetch,
+            synthesize,
+        )
+        .await
+        .expect_err("lock timeout");
+
+        assert_eq!(error.machine_code(), "SPEECH_IN_PROGRESS");
+        assert_eq!(error.reason_code(), "in_progress");
+        assert_eq!(
+            error.attempt_id(),
+            first.attempt_id.as_deref(),
+            "a lock timeout must carry the current attempt id when it is available"
+        );
+        assert!(
+            error.message().contains(first.attempt_id.as_deref().expect("attempt id")),
+            "the human message must name the in-progress attempt: {}",
+            error.message()
+        );
+        assert_eq!(
+            counters.synthesis.load(Ordering::SeqCst),
+            0,
+            "waiting for the lock must never start a second provider request"
+        );
+        assert_eq!(version_count(&store, &first.clip_id), 1);
+
+        // 锁释放后同一请求继续正常命中缓存。
+        let cache = ClipCache::new(store.clone());
+        std::fs::remove_file(
+            cache
+                .locks_dir()
+                .join(format!("{}.lock", first.clip_id)),
+        )
+        .expect("release lock");
+        let (catalog_fetch, synthesize, counters) = fake(Ok(success_response("trace-3")));
+        let cached = generate_clip(
+            input(store.clone(), SpeechContentKind::Highlight),
+            Some("test-key".to_string()),
+            now(),
+            catalog_fetch,
+            synthesize,
+        )
+        .await
+        .expect("cache hit after the writer finished");
+        assert_eq!(cached.source, SpeechClipSource::Cache);
+        assert_eq!(counters.synthesis.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn a_failed_regeneration_keeps_the_previous_version_usable_and_ungated() {
+        let home = tempfile::tempdir().expect("home");
+        let store = SpeechStore::from_home(home.path());
+        let (catalog_fetch, synthesize, _) = fake(Ok(success_response("trace-1")));
+        let first = generate_clip(
+            input(store.clone(), SpeechContentKind::Highlight),
+            Some("test-key".to_string()),
+            now(),
+            catalog_fetch,
+            synthesize,
+        )
+        .await
+        .expect("first generation");
+
+        // 失败的 regenerate：请求可能已到达 provider，因此结果不确定。
+        let mut regenerate = input(store.clone(), SpeechContentKind::Highlight);
+        regenerate.request.regenerate = true;
+        let (catalog_fetch, synthesize, counters) = fake(Err(SenseAudioError::Transport));
+        let error = generate_clip(
+            regenerate,
+            Some("test-key".to_string()),
+            now(),
+            catalog_fetch,
+            synthesize,
+        )
+        .await
+        .expect_err("uncertain regeneration");
+        assert_eq!(error.machine_code(), "SPEECH_RESULT_UNKNOWN");
+        assert!(error.blocks_generation());
+        assert_eq!(counters.synthesis.load(Ordering::SeqCst), 1);
+
+        // 旧 version 仍是 current pointer，且没有留下阻塞门。
+        let state = stored_state(&store, &first.clip_id);
+        assert_eq!(
+            state.current_audio_sha256.as_deref(),
+            Some(first.audio_sha256.as_str()),
+            "an uncertain regeneration must not move the current pointer"
+        );
+        assert_eq!(state.current_cache_status, crate::speech::cache::ClipCacheStatus::Ready);
+        assert!(
+            !state.generation_blocked,
+            "a failed regeneration must not gate a clip that still has a valid version"
+        );
+        assert_eq!(
+            state.latest_attempt_status,
+            Some(AttemptStatus::Unknown),
+            "the failed attempt is still recorded on the clip state"
+        );
+        assert_eq!(version_count(&store, &first.clip_id), 1);
+
+        // 普通 generate 继续复用旧音频，零 provider 调用。
+        let (catalog_fetch, synthesize, counters) = fake(Ok(success_response("trace-3")));
+        let replayed = generate_clip(
+            input(store.clone(), SpeechContentKind::Highlight),
+            Some("test-key".to_string()),
+            now(),
+            catalog_fetch,
+            synthesize,
+        )
+        .await
+        .expect("cache hit after a failed regeneration");
+        assert_eq!(replayed.source, SpeechClipSource::Cache);
+        assert_eq!(replayed.audio_sha256, first.audio_sha256);
+        assert_eq!(
+            counters.synthesis.load(Ordering::SeqCst),
+            0,
+            "the previous cache version must stay usable without another provider call"
+        );
+    }
+
+    #[tokio::test]
+    async fn every_real_request_creates_a_distinct_metadata_only_attempt_record() {
+        let home = tempfile::tempdir().expect("home");
+        let store = SpeechStore::from_home(home.path());
+        let (catalog_fetch, synthesize, _) = fake(Ok(success_response("trace-1")));
+        let first = generate_clip(
+            input(store.clone(), SpeechContentKind::Highlight),
+            Some("test-key".to_string()),
+            now(),
+            catalog_fetch,
+            synthesize,
+        )
+        .await
+        .expect("first");
+
+        let mut regenerate = input(store.clone(), SpeechContentKind::Highlight);
+        regenerate.request.regenerate = true;
+        let (catalog_fetch, synthesize, _) = fake(Ok(success_response_with_frames("trace-2", 3)));
+        let second = generate_clip(
+            regenerate,
+            Some("test-key".to_string()),
+            now(),
+            catalog_fetch,
+            synthesize,
+        )
+        .await
+        .expect("regenerate");
+
+        assert_ne!(
+            first.attempt_id, second.attempt_id,
+            "each real provider request gets its own attempt id"
+        );
+        let files = attempt_files(&store);
+        assert_eq!(files.len(), 2, "two real requests, two history records");
+        let mut recorded = Vec::new();
+        for file in &files {
+            let text = std::fs::read_to_string(file).expect("attempt record");
+            assert!(
+                !text.contains("高亮正文"),
+                "attempt history must not store the Speech Text"
+            );
+            assert!(
+                !text.contains("test-key"),
+                "attempt history must not store the API key"
+            );
+            for forbidden in ["audio.mp3", "audio_bytes", "audio_hex", "fffb"] {
+                assert!(
+                    !text.contains(forbidden),
+                    "attempt history must not store audio payloads ({forbidden})"
+                );
+            }
+            let record: AttemptRecord = serde_json::from_str(&text).expect("attempt JSON");
+            recorded.push(record.attempt_id);
+        }
+        recorded.sort();
+        assert_eq!(
+            recorded,
+            vec![
+                first.attempt_id.clone().expect("first attempt"),
+                second.attempt_id.clone().expect("second attempt"),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn clearing_the_cache_lifts_the_gate_while_history_clear_keeps_it() {
+        let home = tempfile::tempdir().expect("home");
+        let store = SpeechStore::from_home(home.path());
+        let (catalog_fetch, synthesize, _) = fake(Err(SenseAudioError::Transport));
+        let error = generate_clip(
+            input(store.clone(), SpeechContentKind::Highlight),
+            Some("test-key".to_string()),
+            now(),
+            catalog_fetch,
+            synthesize,
+        )
+        .await
+        .expect_err("unknown result");
+        assert_eq!(error.machine_code(), "SPEECH_RESULT_UNKNOWN");
+        let clip_id = clip_id_of(SpeechContentKind::Highlight);
+        assert!(stored_state(&store, &clip_id).generation_blocked);
+
+        // history clear 只删 attempt metadata：gate 与 clip state 原样保留。
+        let history = crate::speech::clear_speech_history(&store).expect("clear history");
+        assert_eq!(history.removed_attempts, 1);
+        assert_eq!(
+            history.cleared_generation_gates, 0,
+            "history clear must never lift a generation gate"
+        );
+        assert!(stored_state(&store, &clip_id).generation_blocked);
+        assert!(attempt_files(&store).is_empty());
+
+        // 普通 generate 仍然被 gate 挡住。
+        let (catalog_fetch, synthesize, counters) = fake(Ok(success_response("trace")));
+        let blocked = generate_clip(
+            input(store.clone(), SpeechContentKind::Highlight),
+            Some("test-key".to_string()),
+            now(),
+            catalog_fetch,
+            synthesize,
+        )
+        .await
+        .expect_err("still gated");
+        assert_eq!(blocked.machine_code(), "SPEECH_RESULT_UNKNOWN");
+        assert_eq!(counters.synthesis.load(Ordering::SeqCst), 0);
+
+        // cache clear 是显式清除入口：gate 与 clip state 一起消失。
+        let cleared = crate::speech::clear_speech_cache(&store, now()).expect("clear cache");
+        assert_eq!(cleared.removed, vec![clip_id.clone()]);
+        assert!(cleared.skipped.is_empty());
+        assert_eq!(cleared.cleared_generation_gates, 1);
+        assert!(
+            ClipCache::new(store.clone())
+                .load_state(&clip_id)
+                .expect("load state")
+                .is_none(),
+            "clearing the cache must remove the clip-level gate"
+        );
+
+        // 清除后普通 generate 可以重新创建 attempt。
+        let (catalog_fetch, synthesize, counters) = fake(Ok(success_response("trace-new")));
+        let outcome = generate_clip(
+            input(store.clone(), SpeechContentKind::Highlight),
+            Some("test-key".to_string()),
+            now(),
+            catalog_fetch,
+            synthesize,
+        )
+        .await
+        .expect("generate after clearing the gate");
+        assert_eq!(outcome.source, SpeechClipSource::Provider);
+        assert_eq!(counters.synthesis.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn clearing_the_cache_skips_a_locked_entry() {
+        let home = tempfile::tempdir().expect("home");
+        let store = SpeechStore::from_home(home.path());
+        let (catalog_fetch, synthesize, _) = fake(Ok(success_response("trace-1")));
+        let first = generate_clip(
+            input(store.clone(), SpeechContentKind::Highlight),
+            Some("test-key".to_string()),
+            now(),
+            catalog_fetch,
+            synthesize,
+        )
+        .await
+        .expect("first");
+
+        // 持锁 entry 不可淘汰：cache clear 必须跳过而不是删掉正在使用的音频。
+        occupy_lock(&store, &first.clip_id);
+        let cleared = crate::speech::clear_speech_cache(&store, now()).expect("clear cache");
+        assert_eq!(cleared.removed, Vec::<String>::new());
+        assert_eq!(cleared.skipped, vec![first.clip_id.clone()]);
+        assert_eq!(cleared.cleared_generation_gates, 0);
+        assert!(stored_state(&store, &first.clip_id).current_cache_status == crate::speech::cache::ClipCacheStatus::Ready);
+
+        // 释放锁之后同一命令就能删掉它。
+        let cache = ClipCache::new(store.clone());
+        std::fs::remove_file(cache.locks_dir().join(format!("{}.lock", first.clip_id)))
+            .expect("release lock");
+        let cleared = crate::speech::clear_speech_cache(&store, now()).expect("clear cache");
+        assert_eq!(cleared.removed, vec![first.clip_id.clone()]);
+    }
 }
