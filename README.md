@@ -182,6 +182,77 @@ apple-books-exporter speech voices --json
   不存在的标签组合；
 - 本地缓存文件损坏或 schema 不匹配不会阻断 `--refresh`：刷新成功后原子替换掉损坏文档。
 
+### 语音生成（唯一会产生费用的操作）
+
+把一条 Annotation 的高亮或个人笔记合成为一个 Speech Clip。**这是整个 `speech` 命令族里
+唯一会向外部供应商发送内容并产生费用的动作**，只有你显式执行它才会发生。
+
+```bash
+# 人类形式：用书籍和 Annotation 的显示序号
+apple-books-exporter speech generate 1 --annotation 1 --content highlight
+
+# 机器形式：用稳定 ID（可脚本化）
+apple-books-exporter speech generate \
+  --asset-id BOOK_ID --annotation-id ANNOTATION_ID --content note --json
+```
+
+- 机器形式必须显式给出 `asset_id`、`annotation_id` 和 `content_kind`
+  （`highlight` 或 `note`），且不接受显示序号；人类形式反过来不接受 `--asset-id`。
+  两组参数混用返回稳定错误 `INVALID_ARGUMENT`，不会忽略其中一组；
+- 一条 Speech Clip 只朗读**一个**内容部分：同一条 Annotation 的高亮与笔记是两个独立
+  clip，需要分别生成、分别计费；
+- 顺序固定为：命中有效缓存 → 尝试从你已导出的音频恢复（0 次 provider 调用）→ 才会
+  请求供应商。缓存命中与恢复都不产生费用；
+- `--regenerate` 是唯一可以越过 unknown 结果、替换已有有效音频的入口。普通 `generate`
+  在结果不确定时**不会**自动重放，因为重复请求可能重复计费；
+- 人类输出只显示内容类型、音色与字符估算，不回显完整原文。
+
+### 语音播放（纯本地）
+
+播放一个已经通过校验的 Speech Clip。**播放永远不联系 Speech Provider，也不会重新生成**
+——播放失败不代表重新生成。
+
+```bash
+apple-books-exporter speech play --clip-id CLIP_ID
+apple-books-exporter speech play --clip-id CLIP_ID --json
+```
+
+- 查找顺序：本地缓存 → 显式 `--export-root` → 已验证的导出定位记录；
+- `--json` 只返回已校验的路径与来源，**不启动播放器**、不产生声音；
+- 缓存与导出音频都找不到时返回 `SPEECH_CLIP_NOT_FOUND`；
+- 你自己改过导出音频导致校验不匹配时，它不再作为该 clip 的播放回退，但仍然可以自己用
+  系统播放器打开这个普通文件。
+
+### 语音导出（把缓存里的音频交给用户）
+
+把一个已校验的 Cached Speech Clip 原子复制到这本书的导出目录。**不联网，也不修改已有
+Markdown**——音频链接由下一次常规导出统一写入。
+
+```bash
+apple-books-exporter speech export \
+  --clip-id CLIP_ID --output BOOK_EXPORT_DIRECTORY [--overwrite] [--json]
+```
+
+- `--output` 指向该书的导出根目录，不是 `assets/audio/` 本身；
+- 导出后音频归你所有，不再受缓存 LRU 淘汰影响，`speech cache clear` 不会删除它；
+- 同一路径内容相同时直接复用；内容不同默认返回 `SPEECH_OUTPUT_FILE_EXISTS`，
+  只有显式 `--overwrite` 才替换；
+- 同一 Annotation 的内容部分可以保留多个导出变体，但只有一个是 active；新导出的成为
+  active，旧文件仍然保留；
+- 导出清单损坏时返回 `SPEECH_EXPORT_MANIFEST_INVALID`，既不覆盖也不按文件名猜测重建。
+
+### 四类语音操作的边界
+
+| 操作 | 是否联网 | 是否产生费用 | 是否可能修改用户文件 |
+| --- | --- | --- | --- |
+| `profile show/set/reset`、`cache status/clear`、`history clear` | 否 | 否 | 只改本地应用状态 |
+| `voices` / `voices --refresh` | 是（仅音色目录） | 否 | 否 |
+| `generate`（缓存未命中且无可恢复导出时） | 是 | **是** | 只写应用缓存目录 |
+| `play`、`export` | 否 | 否 | `export` 写入你选择的导出目录 |
+
+浏览、读取标注、播放、常规 Markdown/Obsidian 导出和 Agent Data Skill **都不会**触发
+远程生成。
+
 ### 语音 Cache 与 Attempt History
 
 维护本地 Cached Speech Clip 与 Speech Attempt History。两者都是纯本地操作：不联网，

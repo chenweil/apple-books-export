@@ -455,6 +455,18 @@ Speech Text、API Key、音频 hex 或供应商完整原始响应。
 | `SPEECH_OUTPUT_FILE_EXISTS` | 导出目标冲突且未允许覆盖 |
 | `SPEECH_EXPORT_MANIFEST_INVALID` | manifest 结构、身份或路径不可信 |
 | `SPEECH_CLIP_NOT_FOUND` | cache 与 active export 都没有有效 clip |
+| `SPEECH_PLAYBACK_FAILED` | macOS 系统播放器无法播放已通过校验的音频 |
+
+这张表是**白名单**，在代码里由 `speech::machine::STABLE_SPEECH_ERROR_CODES` 表达，
+并由 `every_speech_error_code_is_in_the_documented_stable_set` 强制：任何
+`machine_code()` 返回表外的值都是契约缺陷，而不是「新增能力」。跨运行可变的错误码
+同样是缺陷——排队等待方从磁盘 attempt 记录还原终态时必须经过
+`generate::normalize_recorded_failure_code` 归一化。
+
+`SPEECH_PLAYBACK_FAILED` 来自 human `speech play` 的播放器 seam（#26），只表示本地
+播放器失败：音频本身已经通过 checksum 与 MP3 校验，机器入口 `--json` 不启动播放器，
+因此不会产生该码。`UNSUPPORTED_SCHEMA_VERSION` 复用既有 Machine JSON 协议的共享码，
+Speech 不得为它另造别名。
 
 provider 成功但 MP3 校验或本地提交失败时，不允许普通 `generate` 自动重放；该 clip 进入
 需要显式 `--regenerate` 的阻塞状态，`details.outcome` 标明
