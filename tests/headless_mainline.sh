@@ -109,9 +109,13 @@ for required_rust in 'src/main.rs' 'src/lib.rs' 'src/exporter.rs' 'src/machine.r
   fi
 done
 
+# The floor is deliberately below the size of the speech module (14 files), so
+# that losing src/speech/ trips the specific speech assertion below rather than
+# this one, and a partial wipe is still caught. It is a floor rather than a
+# spot check because a spot check alone would pass with four files left.
 rust_file_count="$(find "$ROOT_DIR/src" -name '*.rs' -type f | wc -l | tr -d ' ')"
-if [[ "$rust_file_count" -lt 20 ]]; then
-  printf 'expected the full Rust CLI under src/, found only %s files\n' "$rust_file_count" >&2
+if [[ "$rust_file_count" -lt 12 ]]; then
+  printf 'expected the Rust CLI under src/, found only %s files\n' "$rust_file_count" >&2
   exit 1
 fi
 
