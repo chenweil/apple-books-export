@@ -1186,4 +1186,131 @@ mod tests {
         assert_eq!(loaded, state);
         assert_eq!(loaded.current_cache_status.as_str(), "corrupt");
     }
+
+    #[test]
+    fn cache_clear_removes_clip_state_and_lifts_the_generation_gate() {
+        let (_home, cache) = cache();
+        let clip_id = "1".repeat(64);
+        let audio = silent_mp3(1);
+        let audio_sha256 = sha256_hex(&audio);
+        let mut blocked = state(&clip_id);
+        blocked.current_cache_status = ClipCacheStatus::Ready;
+        blocked.current_audio_sha256 = Some(audio_sha256.clone());
+        blocked.latest_attempt_status = Some(AttemptStatus::Unknown);
+        blocked.generation_blocked = true;
+        cache
+            .commit_version(
+                &blocked,
+                &metadata(&clip_id, &audio_sha256, &audio),
+                &audio,
+                now(),
+            )
+            .expect("commit");
+        cache.save_state(&blocked).expect("save gated state");
+
+        let report = cache.clear_cache(now()).expect("clear cache");
+
+        assert_eq!(report.removed, vec![clip_id.clone()]);
+        assert!(report.skipped.is_empty());
+        assert_eq!(
+            report.cleared_generation_gates, 1,
+            "clearing the cache is the explicit user action that lifts a generation gate"
+        );
+        assert!(
+            cache.load_state(&clip_id).expect("load state").is_none(),
+            "the clip state must be gone after cache clear"
+        );
+        assert!(!cache.clip_dir(&clip_id).expect("clip dir").exists());
+    }
+
+    #[test]
+    fn cache_clear_skips_an_entry_that_holds_the_writer_lock() {
+        let (_home, cache) = cache();
+        let clip_id = "2".repeat(64);
+        let audio = silent_mp3(1);
+        let audio_sha256 = sha256_hex(&audio);
+        cache
+            .commit_version(&state(&clip_id), &metadata(&clip_id, &audio_sha256, &audio), &audio, now())
+            .expect("commit");
+        let held = ClipLock::acquire(&cache, &clip_id, now()).expect("hold the lock");
+
+        let report = cache.clear_cache(now()).expect("clear cache");
+
+        assert_eq!(report.removed, Vec::<String>::new());
+        assert_eq!(
+            report.skipped,
+            vec![clip_id.clone()],
+            "an in-flight entry must not be evicted by cache clear"
+        );
+        assert_eq!(report.cleared_generation_gates, 0);
+        assert!(cache.clip_dir(&clip_id).expect("clip dir").exists());
+        assert!(cache
+            .load_ready_clip(&clip_id)
+            .expect("load")
+            .expect("still cached")
+            .audio_path
+            .exists());
+
+        drop(held);
+        let report = cache.clear_cache(now()).expect("clear after release");
+        assert_eq!(report.removed, vec![clip_id]);
+    }
+
+    #[test]
+    fn cache_clear_without_any_clip_state_is_a_no_op() {
+        let (_home, cache) = cache();
+
+        let report = cache.clear_cache(now()).expect("clear cache");
+
+        assert!(report.removed.is_empty());
+        assert!(report.skipped.is_empty());
+        assert_eq!(report.cleared_generation_gates, 0);
+    }
+
+    #[test]
+    fn history_clear_removes_attempt_metadata_but_keeps_the_cache_and_the_gate() {
+        let (_home, cache) = cache();
+        let clip_id = "3".repeat(64);
+        let record = AttemptRecord {
+            schema_version: ATTEMPT_SCHEMA_VERSION,
+            attempt_id: "attempt-clear".to_string(),
+            clip_id: clip_id.clone(),
+            provider: "senseaudio".to_string(),
+            model: "sensenova-tts-2.0".to_string(),
+            voice_id: "male_0004_a".to_string(),
+            started_at: now().to_rfc3339(),
+            finished_at: Some(now().to_rfc3339()),
+            status: AttemptStatus::Unknown,
+            unicode_characters: 4,
+            estimated_billing_characters: 8,
+            provider_usage_characters: None,
+            product_error_code: Some("SPEECH_RESULT_UNKNOWN".to_string()),
+            provider_code: None,
+            trace_id: None,
+        };
+        cache.record_attempt(&record, now()).expect("record attempt");
+        let mut gated = state(&clip_id);
+        gated.latest_attempt_id = Some("attempt-clear".to_string());
+        gated.latest_attempt_status = Some(AttemptStatus::Unknown);
+        gated.generation_blocked = true;
+        cache.save_state(&gated).expect("save gated state");
+
+        let report = cache.clear_history().expect("clear history");
+
+        assert_eq!(report.removed_attempts, 1);
+        assert_eq!(
+            report.cleared_generation_gates, 0,
+            "history clear must never lift a generation gate"
+        );
+        assert!(!cache.attempts_dir().exists());
+        let kept = cache.load_state(&clip_id).expect("load state").expect("state");
+        assert!(
+            kept.generation_blocked,
+            "the unknown gate must survive history clear"
+        );
+        assert_eq!(kept.latest_attempt_id.as_deref(), Some("attempt-clear"));
+
+        let again = cache.clear_history().expect("clear history again");
+        assert_eq!(again.removed_attempts, 0);
+    }
 }
