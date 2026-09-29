@@ -274,6 +274,70 @@ fn export_json_keeps_generated_files_inside_selected_output_directory() {
 }
 
 #[test]
+fn export_json_nests_generated_files_in_a_per_book_subdirectory() {
+    let fixture = Fixture::new();
+    let output_dir = fixture.output_dir();
+    let output_dir_arg = output_dir.to_string_lossy().into_owned();
+
+    let output = fixture.run(&[
+        "export",
+        "--asset-id",
+        "book-1",
+        "--json",
+        "--output",
+        &output_dir_arg,
+    ]);
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value: Value = serde_json::from_slice(&output.stdout).expect("stdout is JSON only");
+    let generated = PathBuf::from(
+        value["receipt"]["generated_files"][0]
+            .as_str()
+            .expect("generated file path"),
+    );
+
+    // The exporter always nests one directory per book, so a flat *.md glob in
+    // the selected output directory finds nothing. Callers must verify the
+    // receipt's generated_files paths instead of scanning the output directory.
+    let book_dir = generated
+        .parent()
+        .expect("generated file lives in a per-book directory");
+    assert_eq!(
+        book_dir.parent(),
+        Some(output_dir.as_path()),
+        "the per-book directory must sit directly inside the selected output directory"
+    );
+    assert!(book_dir.is_dir(), "per-book directory must exist on disk");
+    assert_eq!(
+        book_dir.file_name().and_then(|name| name.to_str()),
+        Some("测试书")
+    );
+    assert_eq!(
+        generated.file_name().and_then(|name| name.to_str()),
+        Some("测试书.md")
+    );
+
+    let flat_markdown_files = std::fs::read_dir(&output_dir)
+        .expect("output directory exists after a successful export")
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| {
+            entry
+                .path()
+                .extension()
+                .is_some_and(|extension| extension == "md")
+        })
+        .count();
+    assert_eq!(
+        flat_markdown_files, 0,
+        "no Markdown file sits directly in the selected output directory"
+    );
+}
+
+#[test]
 fn export_json_refuses_existing_file_unless_overwrite_is_explicit() {
     let fixture = Fixture::new();
     let output_dir_arg = fixture.output_dir().to_string_lossy().into_owned();
