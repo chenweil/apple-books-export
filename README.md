@@ -530,16 +530,14 @@ apple-books-export/
 │   ├── provider.rs                # LLM API 调用
 │   ├── cache.rs                   # LLM 结果缓存
 │   ├── card.rs                    # 图片卡片生成
+│   ├── speech/                    # Speech Clip 生成、缓存、播放与导出
 │   └── ...
-├── src-tauri/                     # Tauri Legacy GUI（保留源码,不默认发布）
-│   ├── src/main.rs                # Tauri 入口
-│   └── tauri.conf.json            # Tauri 配置
 ├── tui/                           # OpenTUI 只读终端界面
 │   ├── src/                       # Core API 应用、后端协议与测试
 │   └── package.json               # Bun 脚本与 OpenTUI 依赖
-├── src/lib/                       # Tauri Legacy GUI 的 Svelte 前端
-│   ├── pages/                     # 页面组件
-│   └── components/                # UI 组件
+├── appkit/                        # AppKit GUI (Swift)
+│   ├── Sources/BooksExporter/     # 应用主体
+│   └── Scripts/verify-ui.sh       # UI 回归探针
 ├── skills/                        # AI Agent Skill
 │   └── apple-books-export-rust/
 │       ├── SKILL.md               # Skill 文档
