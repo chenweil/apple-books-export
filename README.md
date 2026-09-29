@@ -106,10 +106,75 @@ Skill 会刷新 `list --json`，通过 `asset_id` 读取标注或导出 Markdown
 验证生成的非空文件。它不解析人类表格、不修改 Apple Books、不自动下载
 binary，也不调用 AI。
 
-## Tauri Legacy GUI
+## Tauri Legacy GUI（已废弃，源码保留）
 
-`src-tauri/` 和 Svelte 源码保留用于迁移、回滚和历史比较；Tauri GUI 不再
-作为 `main` 的默认入口或发布产物。正式 GUI 迁移由独立的 `appkit` 分支负责。
+`src-tauri/` 与 `src/lib/` 的 Svelte 源码**保留**在 `main` 上，用于历史比较、迁移
+和回滚；Tauri GUI **不再是** `main` 的默认入口、默认构建目标或发布产物。正式 GUI
+迁移由独立的 `appkit` 分支负责。
+
+**回滚锚点**：Tauri GUI 仍是默认入口的最后一个 `main` 提交是 `6bac3e5`
+（`feat: harden Apple Books agent data skill`），已打标签
+`legacy/tauri-gui-mainline`。需要回到那个状态时：
+
+```bash
+git checkout legacy/tauri-gui-mainline
+```
+
+该标签下 `package.json` 仍有 `dev` / `build` / `preview` / `tauri` 四个默认脚本，
+`release.yml` 仍会发布 GUI 产物。
+
+**显式构建路径**（仅在明确的迁移/回滚任务中使用）：
+
+```bash
+npm install                # 只在需要 Legacy GUI 时安装前端依赖
+npm run legacy-gui:dev     # 只启动 Svelte 前端（vite dev server）
+npm run legacy-gui:build   # 只构建 Svelte 前端到 dist/
+npm run legacy-gui:tauri build   # 构建完整 Tauri 应用（需要 Rust + Node + Xcode 工具链）
+```
+
+`src-tauri/tauri.conf.json` 的 `beforeDevCommand` / `beforeBuildCommand` 已指向
+`legacy-gui:dev` / `legacy-gui:build`，所以上面这条路径是自洽的。`package.json`
+顶层原有的 `dev` / `build` / `preview` / `tauri` 四个脚本已随 Headless Mainline
+一起移除——它们过去指向这个被废弃的 GUI。
+
+## Headless 能力矩阵
+
+**没有任何功能只存在于已废弃的 Tauri GUI 里**：下面每一项都能在 Headless Mainline
+上用 Rust CLI 完成。下表说明每个命令在无 GUI 环境下的边界。
+
+| 命令 | Headless 可用 | 联网 | 产生费用 | 写入用户文件 |
+| --- | --- | --- | --- | --- |
+| `list`、`annotations` | 是 | 否 | 否 | 否 |
+| `doctor` | 是 | 否 | 否 | 否（只报告） |
+| `export` | 是 | 否 | 否 | 是（你选择的输出目录） |
+| `enrich` | 是 | 是（你配置的 LLM provider） | **是** | 是（`llm_cache.json` + 输出目录） |
+| `card` | 是 | 否 | 否 | 是（图片写入输出目录） |
+| `config` | 是 | 否 | 否 | 是（配置文件） |
+| `cache <book>` | 是 | 否 | 否 | 否（只读状态） |
+| `speech profile show` | 是 | 否 | 否 | 否 |
+| `speech profile set` / `reset` | 是 | 否 | 否 | 是（speech 配置） |
+| `speech voices` | 是 | 是（仅音色目录） | 否 | 是（本地音色目录缓存） |
+| `speech generate` | 是 | 是 | **是** | 是（仅应用缓存目录） |
+| `speech play`（默认人类模式） | 是 | 否 | 否 | 是（仅应用缓存目录：clip 使用时间与播放锁标记） |
+| `speech play --json` | 是 | 否 | 否 | 否（只返回已校验路径与来源） |
+| `speech export` | 是 | 否 | 否 | 是（你选择的导出目录） |
+| `speech cache status` | 是 | 否 | 否 | 否（只读） |
+| `speech cache clear` | 是 | 否 | 否 | 是（应用缓存目录） |
+| `speech history clear` | 是 | 否 | 否 | 是（attempt 元数据） |
+
+「写入用户文件」指写入你可见的文件系统位置，**包含应用自己的状态目录**
+（`~/Library/Application Support/books-exporter/`）。几个容易被误判为只读的命令：
+
+- `speech play` 默认（人类）模式会刷新该 clip 的使用时间并落一个播放锁标记，
+  这是刻意保留的行为；只有 `--json` 形式完全不留痕迹。
+- `speech voices` 会把音色目录缓存到本地磁盘，即使你只"看一眼"。
+- `speech profile show` 与 `speech cache status` 才是真正不写任何文件的形式。
+
+`list`、`annotations`、`export` 的「不联网」由
+`tests/machine_cli.rs::read_only_machine_commands_make_no_network_requests` 在运行时
+用连接计数证明（该测试只覆盖这三个命令）。`doctor` 不联网是因为它只读数据库和
+文件系统、代码路径里没有 HTTP 客户端，但没有同样的连接计数测试。语音命令族的
+联网/计费边界见下文「四类语音操作的边界」。
 
 ## CLI 命令
 
@@ -283,10 +348,15 @@ apple-books-exporter speech export \
 
 | 操作 | 是否联网 | 是否产生费用 | 是否可能修改用户文件 |
 | --- | --- | --- | --- |
-| `profile show/set/reset`、`cache status/clear`、`history clear` | 否 | 否 | 只改本地应用状态 |
-| `voices` / `voices --refresh` | 是（仅音色目录） | 否 | 否 |
+| `profile show`、`cache status` | 否 | 否 | 否（只读） |
+| `profile set/reset`、`cache clear`、`history clear` | 否 | 否 | 只改本地应用状态 |
+| `voices` / `voices --refresh` | 是（仅音色目录） | 否 | 写入本地音色目录缓存 |
 | `generate`（缓存未命中且无可恢复导出时） | 是 | **是** | 只写应用缓存目录 |
-| `play`、`export` | 否 | 否 | `export` 写入你选择的导出目录 |
+| `play`（默认人类模式） | 否 | 否 | 只改本地应用状态（clip 使用时间、播放锁标记） |
+| `play --json`、`export` | 否 | 否 | `play --json` 否；`export` 写入你选择的导出目录 |
+
+本表与上文「Headless 能力矩阵」对同一批命令的结论必须一致；如出现分歧，以能力
+矩阵为准。
 
 浏览、读取标注、播放、常规 Markdown/Obsidian 导出和 Agent Data Skill **都不会**触发
 远程生成。

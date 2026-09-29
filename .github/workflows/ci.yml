@@ -16,6 +16,10 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          # tests/headless_mainline.sh verifies the documented Tauri GUI rollback
+          # tag resolves and is still an ancestor, which needs real history.
+          fetch-depth: 0
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -53,6 +57,10 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          # tests/headless_mainline.sh verifies the documented Tauri GUI rollback
+          # tag resolves and is still an ancestor, which needs real history.
+          fetch-depth: 0
 
       - name: Install Bun
         uses: oven-sh/setup-bun@v2
