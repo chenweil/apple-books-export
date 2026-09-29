@@ -325,6 +325,77 @@ impl SpeechGenerateReceipt {
     }
 }
 
+/// `speech cache clear` 的成功响应。
+#[derive(Debug, Serialize)]
+pub struct SpeechCacheClearResponse {
+    /// 与现有 Machine JSON 协议一致的 schema 版本。
+    pub schema_version: u32,
+    /// 结构化收据。
+    pub receipt: SpeechCacheClearReceipt,
+}
+
+/// `speech cache clear` 的收据：删除、跳过与显式清除的阻塞门。
+#[derive(Debug, Serialize)]
+pub struct SpeechCacheClearReceipt {
+    /// 稳定操作名。
+    pub operation: &'static str,
+    /// 被删除的 clip ID。
+    pub removed: Vec<String>,
+    /// 因持锁（正在生成/播放/导出）而跳过的 clip ID。
+    pub skipped: Vec<String>,
+    /// 被显式清除的 generation gate 数量。
+    pub cleared_generation_gates: usize,
+    /// 结构化 warning。
+    pub warnings: Vec<SpeechWarning>,
+}
+
+impl SpeechCacheClearReceipt {
+    /// 从清理报告构造收据；不包含原文、密钥或音频信息。
+    pub fn new(report: &crate::speech::CacheClearReport) -> Self {
+        Self {
+            operation: "cache_clear",
+            removed: report.removed.clone(),
+            skipped: report.skipped.clone(),
+            cleared_generation_gates: report.cleared_generation_gates,
+            warnings: Vec::new(),
+        }
+    }
+}
+
+/// `speech history clear` 的成功响应。
+#[derive(Debug, Serialize)]
+pub struct SpeechHistoryClearResponse {
+    /// 与现有 Machine JSON 协议一致的 schema 版本。
+    pub schema_version: u32,
+    /// 结构化收据。
+    pub receipt: SpeechHistoryClearReceipt,
+}
+
+/// `speech history clear` 的收据。
+#[derive(Debug, Serialize)]
+pub struct SpeechHistoryClearReceipt {
+    /// 稳定操作名。
+    pub operation: &'static str,
+    /// 被删除的 attempt history 记录数。
+    pub removed_attempts: usize,
+    /// 恒为 0：history clear 不清 unknown gate。
+    pub cleared_generation_gates: usize,
+    /// 结构化 warning。
+    pub warnings: Vec<SpeechWarning>,
+}
+
+impl SpeechHistoryClearReceipt {
+    /// 从清理报告构造收据；只含计数，不含任何 attempt 内容。
+    pub fn new(report: &crate::speech::HistoryClearReport) -> Self {
+        Self {
+            operation: "history_clear",
+            removed_attempts: report.removed_attempts,
+            cleared_generation_gates: report.cleared_generation_gates,
+            warnings: Vec::new(),
+        }
+    }
+}
+
 /// 把生成失败映射成稳定的 Machine JSON envelope。
 ///
 /// 供应商 code、trace ID、attempt ID 与 outcome 进入可选 `details`；原始响应体

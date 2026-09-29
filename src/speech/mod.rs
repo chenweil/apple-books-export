@@ -17,10 +17,10 @@ pub mod text;
 
 pub use audio::{decode_audio_hex, inspect_mp3, validate_audio, AudioDecodeError, AudioFacts};
 pub use cache::{
-    AttemptRecord, AttemptStatus, ClipCache, ClipCacheError, ClipCacheStatus, ClipLock,
-    ClipLockError, ClipState, ClipVersionMetadata, ReadyClip, ATTEMPT_HISTORY_RETENTION_DAYS,
-    ATTEMPT_SCHEMA_VERSION, CLIP_LOCK_TIMEOUT, CLIP_STATE_SCHEMA_VERSION,
-    CLIP_VERSION_SCHEMA_VERSION,
+    AttemptRecord, AttemptStatus, CacheClearReport, ClipCache, ClipCacheError, ClipCacheStatus,
+    ClipLock, ClipLockError, ClipState, ClipVersionMetadata, HistoryClearReport, ReadyClip,
+    ATTEMPT_HISTORY_RETENTION_DAYS, ATTEMPT_SCHEMA_VERSION, CLIP_LOCK_TIMEOUT,
+    CLIP_STATE_SCHEMA_VERSION, CLIP_VERSION_SCHEMA_VERSION,
 };
 pub use catalog::{
     CatalogAvailability, CatalogSourceType, CatalogVoice, NoCatalogSource, UnverifiedReason,
@@ -36,8 +36,10 @@ pub use generate::{
     SpeechSynthesisRequest,
 };
 pub use machine::{
-    SpeechGenerateReceipt, SpeechGenerateResponse, SpeechProfileDto, SpeechProfileResponse,
-    VoiceCatalogResponse, VoiceCatalogReceipt, VoiceCatalogVoiceDto,
+    SpeechCacheClearReceipt, SpeechCacheClearResponse, SpeechGenerateReceipt,
+    SpeechGenerateResponse, SpeechHistoryClearReceipt, SpeechHistoryClearResponse,
+    SpeechProfileDto, SpeechProfileResponse, VoiceCatalogResponse, VoiceCatalogReceipt,
+    VoiceCatalogVoiceDto,
 };
 pub use profile::{
     resolve_generation_profile, AudioSettings, Hundredths, ProfileDraft, ProfileError,
@@ -289,6 +291,47 @@ pub fn reset_profile(store: &SpeechStore) -> Result<ProfileOutcome, SpeechError>
     store.save_config(&config).map_err(SpeechError::Storage)?;
     let warnings = vec![SpeechWarning::unverified(Some(UnverifiedReason::NoCatalog))];
     Ok(finish(ProfileOperation::Reset, config, store, warnings))
+}
+
+/// `speech cache clear`：删除可淘汰 Cached Speech Clip，并显式清除没有有效音频的
+/// clip 级阻塞态（unknown gate / provider-succeeded-no-artifact）。
+///
+/// 正在生成、播放、导出或持锁的 entry 跳过；这是用户显式维护动作，也是
+/// ADR 0007 允许的「用户明确清除该状态」入口，因此不清除锁定的 entry，
+/// 不终止正在进行的操作。
+pub fn clear_speech_cache(
+    store: &SpeechStore,
+    now: DateTime<Utc>,
+) -> Result<CacheClearReport, SpeechError> {
+    ClipCache::new(store.clone())
+        .clear_cache(now)
+        .map_err(|error| SpeechError::Storage(storage_error(error)))
+}
+
+/// `speech history clear`：只删除 attempt history，不清缓存、不清 unknown gate、
+/// 不碰用户导出（实施 spec 5.7）。阻塞态仍只能由 `--regenerate` 或
+/// `speech cache clear` 解除。
+pub fn clear_speech_history(store: &SpeechStore) -> Result<HistoryClearReport, SpeechError> {
+    ClipCache::new(store.clone())
+        .clear_history()
+        .map_err(|error| SpeechError::Storage(storage_error(error)))
+}
+
+/// 把 clip 缓存错误收敩成稳定的 Speech 存储错误；不引入新的错误码。
+fn storage_error(error: ClipCacheError) -> SpeechStoreError {
+    match error {
+        ClipCacheError::Unavailable { path, message } => SpeechStoreError::Unavailable { path, message },
+        ClipCacheError::Corrupt { path, reason } => SpeechStoreError::Unavailable {
+            path,
+            message: format!("the Speech cache entry is {reason}"),
+        },
+        ClipCacheError::UnsupportedSchemaVersion { path, version } => {
+            SpeechStoreError::Unavailable {
+                path,
+                message: format!("unsupported Speech cache schema version {version}"),
+            }
+        }
+    }
 }
 
 fn format_timestamp(now: DateTime<Utc>) -> String {

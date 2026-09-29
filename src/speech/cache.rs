@@ -308,6 +308,33 @@ pub struct ReadyClip {
     pub audio_path: PathBuf,
 }
 
+/// `speech cache clear` 的报告：删除、跳过与清掉的阻塞门。
+///
+/// `cache clear` 是用户显式维护动作：删除可淘汰的 Cached Speech Clip，并清除没有有效
+/// 音频的 clip 级阻塞状态（unknown gate / provider-success-no-artifact）。正在生成、
+/// 播放、导出或持锁的 entry 跳过，不终止正在进行的操作（实施 spec 5.7）。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CacheClearReport {
+    /// 被删除的 clip ID（完整 sha256 hex）。
+    pub removed: Vec<String>,
+    /// 因持锁（正在生成/播放/导出）而跳过的 clip ID。
+    pub skipped: Vec<String>,
+    /// 被显式清除的 generation gate 数量。
+    pub cleared_generation_gates: usize,
+}
+
+/// `speech history clear` 的报告。
+///
+/// `history clear` 只删除 attempt history 文件，不清缓存、不清 unknown gate、不碰用户
+/// 导出（实施 spec 5.7），因此 `cleared_generation_gates` 恒为 0。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HistoryClearReport {
+    /// 被删除的 attempt history 记录数。
+    pub removed_attempts: usize,
+    /// 恒为 0：history clear 不得解除任何 generation gate。
+    pub cleared_generation_gates: usize,
+}
+
 /// Speech Cache Entry 的本地状态：不可变 version + 原子 current pointer。
 #[derive(Debug, Clone)]
 pub struct ClipCache {
@@ -453,8 +480,7 @@ impl ClipCache {
         }))
     }
 
-    /// 已存在的 version 目录是否就是这次要提交的版本。
-    ///
+    /// 已存在 version 目录是否就是这次要提交的版本。    ///
     /// 目录名是内容寻址的 `audio_sha256`，因此「 intact 」意味着磁盘字节仍然哈希成名
     /// 字本身，且 `metadata.json` 与本次提交完全一致。只要有一个不成立（音频被原地
     /// 改写、metadata 被截断、size 不符），调用方就必须重写该目录，绝不能让
@@ -574,6 +600,103 @@ impl ClipCache {
     /// 跨进程 writer 锁目录。
     pub fn locks_dir(&self) -> PathBuf {
         self.store.root().join("locks")
+    }
+
+    /// clip 目录的父目录。
+    pub fn clips_dir(&self) -> PathBuf {
+        self.store.root().join("clips")
+    }
+
+    /// attempt history 目录。
+    pub fn attempts_dir(&self) -> PathBuf {
+        self.store.root().join("attempts")
+    }
+
+    /// `speech cache clear`：删除可淘汰 clip，显式清除无有效音频的阻塞门。
+    ///
+    /// 每个 clip 先用零超时尝试同一把 writer 锁：拿不到锁说明该 entry 正在生成、播放、
+    /// 导出或持锁，跳过并计入 `skipped`；拿到锁才删除，因此并发生成不会被清掉。
+    pub fn clear_cache(&self, now: DateTime<Utc>) -> Result<CacheClearReport, ClipCacheError> {
+        let mut report = CacheClearReport::default();
+        let clips_dir = self.clips_dir();
+        let entries = match fs::read_dir(&clips_dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(report),
+            Err(error) => return Err(ClipCacheError::unavailable(&clips_dir, error)),
+        };
+        let mut clip_ids = Vec::new();
+        for entry in entries {
+            let entry = entry.map_err(|error| ClipCacheError::unavailable(&clips_dir, error))?;
+            if !entry.path().is_dir() {
+                continue;
+            }
+            // 目录名不是 sha256 hex 的残留无法被 clip 身份寻址：不猜测、不删除。
+            let clip_id = entry.file_name().to_string_lossy().into_owned();
+            if is_clip_id(&clip_id) {
+                clip_ids.push(clip_id);
+            }
+        }
+        clip_ids.sort();
+
+        for clip_id in clip_ids {
+            match ClipLock::acquire_with_timeout(self, &clip_id, now, Duration::ZERO) {
+                // 持锁 entry 不可淘汰：锁在 Drop 时释放，不留下孤儿锁文件。
+                Ok(_lock) => {
+                    let clip_dir = self.clip_dir(&clip_id)?;
+                    let blocked = self
+                        .load_state(&clip_id)
+                        .ok()
+                        .flatten()
+                        .is_some_and(|state| state.generation_blocked);
+                    fs::remove_dir_all(&clip_dir)
+                        .map_err(|error| ClipCacheError::unavailable(&clip_dir, error))?;
+                    if blocked {
+                        report.cleared_generation_gates += 1;
+                    }
+                    report.removed.push(clip_id);
+                }
+                Err(ClipLockError::InProgress) => report.skipped.push(clip_id),
+                Err(ClipLockError::Unavailable(path, error)) => {
+                    return Err(ClipCacheError::unavailable(&path, error))
+                }
+            }
+        }
+        Ok(report)
+    }
+
+    /// `speech history clear`：只删除 attempt history，不清缓存或 unknown gate。
+    pub fn clear_history(&self) -> Result<HistoryClearReport, ClipCacheError> {
+        let attempts_dir = self.attempts_dir();
+        let mut removed_attempts = 0usize;
+        let days = match fs::read_dir(&attempts_dir) {
+            Ok(days) => days,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(HistoryClearReport::default())
+            }
+            Err(error) => return Err(ClipCacheError::unavailable(&attempts_dir, error)),
+        };
+        for day in days {
+            let day = day.map_err(|error| ClipCacheError::unavailable(&attempts_dir, error))?;
+            if !day.path().is_dir() {
+                continue;
+            }
+            let files = fs::read_dir(day.path())
+                .map_err(|error| ClipCacheError::unavailable(&day.path(), error))?;
+            for file in files {
+                let file = file.map_err(|error| ClipCacheError::unavailable(&day.path(), error))?;
+                if file.path().is_file() {
+                    removed_attempts += 1;
+                }
+            }
+        }
+        fs::remove_dir_all(&attempts_dir)
+            .map_err(|error| ClipCacheError::unavailable(&attempts_dir, error))?;
+        Ok(HistoryClearReport {
+            removed_attempts,
+            // history clear 明确不清 unknown gate：阻塞态只由显式 --regenerate 或
+            // speech cache clear 解除（实施 spec 5.7 / 7.2）。
+            cleared_generation_gates: 0,
+        })
     }
 
     fn lock_path(&self, clip_id: &str) -> Result<PathBuf, ClipCacheError> {

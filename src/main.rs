@@ -189,8 +189,7 @@ enum SpeechCommands {
     },
 
     /// 为一个 Annotation 的高亮或笔记生成并缓存一个 Speech Clip
-    Generate {
-        /// 书籍显示序号（人类 CLI；1-based）
+    Generate {        /// 书籍显示序号（人类 CLI；1-based）
         #[arg(value_name = "BOOK_INDEX")]
         book_index: Option<usize>,
 
@@ -230,6 +229,38 @@ enum SpeechCommands {
         #[arg(long)]
         regenerate: bool,
 
+        /// 以稳定的机器可读 JSON 输出
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// 管理本地 Cached Speech Clip（可淘汰缓存与无有效音频的阻塞门）
+    Cache {
+        #[command(subcommand)]
+        command: SpeechCacheCommands,
+    },
+
+    /// 管理 Speech Attempt History（metadata-only，默认保留 90 天）
+    History {
+        #[command(subcommand)]
+        command: SpeechHistoryCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum SpeechCacheCommands {
+    /// 删除可淘汰 Cached Speech Clip，并显式清除没有有效音频的阻塞门；跳过持锁 entry
+    Clear {
+        /// 以稳定的机器可读 JSON 输出
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum SpeechHistoryCommands {
+    /// 只删除 attempt history；不清缓存、不清 unknown gate、不碰用户导出
+    Clear {
         /// 以稳定的机器可读 JSON 输出
         #[arg(long)]
         json: bool,
@@ -496,6 +527,20 @@ async fn cmd_speech(command: SpeechCommands) -> anyhow::Result<()> {
             };
             cmd_speech_generate(arguments).await
         }
+        SpeechCommands::Cache { command } => match command {
+            SpeechCacheCommands::Clear { json: true } => {
+                finish_machine(speech_cache_clear_json());
+                Ok(())
+            }
+            SpeechCacheCommands::Clear { json: false } => cmd_speech_cache_clear(),
+        },
+        SpeechCommands::History { command } => match command {
+            SpeechHistoryCommands::Clear { json: true } => {
+                finish_machine(speech_history_clear_json());
+                Ok(())
+            }
+            SpeechHistoryCommands::Clear { json: false } => cmd_speech_history_clear(),
+        },
     }
 }
 
@@ -650,6 +695,7 @@ async fn cmd_speech_generate(arguments: GenerateArguments) -> anyhow::Result<()>
                 overrides: arguments.overrides(),
                 regenerate: arguments.regenerate,
             },
+            lock_timeout: speech_lock_timeout(),
         },
         api_key,
         chrono::Utc::now(),
@@ -741,6 +787,70 @@ fn print_generate_outcome(outcome: &speech::GenerateOutcome) {
 
 fn speech_generate_error(error: speech::GenerationError) -> anyhow::Error {
     anyhow::anyhow!(error.message())
+}
+
+/// 等待同 clip writer 锁的上限（毫秒）环境变量。
+///
+/// 只允许**缩短**生产默认值（[`speech::CLIP_LOCK_TIMEOUT`]）：测试与运维可以用它稳定
+/// 触发 `SPEECH_IN_PROGRESS`，而无法把「不自动重放」的边界拖长或缩短到 0。
+const SPEECH_LOCK_TIMEOUT_ENV: &str = "APPLE_BOOKS_SPEECH_LOCK_TIMEOUT_MS";
+
+fn speech_lock_timeout() -> Option<std::time::Duration> {
+    let raw = std::env::var(SPEECH_LOCK_TIMEOUT_ENV).ok()?;
+    let milliseconds: u64 = raw.trim().parse().ok()?;
+    let timeout = std::time::Duration::from_millis(milliseconds);
+    let allowed = !timeout.is_zero() && timeout <= speech::CLIP_LOCK_TIMEOUT;
+    allowed.then_some(timeout)
+}
+
+/// `speech cache clear --json`：不联网，只维护本地 Speech 状态。
+fn speech_cache_clear_json() -> Result<String, MachineError> {
+    let store = speech_store().map_err(|error| speech_machine::error_response(&error))?;
+    let report = speech::clear_speech_cache(&store, chrono::Utc::now())
+        .map_err(|error| speech_machine::error_response(&error))?;
+    serde_json::to_string(&speech::SpeechCacheClearResponse {
+        schema_version: 1,
+        receipt: speech::SpeechCacheClearReceipt::new(&report),
+    })
+    .map_err(|error| MachineError::protocol_serialization_failed(error.to_string()))
+}
+
+/// `speech history clear --json`：不联网，只删除 attempt history。
+fn speech_history_clear_json() -> Result<String, MachineError> {
+    let store = speech_store().map_err(|error| speech_machine::error_response(&error))?;
+    let report = speech::clear_speech_history(&store)
+        .map_err(|error| speech_machine::error_response(&error))?;
+    serde_json::to_string(&speech::SpeechHistoryClearResponse {
+        schema_version: 1,
+        receipt: speech::SpeechHistoryClearReceipt::new(&report),
+    })
+    .map_err(|error| MachineError::protocol_serialization_failed(error.to_string()))
+}
+
+fn cmd_speech_cache_clear() -> anyhow::Result<()> {
+    let store = speech_store().map_err(speech_error)?;
+    let report =
+        speech::clear_speech_cache(&store, chrono::Utc::now()).map_err(speech_error)?;
+    println!("Speech Cache 已清理");
+    println!("  Removed: {}", report.removed.len());
+    println!("  Skipped (locked): {}", report.skipped.len());
+    println!(
+        "  Cleared generation gates: {}",
+        report.cleared_generation_gates
+    );
+    Ok(())
+}
+
+fn cmd_speech_history_clear() -> anyhow::Result<()> {
+    let store = speech_store().map_err(speech_error)?;
+    let report = speech::clear_speech_history(&store).map_err(speech_error)?;
+    println!("Speech Attempt History 已清理");
+    println!("  Removed attempts: {}", report.removed_attempts);
+    println!(
+        "  Cleared generation gates: {}",
+        report.cleared_generation_gates
+    );
+    Ok(())
 }
 
 /// Speech 状态根只由用户主目录推导，不跟随当前工作目录、`--config` 或导出目录。

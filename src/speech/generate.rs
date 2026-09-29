@@ -21,7 +21,7 @@ use crate::models::Annotation;
 use crate::speech::audio::{validate_audio, AudioDecodeError, AudioFacts};
 use crate::speech::cache::{
     AttemptRecord, AttemptStatus, ClipCache, ClipCacheError, ClipLock, ClipLockError, ClipState,
-    ClipVersionMetadata, ATTEMPT_SCHEMA_VERSION, CLIP_STATE_SCHEMA_VERSION,
+    ClipVersionMetadata, ATTEMPT_SCHEMA_VERSION, CLIP_LOCK_TIMEOUT, CLIP_STATE_SCHEMA_VERSION,
     CLIP_VERSION_SCHEMA_VERSION,
 };
 use crate::speech::catalog::{verify_voice, CatalogAvailability};
@@ -44,6 +44,7 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use std::future::Future;
 use std::path::PathBuf;
+use std::time::Duration;
 
 /// `speech generate` 的输入。调用方负责把数据库行与 CLI 参数准备好。
 #[derive(Debug, Clone)]
@@ -54,6 +55,11 @@ pub struct GenerationInput {
     pub annotations: Vec<Annotation>,
     /// 稳定内容身份。
     pub request: GenerationRequest,
+    /// 等待同 clip writer 锁的上限；`None` 用生产默认值 [`CLIP_LOCK_TIMEOUT`]。
+    ///
+    /// 测试与运维可以注入更短的上限来证明 `SPEECH_IN_PROGRESS` 路径；只能缩短，
+    /// 不能越过默认上限，避免把「不自动重放」的安全边界拖长。
+    pub lock_timeout: Option<Duration>,
 }
 
 /// 一次生成请求的稳定身份与覆盖项。
@@ -276,6 +282,11 @@ pub enum GenerationError {
     InProgress {
         /// 正在生成的 clip ID。
         clip_id: String,
+        /// 可从 clip state 读到的当前 attempt ID；没有记录时为 `None`。
+        ///
+        /// 实施 spec 5.4/9：`SPEECH_IN_PROGRESS` 在可用时必须携带当前
+        /// `attempt_id`，让等待方能把这个错误对回具体的 Speech Attempt。
+        attempt_id: Option<String>,
     },
 }
 
@@ -338,12 +349,16 @@ impl GenerationError {
     }
 
     /// 本次 Speech Attempt ID；没有创建 attempt 时为 `None`。
+    ///
+    /// 锁等待超时也可能带上当前 attempt ID：等待方因此可以把 `SPEECH_IN_PROGRESS`
+    /// 对回真正在跑的那个 Speech Attempt。
     pub fn attempt_id(&self) -> Option<&str> {
         match self {
             Self::Unknown { attempt_id, .. }
             | Self::AudioInvalid { attempt_id, .. }
             | Self::ArtifactCommit { attempt_id, .. }
             | Self::ProviderFailed { attempt_id, .. } => Some(attempt_id.as_str()),
+            Self::InProgress { attempt_id, .. } => attempt_id.as_deref(),
             _ => None,
         }
     }
@@ -456,9 +471,17 @@ impl GenerationError {
             Self::Unknown { message, .. } => message.clone(),
             Self::AudioInvalid { message, .. } => message.clone(),
             Self::ArtifactCommit { message, .. } => message.clone(),
-            Self::InProgress { clip_id } => format!(
-                "another generation for Speech Clip '{clip_id}' is still in progress"
-            ),
+            Self::InProgress {
+                clip_id,
+                attempt_id,
+            } => match attempt_id {
+                Some(attempt_id) => format!(
+                    "another generation for Speech Clip '{clip_id}' is still in progress (Speech Attempt '{attempt_id}')"
+                ),
+                None => format!(
+                    "another generation for Speech Clip '{clip_id}' is still in progress"
+                ),
+            },
         }
     }
 
@@ -506,6 +529,7 @@ where
         store,
         annotations,
         request,
+        lock_timeout: input_lock_timeout,
     } = input;
 
     // 1. 内容身份：错误归属、缺失内容与超长文本都在联网前失败。
@@ -544,15 +568,25 @@ where
     let mut warnings = Vec::new();
 
     // 4. 跨进程 writer 锁：同一 clip 只有一个 provider writer。
-    let lock = ClipLock::acquire(&cache, &id, now).map_err(|error| match error {
-        ClipLockError::InProgress => GenerationError::InProgress {
-            clip_id: id.clone(),
-        },
-        ClipLockError::Unavailable(_, error) => {
-            GenerationError::Storage(SpeechStoreError::Unavailable {
-                path: cache.locks_dir(),
-                message: error.to_string(),
-            })
+    let lock_timeout = input_lock_timeout.unwrap_or(CLIP_LOCK_TIMEOUT);
+    let lock = ClipLock::acquire_with_timeout(&cache, &id, now, lock_timeout).map_err(|error| {
+        match error {
+            ClipLockError::InProgress => GenerationError::InProgress {
+                clip_id: id.clone(),
+                // 锁被占用时只读一次 clip state：把当前 attempt ID 带给等待方。
+                // 读不到（还没有 attempt 记录）时留空，绝不让错误消失。
+                attempt_id: cache
+                    .load_state(&id)
+                    .ok()
+                    .flatten()
+                    .and_then(|state| state.latest_attempt_id),
+            },
+            ClipLockError::Unavailable(_, error) => {
+                GenerationError::Storage(SpeechStoreError::Unavailable {
+                    path: cache.locks_dir(),
+                    message: error.to_string(),
+                })
+            }
         }
     })?;
 
@@ -572,6 +606,10 @@ where
             None
         }
     };
+    // 只要进入 attempt 前仍有通过校验的当前版本，失败或不确定的 regenerate 就不能把
+    // clip 置为阻塞态：旧音频要继续可播放、可导出，普通 generate 继续复用缓存
+    // （实施 spec 7.2「regenerate 失败/unknown：旧 cache 仍 ready」）。
+    let has_valid_cache = cached.is_some();
     if let Some(ready) = cached {
         if !request.regenerate {
             drop(lock);
@@ -666,6 +704,7 @@ where
                 mapped.machine_code(),
                 None,
                 None,
+                has_valid_cache,
                 &mut next,
             );
             return Err(mapped);
@@ -692,6 +731,7 @@ where
                 "SPEECH_AUDIO_INVALID",
                 None,
                 response.trace_id.clone(),
+                has_valid_cache,
                 &mut next,
             );
             return Err(GenerationError::AudioInvalid {
@@ -751,6 +791,7 @@ where
             "SPEECH_ARTIFACT_COMMIT_FAILED",
             None,
             response.trace_id.clone(),
+            has_valid_cache,
             &mut next,
         );
         return Err(GenerationError::ArtifactCommit {
@@ -992,6 +1033,9 @@ fn map_provider_error(
 ///
 /// 只有「结果不确定」与「provider 成功但没有可用产物」才阻塞；显式 provider 失败是
 /// 确定的终态，交给调用方原样返回，普通 generate 可以再次尝试，不需要 `--regenerate`。
+/// `keep_current_cache` 表示仍有通过校验的当前音频版本：此时即使新 attempt 失败或
+/// 不确定，也只是记录 latest attempt，不解除也不设置阻塞门——旧版本继续可用，
+/// 普通 generate 继续复用缓存（实施 spec 7.2）。
 #[allow(clippy::too_many_arguments)]
 fn record_attempt_and_gate(
     cache: &ClipCache,
@@ -1005,6 +1049,7 @@ fn record_attempt_and_gate(
     product_error_code: &str,
     provider_code: Option<String>,
     trace_id: Option<String>,
+    keep_current_cache: bool,
     state: &mut ClipState,
 ) {
     let attempt = attempt_record(
@@ -1021,7 +1066,7 @@ fn record_attempt_and_gate(
         trace_id,
     );
     let _ = cache.record_attempt(&attempt, now);
-    if status.blocks_generation() {
+    if status.blocks_generation() && !keep_current_cache {
         state.generation_blocked = true;
     }
     state.latest_attempt_status = Some(status);
@@ -1192,6 +1237,7 @@ mod tests {
                 overrides: GenerationOverrides::default(),
                 regenerate: false,
             },
+            lock_timeout: None,
         }
     }
 
