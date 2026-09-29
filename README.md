@@ -128,6 +128,163 @@ apple-books-exporter card 1 --all
 apple-books-exporter card 1 --all --style dark  # dark/light/minimal
 ```
 
+### 语音 Voice Profile
+
+管理全局 Voice Profile。所有命令都是纯本地操作：不联网，不读写 Apple Books 数据。
+
+```bash
+# 查看当前 Voice Profile
+apple-books-exporter speech profile show
+
+# 设置（--voice-id 必填，精确匹配音色 ID）
+apple-books-exporter speech profile set --voice-id male_0004_a --speed 1.0 --volume 1.0 --pitch 0
+
+# 恢复默认值（默认音色 male_0004_a，speed 1.0，volume 1.0，pitch 0，MP3/32000Hz）
+apple-books-exporter speech profile reset
+
+# 机器可读 JSON（成功只写 stdout，失败只写 stderr）
+apple-books-exporter speech profile show --json
+```
+
+- 配置文件位于 `~/Library/Application Support/books-exporter/speech/config.json`，与当前
+  工作目录、`--config` 和导出目录无关；
+- 该文件**只保存非秘密配置**和 API Key 的**环境变量名**（默认 `SENSEAUDIO_API_KEY`）。
+  密钥值只从环境变量读取，永远不落盘；
+- `speed` 取值 `0.5`–`2.0`，`volume` 取值 `0.01`–`10.0`，两者最多两位小数且不做四舍五入；
+  `pitch` 为 `-12`–`12` 的整数。非法、非有限、需要舍入或越界的值都返回稳定错误
+  `SPEECH_PROFILE_INVALID`（JSON 模式下带 `details.field` / `details.reason`）；
+- 无法核对当前 Voice Catalog 时，会保存为 Unverified Voice Profile
+  （`verification_status: "unverified"`）并返回结构化 warning
+  （`no_catalog` / `stale_catalog` / `other_provider`）。Unverified 只表示本地配置合法，
+  **不代表**当前账号可用，也不能授权语音生成。
+
+### 语音 Voice Catalog
+
+列出当前账号可用的 SenseAudio 音色。这是 `speech` 命令族里唯一会联网的浏览命令，
+`profile` 命令仍然是纯本地操作。
+
+```bash
+# 默认复用 24 小时缓存；缓存过期时自动刷新
+apple-books-exporter speech voices
+
+# 强制刷新，绕过缓存
+apple-books-exporter speech voices --refresh
+
+# 机器可读 JSON（成功只写 stdout，失败只写 stderr）
+apple-books-exporter speech voices --json
+```
+
+- 目录缓存在 `~/Library/Application Support/books-exporter/speech/voices/senseaudio.json`；
+  24 小时内直接复用，`--refresh` 强制绕过缓存；
+- 刷新失败且存在旧目录时，人类输出和 JSON 都会标记 `stale=true`、保留 `fetched_at`，
+  并返回 `stale_catalog` warning。旧目录**不是**当前账号权限的保证，不能授权语音生成；
+- 音色 ID 与情感/风格标签都来自供应商响应，不从 `voice_id` 后缀推断，也不生成目录里
+  不存在的标签组合；
+- 本地缓存文件损坏或 schema 不匹配不会阻断 `--refresh`：刷新成功后原子替换掉损坏文档。
+
+### 语音生成（唯一会产生费用的操作）
+
+把一条 Annotation 的高亮或个人笔记合成为一个 Speech Clip。**这是整个 `speech` 命令族里
+唯一会向外部供应商发送内容并产生费用的动作**，只有你显式执行它才会发生。
+
+```bash
+# 人类形式：用书籍和 Annotation 的显示序号
+apple-books-exporter speech generate 1 --annotation 1 --content highlight
+
+# 机器形式：用稳定 ID（可脚本化）
+apple-books-exporter speech generate \
+  --asset-id BOOK_ID --annotation-id ANNOTATION_ID --content note --json
+```
+
+- 机器形式必须显式给出 `asset_id`、`annotation_id` 和 `content_kind`
+  （`highlight` 或 `note`），且不接受显示序号；人类形式反过来不接受 `--asset-id`。
+  两组参数混用返回稳定错误 `INVALID_ARGUMENT`，不会忽略其中一组；
+- 一条 Speech Clip 只朗读**一个**内容部分：同一条 Annotation 的高亮与笔记是两个独立
+  clip，需要分别生成、分别计费；
+- 顺序固定为：命中有效缓存 → 尝试从你已导出的音频恢复（0 次 provider 调用）→ 才会
+  请求供应商。缓存命中与恢复都不产生费用；
+- `--regenerate` 是唯一可以越过 unknown 结果、替换已有有效音频的入口。普通 `generate`
+  在结果不确定时**不会**自动重放，因为重复请求可能重复计费；
+- 人类输出只显示内容类型、音色与字符估算，不回显完整原文。
+
+### 语音播放（纯本地）
+
+播放一个已经通过校验的 Speech Clip。**播放永远不联系 Speech Provider，也不会重新生成**
+——播放失败不代表重新生成。
+
+```bash
+apple-books-exporter speech play --clip-id CLIP_ID
+apple-books-exporter speech play --clip-id CLIP_ID --json
+```
+
+- 查找顺序：本地缓存 → 显式 `--export-root` → 已验证的导出定位记录；
+- `--json` 只返回已校验的路径与来源，**不启动播放器**、不产生声音；
+- 缓存与导出音频都找不到时返回 `SPEECH_CLIP_NOT_FOUND`；
+- 你自己改过导出音频导致校验不匹配时，它不再作为该 clip 的播放回退，但仍然可以自己用
+  系统播放器打开这个普通文件。
+
+### 语音导出（把缓存里的音频交给用户）
+
+把一个已校验的 Cached Speech Clip 原子复制到这本书的导出目录。**不联网，也不修改已有
+Markdown**——音频链接由下一次常规导出统一写入。
+
+```bash
+apple-books-exporter speech export \
+  --clip-id CLIP_ID --output BOOK_EXPORT_DIRECTORY [--overwrite] [--json]
+```
+
+- `--output` 指向该书的导出根目录，不是 `assets/audio/` 本身；
+- 导出后音频归你所有，不再受缓存 LRU 淘汰影响，`speech cache clear` 不会删除它；
+- 同一路径内容相同时直接复用；内容不同默认返回 `SPEECH_OUTPUT_FILE_EXISTS`，
+  只有显式 `--overwrite` 才替换；
+- 同一 Annotation 的内容部分可以保留多个导出变体，但只有一个是 active；新导出的成为
+  active，旧文件仍然保留；
+- 导出清单损坏时返回 `SPEECH_EXPORT_MANIFEST_INVALID`，既不覆盖也不按文件名猜测重建。
+
+### 四类语音操作的边界
+
+| 操作 | 是否联网 | 是否产生费用 | 是否可能修改用户文件 |
+| --- | --- | --- | --- |
+| `profile show/set/reset`、`cache status/clear`、`history clear` | 否 | 否 | 只改本地应用状态 |
+| `voices` / `voices --refresh` | 是（仅音色目录） | 否 | 否 |
+| `generate`（缓存未命中且无可恢复导出时） | 是 | **是** | 只写应用缓存目录 |
+| `play`、`export` | 否 | 否 | `export` 写入你选择的导出目录 |
+
+浏览、读取标注、播放、常规 Markdown/Obsidian 导出和 Agent Data Skill **都不会**触发
+远程生成。
+
+### 语音 Cache 与 Attempt History
+
+维护本地 Cached Speech Clip 与 Speech Attempt History。两者都是纯本地操作：不联网，
+不调用 Speech Provider。
+
+```bash
+# 只读视图：预算、占用、已接受/无音频/阻塞/损坏/占用中 entry 与可回收孤立 version
+apple-books-exporter speech cache status
+apple-books-exporter speech cache status --json
+
+# 删除可淘汰 Cached Speech Clip，并显式清除没有有效音频的阻塞门
+apple-books-exporter speech cache clear
+apple-books-exporter speech cache clear --json
+
+# 只删除 attempt history
+apple-books-exporter speech history clear
+apple-books-exporter speech history clear --json
+```
+
+- 默认预算 1 GiB（`config.json` 的非秘密字段 `cache_budget_bytes` 可调），其中必须保留
+  128 MiB 安全余量，因此真正可给缓存内容使用的是 `budget - 128 MiB`；
+- `cache status` 不删除、不改写任何东西，也不调用 provider：损坏 entry 与未被 current
+  pointer 引用的孤立 version 只被报告；
+- LRU 与 `cache clear` 都不淘汰当前 clip，也不淘汰正在生成（跨进程 writer 锁）、播放或
+  导出（usage marker）的 entry；`cache clear` 的 receipt 用 `skipped_reasons` 说明每个
+  跳过 entry 的占用原因；
+- `history clear` 只删 attempt metadata：不动缓存、不动 unknown gate、不动导出状态，也不删
+  用户自己的音频；超过 90 天的 attempt metadata 由正常维护自动删除，与音频 LRU 相互独立；
+- 根目录不可写、可用空间保不住安全余量或没有可淘汰空间时，`generate` 在 provider 调用
+  **之前**返回 `SPEECH_STORAGE_UNAVAILABLE`。运维可以用
+  `APPLE_BOOKS_SPEECH_MIN_FREE_BYTES` 调高要求的空闲空间（只能调高，不能削弱保护）。
+
 ## AI Agent Skill
 
 本项目提供 skill，支持 AI 助手直接调用。
