@@ -168,6 +168,8 @@ impl ClipCacheStatus {
 pub enum AttemptStatus {
     /// 请求发送前取消。
     CancelledBeforeSend,
+    /// 请求记录已落盘，provider 调用还没有终态（实施 spec 9「建 attempt → 调用」）。
+    InProgress,
     /// provider 明确失败。
     ProviderFailed,
     /// 成功并接受。
@@ -183,6 +185,7 @@ impl AttemptStatus {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::CancelledBeforeSend => "cancelled_before_send",
+            Self::InProgress => "in_progress",
             Self::ProviderFailed => "provider_failed",
             Self::Succeeded => "succeeded",
             Self::Unknown => "unknown",
@@ -257,6 +260,10 @@ pub struct ClipVersionMetadata {
 }
 
 /// attempt history 的一条记录；不保存原文、请求体、响应体、密钥或音频。
+///
+/// 记录先于 provider 调用落盘（`status = in_progress`、`finished_at = None`），
+/// 调用返回后按同一 `attempt_id` 原地更新为终态：崩溃也不会丢掉一次可能已计费的
+/// 请求历史（实施 spec 第 9 节「create attempt record → call SenseAudio」）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AttemptRecord {
@@ -333,6 +340,18 @@ pub struct HistoryClearReport {
     pub removed_attempts: usize,
     /// 恒为 0：history clear 不得解除任何 generation gate。
     pub cleared_generation_gates: usize,
+}
+
+/// attempt history 自动清理的报告（实施 spec 5.7「正常维护自动删除超过 90 天」）。
+///
+/// 只删除过期的 attempt metadata：不删 clip、不清 generation gate、不动 current
+/// pointer；只把指向已删除 attempt 的 `state.latest_attempt_id` 纠正为 `None`。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AttemptPruneReport {
+    /// 被删除的 attempt history 记录数。
+    pub removed_attempts: usize,
+    /// 被纠正的 clip state 数量：`latest_attempt_id` 不再指向已删除的 attempt。
+    pub reconciled_clip_states: usize,
 }
 
 /// Speech Cache Entry 的本地状态：不可变 version + 原子 current pointer。
@@ -576,16 +595,18 @@ impl ClipCache {
     }
 
     /// 写入一条 attempt history 记录；只含 metadata。
+    ///
+    /// 归档目录取记录自己的 `started_at`：同一 attempt 的后续更新（终态、trace、
+    /// 用量）因此落在同一个文件里，实现真正的就地更新，不会在跨天时留下重复记录。
+    /// 写入后顺带执行正常维护：删除超过保留窗口的 attempt metadata（实施 spec 5.7）。
     pub fn record_attempt(
         &self,
         record: &AttemptRecord,
         now: DateTime<Utc>,
     ) -> Result<PathBuf, ClipCacheError> {
         let directory = self
-            .store
-            .root()
-            .join("attempts")
-            .join(now.format("%Y-%m-%d").to_string());
+            .attempts_dir()
+            .join(attempt_day_directory(&record.started_at, now));
         fs::create_dir_all(&directory)
             .map_err(|error| ClipCacheError::unavailable(&directory, error))?;
         let path = directory.join(format!("{}.json", record.attempt_id));
@@ -594,7 +615,163 @@ impl ClipCache {
         })?;
         json.push('\n');
         write_atomic(&path, json.as_bytes())?;
+        // 正常维护是尽力而为：清理失败不能让一次已经（可能）计费的 attempt 写入失败。
+        let _ = self.prune_attempt_history(now, ATTEMPT_HISTORY_RETENTION_DAYS);
         Ok(path)
+    }
+
+    /// 读取一条 attempt history 记录；不存在时返回 `None`。
+    pub fn load_attempt(&self, attempt_id: &str) -> Result<Option<AttemptRecord>, ClipCacheError> {
+        for path in self.attempt_paths(attempt_id) {
+            match fs::read_to_string(&path) {
+                Ok(text) => {
+                    let record: AttemptRecord =
+                        serde_json::from_str(&text).map_err(|_| ClipCacheError::Corrupt {
+                            path,
+                            reason: "the attempt record is not valid JSON",
+                        })?;
+                    return Ok(Some(record));
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(ClipCacheError::unavailable(&path, error)),
+            }
+        }
+        Ok(None)
+    }
+
+    /// 同一 attempt ID 可能存在的所有路径（按天归档，通常只有一个）。
+    fn attempt_paths(&self, attempt_id: &str) -> Vec<PathBuf> {
+        let mut paths = Vec::new();
+        if attempt_id.is_empty()
+            || attempt_id.contains('/')
+            || attempt_id.contains('.')
+            || attempt_id.contains(std::path::MAIN_SEPARATOR)
+        {
+            return paths;
+        }
+        let Ok(days) = fs::read_dir(self.attempts_dir()) else {
+            return paths;
+        };
+        for day in days.flatten() {
+            if day.path().is_dir() {
+                paths.push(day.path().join(format!("{attempt_id}.json")));
+            }
+        }
+        paths
+    }
+
+    /// 自动维护：删除超过保留窗口的 attempt history 记录，并纠正 clip state 里指向
+    /// 已删除 attempt 的 `latest_attempt_id`。
+    ///
+    /// 只动 attempt metadata：不删 clip、不清 generation gate、不动 current pointer。
+    /// 没有有效 cache 的 Unknown Speech Result 作为 clip 级阻塞状态持续保留，不随
+    /// 90 天 attempt history 到期（ADR 0007「请求失败与重试」「身份与本地状态」）。
+    pub fn prune_attempt_history(
+        &self,
+        now: DateTime<Utc>,
+        retention_days: i64,
+    ) -> Result<AttemptPruneReport, ClipCacheError> {
+        let Some(cutoff) = now.checked_sub_signed(chrono::Duration::days(retention_days)) else {
+            return Ok(AttemptPruneReport::default());
+        };
+        let attempts_dir = self.attempts_dir();
+        let days = match fs::read_dir(&attempts_dir) {
+            Ok(days) => days,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(AttemptPruneReport::default())
+            }
+            Err(error) => return Err(ClipCacheError::unavailable(&attempts_dir, error)),
+        };
+        let mut removed: Vec<String> = Vec::new();
+        for day in days {
+            let day = day.map_err(|error| ClipCacheError::unavailable(&attempts_dir, error))?;
+            if !day.path().is_dir() {
+                continue;
+            }
+            let mut removed_in_day = 0usize;
+            let files = fs::read_dir(day.path())
+                .map_err(|error| ClipCacheError::unavailable(&day.path(), error))?;
+            for file in files {
+                let file =
+                    file.map_err(|error| ClipCacheError::unavailable(&day.path(), error))?;
+                if !file.path().is_file() {
+                    continue;
+                }
+                let Some(attempt_id) = file
+                    .path()
+                    .file_stem()
+                    .map(|stem| stem.to_string_lossy().into_owned())
+                else {
+                    continue;
+                };
+                // 读不出或解析不了的记录不猜测删除：宁可多留一条 metadata。
+                let Ok(text) = fs::read_to_string(file.path()) else {
+                    continue;
+                };
+                let stamp = serde_json::from_str::<AttemptRecord>(&text)
+                    .ok()
+                    .and_then(|record| attempt_timestamp(&record));
+                if stamp.is_some_and(|stamp| stamp < cutoff) {
+                    fs::remove_file(file.path())
+                        .map_err(|error| ClipCacheError::unavailable(&file.path(), error))?;
+                    removed.push(attempt_id);
+                    removed_in_day += 1;
+                }
+            }
+            if removed_in_day > 0 && fs::read_dir(day.path()).ok().is_some_and(|mut left| left.next().is_none()) {
+                let _ = fs::remove_dir(day.path());
+            }
+        }
+        let reconciled_clip_states = self.reconcile_latest_attempt_ids(&removed, now)?;
+        Ok(AttemptPruneReport {
+            removed_attempts: removed.len(),
+            reconciled_clip_states,
+        })
+    }
+
+    /// 让 clip state 不再指向已经不存在的 attempt 记录。
+    ///
+    /// 只清 `latest_attempt_id`：generation gate、current pointer 与缓存版本都不动，
+    /// 阻塞态仍只能由 `--regenerate` 或 `speech cache clear` 解除（实施 spec 5.7 / 7.2）。
+    fn reconcile_latest_attempt_ids(
+        &self,
+        removed: &[String],
+        now: DateTime<Utc>,
+    ) -> Result<usize, ClipCacheError> {
+        if removed.is_empty() {
+            return Ok(0);
+        }
+        let clips_dir = self.clips_dir();
+        let entries = match fs::read_dir(&clips_dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+            Err(error) => return Err(ClipCacheError::unavailable(&clips_dir, error)),
+        };
+        let mut reconciled = 0usize;
+        for entry in entries {
+            let entry = entry.map_err(|error| ClipCacheError::unavailable(&clips_dir, error))?;
+            if !entry.path().is_dir() {
+                continue;
+            }
+            let clip_id = entry.file_name().to_string_lossy().into_owned();
+            if !is_clip_id(&clip_id) {
+                continue;
+            }
+            let Ok(Some(mut state)) = self.load_state(&clip_id) else {
+                continue;
+            };
+            let Some(latest) = state.latest_attempt_id.clone() else {
+                continue;
+            };
+            if !removed.iter().any(|attempt_id| attempt_id == &latest) {
+                continue;
+            }
+            state.latest_attempt_id = None;
+            state.updated_at = now.to_rfc3339();
+            self.save_state(&state)?;
+            reconciled += 1;
+        }
+        Ok(reconciled)
     }
 
     /// 跨进程 writer 锁目录。
@@ -665,9 +842,13 @@ impl ClipCache {
     }
 
     /// `speech history clear`：只删除 attempt history，不清缓存或 unknown gate。
-    pub fn clear_history(&self) -> Result<HistoryClearReport, ClipCacheError> {
+    ///
+    /// 删除后纠正 `state.latest_attempt_id`：它不得再指向已经被清掉的 attempt
+    /// （否则会留下悬空引用），但 generation gate 与缓存都不动。
+    pub fn clear_history(&self, now: DateTime<Utc>) -> Result<HistoryClearReport, ClipCacheError> {
         let attempts_dir = self.attempts_dir();
         let mut removed_attempts = 0usize;
+        let mut removed_ids: Vec<String> = Vec::new();
         let days = match fs::read_dir(&attempts_dir) {
             Ok(days) => days,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -686,11 +867,15 @@ impl ClipCache {
                 let file = file.map_err(|error| ClipCacheError::unavailable(&day.path(), error))?;
                 if file.path().is_file() {
                     removed_attempts += 1;
+                    if let Some(stem) = file.path().file_stem() {
+                        removed_ids.push(stem.to_string_lossy().into_owned());
+                    }
                 }
             }
         }
         fs::remove_dir_all(&attempts_dir)
             .map_err(|error| ClipCacheError::unavailable(&attempts_dir, error))?;
+        self.reconcile_latest_attempt_ids(&removed_ids, now)?;
         Ok(HistoryClearReport {
             removed_attempts,
             // history clear 明确不清 unknown gate：阻塞态只由显式 --regenerate 或
@@ -723,6 +908,9 @@ impl ClipCache {
 #[derive(Debug)]
 pub struct ClipLock {
     path: PathBuf,
+    /// 是否排队等过另一个 writer：等待方必须在锁内重新检查首个终态，
+    /// 不能对同一 clip 发起第二个 provider 请求（ADR 0007「并发、取消与接受证据」）。
+    waited: bool,
 }
 
 impl ClipLock {
@@ -750,6 +938,7 @@ impl ClipLock {
         fs::create_dir_all(cache.locks_dir())
             .map_err(|error| ClipLockError::Unavailable(cache.locks_dir(), error))?;
         let deadline = SystemTime::now() + timeout;
+        let mut waited = false;
         loop {
             match fs::OpenOptions::new()
                 .write(true)
@@ -759,7 +948,7 @@ impl ClipLock {
                 Ok(mut file) => {
                     let _ = writeln!(file, "{}", now.to_rfc3339());
                     let _ = file.sync_all();
-                    return Ok(Self { path });
+                    return Ok(Self { path, waited });
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
                     if is_stale_lock(&path) {
@@ -767,6 +956,8 @@ impl ClipLock {
                         let _ = fs::remove_file(&path);
                         continue;
                     }
+                    // 确实有为同一个 clip 排过队：拿到锁后必须重新检查首个终态。
+                    waited = true;
                     if SystemTime::now() >= deadline {
                         return Err(ClipLockError::InProgress);
                     }
@@ -775,6 +966,11 @@ impl ClipLock {
                 Err(error) => return Err(ClipLockError::Unavailable(path.clone(), error)),
             }
         }
+    }
+
+    /// 这次获取是否排队等过同 clip 的另一个 writer。
+    pub fn waited(&self) -> bool {
+        self.waited
     }
 
     /// 锁文件路径；供诊断使用。
@@ -876,6 +1072,24 @@ fn is_clip_id(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+/// attempt history 的按天归档目录名：优先用 attempt 自己的开始时间，
+/// 解析不了才退回当前时间；两种情况下 `<attempt_id>.json` 都是稳定文件名。
+fn attempt_day_directory(started_at: &str, now: DateTime<Utc>) -> String {
+    DateTime::parse_from_rfc3339(started_at)
+        .map(|started| started.with_timezone(&Utc).format("%Y-%m-%d").to_string())
+        .unwrap_or_else(|_| now.format("%Y-%m-%d").to_string())
+}
+
+/// attempt 的归档时间戳：有终态时间用 `finished_at`，否则用 `started_at`。
+fn attempt_timestamp(record: &AttemptRecord) -> Option<DateTime<Utc>> {
+    record
+        .finished_at
+        .as_deref()
+        .or(Some(record.started_at.as_str()))
+        .and_then(|stamp| DateTime::parse_from_rfc3339(stamp).ok())
+        .map(|stamp| stamp.with_timezone(&Utc))
 }
 
 fn is_sha256_hex(value: &str) -> bool {
@@ -1295,7 +1509,7 @@ mod tests {
         gated.generation_blocked = true;
         cache.save_state(&gated).expect("save gated state");
 
-        let report = cache.clear_history().expect("clear history");
+        let report = cache.clear_history(now()).expect("clear history");
 
         assert_eq!(report.removed_attempts, 1);
         assert_eq!(
@@ -1308,9 +1522,17 @@ mod tests {
             kept.generation_blocked,
             "the unknown gate must survive history clear"
         );
-        assert_eq!(kept.latest_attempt_id.as_deref(), Some("attempt-clear"));
+        assert_eq!(
+            kept.latest_attempt_id, None,
+            "history clear must not leave a dangling latest_attempt_id"
+        );
+        assert_eq!(
+            kept.latest_attempt_status,
+            Some(AttemptStatus::Unknown),
+            "the recorded outcome still explains the surviving gate"
+        );
 
-        let again = cache.clear_history().expect("clear history again");
+        let again = cache.clear_history(now()).expect("clear history again");
         assert_eq!(again.removed_attempts, 0);
     }
 }

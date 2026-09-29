@@ -17,9 +17,9 @@ pub mod text;
 
 pub use audio::{decode_audio_hex, inspect_mp3, validate_audio, AudioDecodeError, AudioFacts};
 pub use cache::{
-    AttemptRecord, AttemptStatus, CacheClearReport, ClipCache, ClipCacheError, ClipCacheStatus,
-    ClipLock, ClipLockError, ClipState, ClipVersionMetadata, HistoryClearReport, ReadyClip,
-    ATTEMPT_HISTORY_RETENTION_DAYS, ATTEMPT_SCHEMA_VERSION, CLIP_LOCK_TIMEOUT,
+    AttemptRecord, AttemptPruneReport, AttemptStatus, CacheClearReport, ClipCache, ClipCacheError,
+    ClipCacheStatus, ClipLock, ClipLockError, ClipState, ClipVersionMetadata, HistoryClearReport,
+    ReadyClip, ATTEMPT_HISTORY_RETENTION_DAYS, ATTEMPT_SCHEMA_VERSION, CLIP_LOCK_TIMEOUT,
     CLIP_STATE_SCHEMA_VERSION, CLIP_VERSION_SCHEMA_VERSION,
 };
 pub use catalog::{
@@ -311,9 +311,12 @@ pub fn clear_speech_cache(
 /// `speech history clear`：只删除 attempt history，不清缓存、不清 unknown gate、
 /// 不碰用户导出（实施 spec 5.7）。阻塞态仍只能由 `--regenerate` 或
 /// `speech cache clear` 解除。
-pub fn clear_speech_history(store: &SpeechStore) -> Result<HistoryClearReport, SpeechError> {
+pub fn clear_speech_history(
+    store: &SpeechStore,
+    now: DateTime<Utc>,
+) -> Result<HistoryClearReport, SpeechError> {
     ClipCache::new(store.clone())
-        .clear_history()
+        .clear_history(now)
         .map_err(|error| SpeechError::Storage(storage_error(error)))
 }
 

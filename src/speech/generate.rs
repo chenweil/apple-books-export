@@ -8,9 +8,10 @@
 //!   → 计算 clip_id → 取跨进程 writer 锁
 //!   → 有效缓存？        → receipt(source=cache)，0 次 provider 调用
 //!   → unknown gate？     → SPEECH_RESULT_UNKNOWN，不自动重放
+//!   → 排队等待方 + provider_failed 终态 → 原样返回首个失败，0 次 provider 调用
 //!   → 音色可用性 + API Key + 存储预检
-//!   → 建 attempt → 同步合成 → hex 解码 → MP3 校验 → 不可变 version → 原子切换 pointer
-//!   → receipt(source=provider)
+//!   → 落 attempt(in_progress) → 同步合成 → hex 解码 → MP3 校验 → 不可变 version
+//!   → 原子切换 pointer → 回填 attempt 终态 → receipt(source=provider)
 //! ```
 //!
 //! 本地失败（内容缺失、归属错误、超长文本、参数冲突、Profile 无效）发生在任何 provider
@@ -644,6 +645,21 @@ where
         });
     }
 
+    // 6b. 明确的 provider 失败同样是终态：为同一 clip 排过队的等待方必须原样拿到
+    //     首个终态错误，绝不能发起第二个 provider 请求——explicit failure 不写 gate
+    //     （`blocks_generation == false`），所以只能在这里按状态拦截。
+    //     条件由控制流保证：走到这里且没有 `--regenerate` 时一定不存在有效缓存
+    //     （有缓存已在第 5 步返回 cache hit）。
+    //     ADR 0007「并发、取消与接受证据」与实施 spec 9「failed：返回相同稳定失败，
+    //     不自动调用 provider」。
+    if lock.waited()
+        && !request.regenerate
+        && state.latest_attempt_status == Some(AttemptStatus::ProviderFailed)
+    {
+        drop(lock);
+        return Err(recorded_provider_failure(&cache, &state));
+    }
+
     // 7. 调用 provider 前的预检：API Key、音色可用性、存储可写。
     if api_key.as_deref().unwrap_or_default().trim().is_empty() {
         return Err(GenerationError::MissingApiKey);
@@ -686,27 +702,21 @@ where
         channel: profile.audio.channel,
     };
     let started_at = now.to_rfc3339();
+    // 8a. attempt 记录先落盘：请求一旦发出可能已经计费，崩溃也必须留下这次请求的
+    //     历史（实施 spec 9「create attempt record → call SenseAudio」）。终态、
+    //     trace 与用量在返回后按同一 attempt_id 原地更新。
+    let mut attempt = pending_attempt(&attempt_id, &id, &profile, &selection, &started_at);
+    cache.record_attempt(&attempt, now).map_err(storage_error)?;
+
+    // 8b. 唯一一次同步 provider 请求。
     let response = match synthesize(synthesis_request).await {
         Ok(response) => response,
         Err(error) => {
             let (mapped, status) = map_provider_error(&error, &attempt_id);
             let mut next = state.clone();
             next.latest_attempt_id = Some(attempt_id.clone());
-            record_attempt_and_gate(
-                &cache,
-                &attempt_id,
-                &id,
-                &profile,
-                &selection,
-                &started_at,
-                now,
-                status,
-                mapped.machine_code(),
-                None,
-                None,
-                has_valid_cache,
-                &mut next,
-            );
+            finish_attempt(&mut attempt, now, status, Some(mapped.machine_code()), None, None);
+            record_attempt_and_gate(&cache, &attempt, now, has_valid_cache, &mut next);
             return Err(mapped);
         }
     };
@@ -719,21 +729,15 @@ where
         _ => {
             let mut next = state.clone();
             next.latest_attempt_id = Some(attempt_id.clone());
-            record_attempt_and_gate(
-                &cache,
-                &attempt_id,
-                &id,
-                &profile,
-                &selection,
-                &started_at,
+            finish_attempt(
+                &mut attempt,
                 now,
                 AttemptStatus::ProviderSucceededArtifactMissing,
-                "SPEECH_AUDIO_INVALID",
+                Some("SPEECH_AUDIO_INVALID"),
                 None,
                 response.trace_id.clone(),
-                has_valid_cache,
-                &mut next,
             );
+            record_attempt_and_gate(&cache, &attempt, now, has_valid_cache, &mut next);
             return Err(GenerationError::AudioInvalid {
                 attempt_id,
                 trace_id: response.trace_id,
@@ -779,40 +783,26 @@ where
     committed.latest_error_code = None;
     if let Err(error) = cache.commit_version(&committed, &metadata, &response.audio_bytes, now) {
         let mut next = committed.clone();
-        record_attempt_and_gate(
-            &cache,
-            &attempt_id,
-            &id,
-            &profile,
-            &selection,
-            &started_at,
+        finish_attempt(
+            &mut attempt,
             now,
             AttemptStatus::ProviderSucceededArtifactMissing,
-            "SPEECH_ARTIFACT_COMMIT_FAILED",
+            Some("SPEECH_ARTIFACT_COMMIT_FAILED"),
             None,
             response.trace_id.clone(),
-            has_valid_cache,
-            &mut next,
         );
+        record_attempt_and_gate(&cache, &attempt, now, has_valid_cache, &mut next);
         return Err(GenerationError::ArtifactCommit {
             attempt_id,
             message: error.message(),
         });
     }
 
-    let attempt = attempt_record(
-        &attempt_id,
-        &id,
-        &profile,
-        &selection,
-        &started_at,
-        now,
-        AttemptStatus::Succeeded,
-        response.usage_characters,
-        None,
-        None,
-        response.trace_id.clone(),
-    );
+    // 终态回填同一条 attempt 记录：status、trace、用量。
+    attempt.status = AttemptStatus::Succeeded;
+    attempt.finished_at = Some(now.to_rfc3339());
+    attempt.provider_usage_characters = response.usage_characters;
+    attempt.trace_id = response.trace_id.clone();
     let _ = cache.record_attempt(&attempt, now);
 
     Ok(GenerateOutcome {
@@ -1036,57 +1026,94 @@ fn map_provider_error(
 /// `keep_current_cache` 表示仍有通过校验的当前音频版本：此时即使新 attempt 失败或
 /// 不确定，也只是记录 latest attempt，不解除也不设置阻塞门——旧版本继续可用，
 /// 普通 generate 继续复用缓存（实施 spec 7.2）。
-#[allow(clippy::too_many_arguments)]
+///
+/// 同一 clip 的排队等待方不在这里处理：它在锁内按 `provider_failed` 终态原样返回
+/// 首个错误（[`recorded_provider_failure`]），不创建新 attempt。
 fn record_attempt_and_gate(
     cache: &ClipCache,
-    attempt_id: &str,
-    clip_id: &str,
-    profile: &VoiceProfile,
-    selection: &crate::speech::clip::SpeechContentSelection,
-    started_at: &str,
+    attempt: &AttemptRecord,
     now: DateTime<Utc>,
-    status: AttemptStatus,
-    product_error_code: &str,
-    provider_code: Option<String>,
-    trace_id: Option<String>,
     keep_current_cache: bool,
     state: &mut ClipState,
 ) {
-    let attempt = attempt_record(
-        attempt_id,
-        clip_id,
-        profile,
-        selection,
-        started_at,
-        now,
-        status,
-        None,
-        Some(product_error_code),
-        provider_code,
-        trace_id,
-    );
-    let _ = cache.record_attempt(&attempt, now);
-    if status.blocks_generation() && !keep_current_cache {
+    let _ = cache.record_attempt(attempt, now);
+    if attempt.status.blocks_generation() && !keep_current_cache {
         state.generation_blocked = true;
     }
-    state.latest_attempt_status = Some(status);
-    state.latest_error_code = Some(product_error_code.to_string());
+    state.latest_attempt_status = Some(attempt.status);
+    if let Some(code) = attempt.product_error_code.clone() {
+        state.latest_error_code = Some(code);
+    }
     state.updated_at = now.to_rfc3339();
     let _ = cache.save_state_only(state);
 }
 
-fn attempt_record(
+/// 把 attempt 记录推进到终态；`finished_at` 用同一个 `now`，保持记录自洽。
+fn finish_attempt(
+    record: &mut AttemptRecord,
+    now: DateTime<Utc>,
+    status: AttemptStatus,
+    product_error_code: Option<&str>,
+    provider_code: Option<String>,
+    trace_id: Option<String>,
+) {
+    record.status = status;
+    record.finished_at = Some(now.to_rfc3339());
+    record.product_error_code = product_error_code.map(str::to_string);
+    record.provider_code = provider_code;
+    record.trace_id = trace_id;
+}
+
+/// 排队等待方拿到的首个明确 provider 失败：原样返回已记录的终态错误。
+///
+/// 优先从 attempt history 还原（错误码、provider code、trace ID、attempt ID），
+/// 记录已被清理时退回 `state.json` 里的 `latest_error_code` / `latest_attempt_id`。
+/// 不创建 attempt、不调用 provider——同一 clip 的第二个请求可能已经被计费过一次。
+fn recorded_provider_failure(cache: &ClipCache, state: &ClipState) -> GenerationError {
+    let recorded = state
+        .latest_attempt_id
+        .as_deref()
+        .and_then(|attempt_id| cache.load_attempt(attempt_id).ok().flatten());
+    let code = recorded
+        .as_ref()
+        .and_then(|record| record.product_error_code.clone())
+        .or_else(|| state.latest_error_code.clone())
+        .unwrap_or_else(|| "SPEECH_PROVIDER_FAILED".to_string());
+    let attempt_id = recorded
+        .as_ref()
+        .map(|record| record.attempt_id.clone())
+        .or_else(|| state.latest_attempt_id.clone())
+        .unwrap_or_default();
+    GenerationError::ProviderFailed {
+        code: stable_failure_code(&code),
+        trace_id: recorded.as_ref().and_then(|record| record.trace_id.clone()),
+        provider_code: recorded.and_then(|record| record.provider_code),
+        attempt_id,
+    }
+}
+
+/// 明确失败的稳定错误码集合：auth / rate limit / provider。
+///
+/// `ProviderFailed::code` 是 `&'static str`，而记录里读回来的是 `String`；未知值按
+/// provider 明确失败返回，绝不把不确定结果伪装成已知失败。
+fn stable_failure_code(code: &str) -> &'static str {
+    match code {
+        "SPEECH_AUTH_FAILED" => "SPEECH_AUTH_FAILED",
+        "SPEECH_RATE_LIMITED" => "SPEECH_RATE_LIMITED",
+        _ => "SPEECH_PROVIDER_FAILED",
+    }
+}
+
+/// provider 调用前的 attempt 记录：只有身份与计费估算，`status = in_progress`。
+///
+/// 先落盘再调用（实施 spec 9「create attempt record → call SenseAudio」）：
+/// 请求一旦发出可能已经计费，崩溃也必须留下这次请求的历史。
+fn pending_attempt(
     attempt_id: &str,
     clip_id: &str,
     profile: &VoiceProfile,
     selection: &crate::speech::clip::SpeechContentSelection,
     started_at: &str,
-    now: DateTime<Utc>,
-    status: AttemptStatus,
-    provider_usage_characters: Option<u64>,
-    product_error_code: Option<&str>,
-    provider_code: Option<String>,
-    trace_id: Option<String>,
 ) -> AttemptRecord {
     AttemptRecord {
         schema_version: ATTEMPT_SCHEMA_VERSION,
@@ -1096,14 +1123,14 @@ fn attempt_record(
         model: profile.model.clone(),
         voice_id: profile.voice_id.clone(),
         started_at: started_at.to_string(),
-        finished_at: Some(now.to_rfc3339()),
-        status,
+        finished_at: None,
+        status: AttemptStatus::InProgress,
         unicode_characters: selection.text.unicode_characters,
         estimated_billing_characters: selection.text.estimated_billing_characters,
-        provider_usage_characters,
-        product_error_code: product_error_code.map(str::to_string),
-        provider_code,
-        trace_id,
+        provider_usage_characters: None,
+        product_error_code: None,
+        provider_code: None,
+        trace_id: None,
     }
 }
 
@@ -2320,7 +2347,7 @@ mod tests {
         assert!(stored_state(&store, &clip_id).generation_blocked);
 
         // history clear 只删 attempt metadata：gate 与 clip state 原样保留。
-        let history = crate::speech::clear_speech_history(&store).expect("clear history");
+        let history = crate::speech::clear_speech_history(&store, now()).expect("clear history");
         assert_eq!(history.removed_attempts, 1);
         assert_eq!(
             history.cleared_generation_gates, 0,

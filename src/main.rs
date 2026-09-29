@@ -818,7 +818,7 @@ fn speech_cache_clear_json() -> Result<String, MachineError> {
 /// `speech history clear --json`：不联网，只删除 attempt history。
 fn speech_history_clear_json() -> Result<String, MachineError> {
     let store = speech_store().map_err(|error| speech_machine::error_response(&error))?;
-    let report = speech::clear_speech_history(&store)
+    let report = speech::clear_speech_history(&store, chrono::Utc::now())
         .map_err(|error| speech_machine::error_response(&error))?;
     serde_json::to_string(&speech::SpeechHistoryClearResponse {
         schema_version: 1,
@@ -843,7 +843,7 @@ fn cmd_speech_cache_clear() -> anyhow::Result<()> {
 
 fn cmd_speech_history_clear() -> anyhow::Result<()> {
     let store = speech_store().map_err(speech_error)?;
-    let report = speech::clear_speech_history(&store).map_err(speech_error)?;
+    let report = speech::clear_speech_history(&store, chrono::Utc::now()).map_err(speech_error)?;
     println!("Speech Attempt History 已清理");
     println!("  Removed attempts: {}", report.removed_attempts);
     println!(
