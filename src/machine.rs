@@ -327,6 +327,31 @@ pub struct DoctorResponse {
     pub status: &'static str,
     pub binary: BinaryStatus,
     pub databases: DatabaseStatuses,
+    pub environment: EnvironmentStatus,
+}
+
+/// #14 环境预检：在真正写文件之前告诉消费者环境是否可用。
+///
+/// `list` / `annotations` / `export` 之前各自失败，会把同一个环境问题在三个地方
+/// 重复报告；集中在这里，消费者只需在启动时问一次。
+#[derive(Debug, Serialize)]
+pub struct EnvironmentStatus {
+    pub home: HomeStatus,
+    pub default_output_dir: OutputDirStatus,
+    pub free_bytes: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct HomeStatus {
+    pub status: &'static str,
+    pub path: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct OutputDirStatus {
+    pub status: &'static str,
+    pub path: String,
+    pub writable: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -368,8 +393,99 @@ impl DoctorResponse {
                     path: library_path.to_string_lossy().into_owned(),
                 },
             },
+            environment: EnvironmentStatus::probe(),
         }
     }
+}
+
+impl EnvironmentStatus {
+    /// 探测 HOME、默认输出目录可写性与所在卷的可用字节数。
+    ///
+    /// 预检只报告、不修复：目录不存在时报告 `missing` 而不是顺手创建，
+    /// 否则 `doctor` 会把「用户还没导出过」这种正常状态说成错误。
+    pub fn probe() -> Self {
+        let home = crate::utils::home_dir();
+        let home_status = match &home {
+            Some(path) => HomeStatus {
+                status: if path.is_dir() { "ok" } else { "missing" },
+                path: path.to_string_lossy().into_owned(),
+            },
+            None => HomeStatus {
+                status: "missing",
+                path: String::new(),
+            },
+        };
+
+        let default_output_dir = home
+            .as_ref()
+            .map(|path| path.join("books-exported"))
+            .unwrap_or_else(|| std::path::PathBuf::from("books-exported"));
+
+        // 只判断「能否写」，不创建目录：父目录不存在时用最近的上层目录判断。
+        let probe_dir = nearest_existing_ancestor(&default_output_dir);
+        let writable = probe_dir
+            .as_deref()
+            .is_some_and(crate::utils::dir_is_writable);
+        let output_status = OutputDirStatus {
+            status: match &home {
+                None => "unknown",
+                _ if !writable => "unwritable",
+                _ if default_output_dir.is_dir() => "ok",
+                _ => "missing",
+            },
+            path: default_output_dir.to_string_lossy().into_owned(),
+            writable,
+        };
+
+        // 必须在已存在的目录上查询：`statvfs` 对不存在的路径返回 ENOENT，
+        // 而全新机器上 ~/books-exported 正是如此，否则每个新用户都会看到
+        // free_bytes == 0 并被误判为磁盘已满。
+        let free_bytes = probe_dir
+            .as_deref()
+            .and_then(free_bytes_for)
+            .unwrap_or_default();
+
+        Self {
+            home: home_status,
+            default_output_dir: output_status,
+            free_bytes,
+        }
+    }
+}
+
+/// 从 `path` 向上找到第一个已存在的祖先目录。
+fn nearest_existing_ancestor(path: &std::path::Path) -> Option<std::path::PathBuf> {
+    let mut current = Some(path);
+    while let Some(candidate) = current {
+        if candidate.is_dir() {
+            return Some(candidate.to_path_buf());
+        }
+        current = candidate.parent();
+    }
+    None
+}
+
+/// 报告 `path` 所在卷的可用字节数；无法查询时返回 `None` 而非编造一个数字。
+#[cfg(unix)]
+fn free_bytes_for(path: &std::path::Path) -> Option<u64> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    let c_path = CString::new(path.as_os_str().as_bytes()).ok()?;
+    // SAFETY: `c_path` is a valid NUL-terminated C string that outlives the call,
+    // and `statvfs` only writes the single `statvfs` output argument we initialise.
+    unsafe {
+        let mut stat: libc::statvfs = std::mem::zeroed();
+        if libc::statvfs(c_path.as_ptr(), &mut stat) != 0 {
+            return None;
+        }
+        Some(u64::from(stat.f_bavail).saturating_mul(stat.f_frsize))
+    }
+}
+
+#[cfg(not(unix))]
+fn free_bytes_for(_path: &std::path::Path) -> Option<u64> {
+    None
 }
 
 #[cfg(test)]

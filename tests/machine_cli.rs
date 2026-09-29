@@ -2,6 +2,8 @@ use rusqlite::{params, Connection};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::atomic::{AtomicBool, AtomicUsize};
+use std::sync::Arc;
 use tempfile::TempDir;
 
 struct Fixture {
@@ -526,4 +528,229 @@ fn human_list_and_positional_export_remain_compatible() {
         String::from_utf8_lossy(&export.stderr)
     );
     assert!(String::from_utf8_lossy(&export.stdout).contains("导出完成"));
+}
+
+/// #14 doctor 环境预检：必须报告输出目录可写性与默认输出目录解析，
+/// 让 AppKit / TUI / Skill 消费者在真正写文件前就能发现问题。
+#[test]
+fn doctor_json_reports_environment_preflight_beyond_the_databases() {
+    let fixture = Fixture::new();
+    let output = fixture.run(&["doctor", "--json"]);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value: Value = serde_json::from_slice(&output.stdout).expect("stdout is JSON only");
+
+    assert_eq!(value["schema_version"], 1);
+    assert_eq!(value["status"], "ok");
+
+    let environment = &value["environment"];
+    assert!(
+        environment.is_object(),
+        "doctor must report an environment preflight, not only databases: {value}"
+    );
+    assert_eq!(
+        environment["home"]["status"], "ok",
+        "an injected HOME must be reported as usable"
+    );
+    assert!(
+        environment["home"]["path"]
+            .as_str()
+            .is_some_and(|p| !p.is_empty()),
+        "the resolved HOME path must be reported"
+    );
+    // `~/books-exported` 在全新机器上并不存在，这不算故障：只要它可被创建，
+    // doctor 就该报 `missing`（尚未导出）而不是 `unwritable`。
+    let output_dir = &environment["default_output_dir"];
+    assert_eq!(
+        output_dir["status"], "missing",
+        "a not-yet-created default output directory is a normal state: {value}"
+    );
+    assert_eq!(
+        output_dir["writable"], true,
+        "the parent must be writable so the directory can be created: {value}"
+    );
+    assert!(
+        output_dir["path"]
+            .as_str()
+            .is_some_and(|p| p.ends_with("books-exported")),
+        "the default output directory must be reported: {value}"
+    );
+    // 注意：`as_u64().is_some()` 对 0u64 也成立，会让"报告 0 字节"这种
+    // 错误实现蒙混过关，所以必须断言真实容量 > 0。
+    let free_bytes = environment["free_bytes"]
+        .as_u64()
+        .expect("doctor must report free bytes for the output volume");
+    assert!(
+        free_bytes > 0,
+        "a fresh HOME has free space; reporting 0 would make consumers think the disk is full: {value}"
+    );
+}
+
+/// 负向控制：默认输出目录不可写时，doctor 必须直说，不能报成可写。
+#[cfg(unix)]
+#[test]
+fn doctor_json_reports_an_unwritable_default_output_directory() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture = Fixture::new();
+    // 保留 Fixture 的数据库，只把默认输出目录本身变成不可写。
+    let output_dir = fixture.home().join("books-exported");
+    std::fs::create_dir_all(&output_dir).expect("output dir");
+    std::fs::set_permissions(&output_dir, std::fs::Permissions::from_mode(0o500))
+        .expect("chmod output dir");
+
+    let output = fixture.run(&["doctor", "--json"]);
+
+    // 恢复权限，避免 TempDir 清理失败。
+    std::fs::set_permissions(&output_dir, std::fs::Permissions::from_mode(0o755))
+        .expect("restore chmod");
+
+    assert!(
+        output.status.success(),
+        "doctor must still succeed and report the problem: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value: Value = serde_json::from_slice(&output.stdout).expect("stdout is JSON only");
+    let dir = &value["environment"]["default_output_dir"];
+    assert_eq!(
+        dir["status"], "unwritable",
+        "a read-only output directory must be reported, not hidden: {value}"
+    );
+    assert_eq!(dir["writable"], false);
+}
+
+/// 一个本地 TCP 监听器，用来统计子进程是否尝试过任何出站连接。
+struct ConnectionCounter {
+    port: u16,
+    connections: Arc<AtomicUsize>,
+    stop: Arc<AtomicBool>,
+    handle: Option<std::thread::JoinHandle<()>>,
+}
+
+impl ConnectionCounter {
+    fn start() -> Self {
+        use std::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind counter");
+        let port = listener.local_addr().expect("addr").port();
+        let connections = Arc::new(AtomicUsize::new(0));
+        let stop = Arc::new(AtomicBool::new(false));
+
+        let accept_connections = Arc::clone(&connections);
+        let accept_stop = Arc::clone(&stop);
+        // 必须在 spawn 之前设为非阻塞：否则 Drop 先跑 join 时，
+        // 线程内的 accept() 会永远阻塞，把测试套件挂死。
+        listener.set_nonblocking(true).expect("nonblocking");
+        let handle = std::thread::spawn(move || {
+            while !accept_stop.load(std::sync::atomic::Ordering::SeqCst) {
+                match listener.accept() {
+                    Ok((stream, _)) => {
+                        accept_connections.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        drop(stream);
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+
+        Self {
+            port,
+            connections,
+            stop,
+            handle: Some(handle),
+        }
+    }
+}
+
+impl Drop for ConnectionCounter {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+impl Fixture {
+    /// 在「任何出站连接都会被计数」的前提下运行一个命令。
+    fn run_counting_connections(&self, counter: &ConnectionCounter, args: &[&str]) -> Output {
+        let proxy = format!("http://127.0.0.1:{}", counter.port);
+        Command::new(env!("CARGO_BIN_EXE_apple-books-exporter"))
+            .args(args)
+            .env("HOME", self.home.path())
+            .env("http_proxy", &proxy)
+            .env("HTTP_PROXY", &proxy)
+            .env("https_proxy", &proxy)
+            .env("HTTPS_PROXY", &proxy)
+            .env("ALL_PROXY", &proxy)
+            .env("all_proxy", &proxy)
+            .output()
+            .expect("run CLI")
+    }
+}
+
+/// #14 Local Data Boundary：`list` / `annotations` / `export` 不得发起任何网络请求。
+///
+/// 之前的证据只是「阅读代码判断 provider 客户端不可达」，不是运行时证明。
+/// 这里把全部代理指向一个会计数的本地监听器：任何出站连接尝试都会被记录，
+/// 从而在运行时证明这三个只读命令确实离线。
+#[test]
+fn read_only_machine_commands_make_no_network_requests() {
+    let fixture = Fixture::new();
+    let counter = ConnectionCounter::start();
+
+    let list = fixture.run_counting_connections(&counter, &["list", "--json"]);
+    assert!(
+        list.status.success(),
+        "list --json must succeed: stderr={}",
+        String::from_utf8_lossy(&list.stderr)
+    );
+
+    let asset_id: String = serde_json::from_slice::<Value>(&list.stdout)
+        .expect("list JSON")
+        .pointer("/books/0/asset_id")
+        .and_then(Value::as_str)
+        .expect("asset id")
+        .to_string();
+
+    let annotations = fixture.run_counting_connections(
+        &counter,
+        &["annotations", "--asset-id", &asset_id, "--json"],
+    );
+    assert!(
+        annotations.status.success(),
+        "annotations --json must succeed: stderr={}",
+        String::from_utf8_lossy(&annotations.stderr)
+    );
+
+    let output_dir = fixture.output_dir().to_string_lossy().into_owned();
+    let export = fixture.run_counting_connections(
+        &counter,
+        &[
+            "export",
+            "--asset-id",
+            &asset_id,
+            "--json",
+            "--output",
+            &output_dir,
+        ],
+    );
+    assert!(
+        export.status.success(),
+        "export --json must succeed: stderr={}",
+        String::from_utf8_lossy(&export.stderr)
+    );
+
+    assert_eq!(
+        counter
+            .connections
+            .load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "list, annotations and export must not open any outbound connection"
+    );
 }
