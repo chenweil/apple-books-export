@@ -109,18 +109,32 @@ Parse the successful JSON response and require a `receipt` containing
 the current request. Pass `--overwrite` only when the user explicitly
 authorizes replacing existing files; otherwise preserve the default refusal.
 
+The exporter writes each book into its own subdirectory inside the output
+directory, and every `generated_files` entry is that `--output` value joined
+with the per-book subdirectory and file name. Pass an absolute `--output` — the
+`~/books-exported` default already is one — so the reported paths come back
+absolute; a relative `--output` yields relative paths. Two receipt fields are
+optional and appear only when non-empty: `audio_links` for speech clips the user
+exported earlier, and `warnings` for non-fatal speech problems that did not fail
+the export. Report any `warnings` to the user instead of discarding them.
+
 The Skill can list, filter, read, and export. It does not modify Apple Books,
 invoke `enrich`, invoke `card`, change cache/configuration, upload note
 content, or call remote AI as part of this workflow.
 
 ## 5. Verify before reporting success
 
-Before claiming an export succeeded, inspect the receipt's `generated_files`:
+Before claiming an export succeeded, verify the receipt's `generated_files`:
 
-- every reported path exists;
+- every reported path exists and is a regular file;
 - every reported export file has the `.md` suffix;
-- at least one Markdown file in the selected output directory is non-empty;
-- the files remain inside the user-selected output directory.
+- at least one reported Markdown file is non-empty;
+- every reported path is the selected output directory itself or a descendant
+  of it.
+
+Verify those paths directly. Do not glob the output directory for `*.md`:
+because of the per-book subdirectory, that finds nothing even after a fully
+successful export, and it would wrongly report the export as empty.
 
 Report only after these checks pass:
 

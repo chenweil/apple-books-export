@@ -184,6 +184,82 @@ describe("book browser", () => {
     expect(frame).not.toContain("深入理解计算机系统");
   });
 
+  test("Esc returns focus from the search box to the book list", async () => {
+    // The mock emits a bare ESC byte with no follow-up byte, so OpenTUI cannot
+    // resolve a key name and it arrives empty. kittyKeyboard encodes Escape
+    // unambiguously, which is what a real terminal delivers (verified with tmux
+    // in scripts/tui-smoke.sh). Without it this control looks dead.
+    testSetup = await createTestRenderer({
+      width: 100,
+      height: 24,
+      kittyKeyboard: true,
+    });
+    const browser = createBookBrowser(testSetup.renderer, books, {
+      loadAnnotations,
+    });
+    await browser.waitForIdle();
+
+    testSetup.mockInput.pressKey("/");
+    await testSetup.mockInput.typeText("纳瓦尔");
+    await browser.waitForIdle();
+    await testSetup.waitForFrame((value) => value.includes("搜索结果 (1)"));
+
+    testSetup.mockInput.pressEscape();
+    await testSetup.renderOnce();
+
+    // While the search box still holds focus, q is typed as text instead of
+    // quitting. A destroyed renderer is therefore the proof that Esc left it.
+    let destroyed = false;
+    testSetup.renderer.on("destroy", () => {
+      destroyed = true;
+    });
+    testSetup.mockInput.pressKey("q");
+    expect(destroyed).toBe(true);
+    testSetup = undefined;
+  });
+
+  test("keeps the search filter after Esc and clears it when the query is edited", async () => {
+    testSetup = await createTestRenderer({
+      width: 100,
+      height: 24,
+      kittyKeyboard: true,
+    });
+    const browser = createBookBrowser(testSetup.renderer, books, {
+      loadAnnotations,
+    });
+    await browser.waitForIdle();
+
+    testSetup.mockInput.pressKey("/");
+    await testSetup.mockInput.typeText("纳瓦尔");
+    await browser.waitForIdle();
+    await testSetup.waitForFrame((value) => value.includes("搜索结果 (1)"));
+
+    // Esc only hands focus back to the list. The query stays in the search bar
+    // and the narrowed count stays in the list title, so a filtered list is
+    // never mistaken for the whole library.
+    testSetup.mockInput.pressEscape();
+    await testSetup.renderOnce();
+    const afterEscape = testSetup.captureCharFrame();
+    expect(afterEscape).toContain("纳瓦尔");
+    expect(afterEscape).toContain("搜索结果 (1)");
+    expect(afterEscape).not.toContain("深入理解计算机系统");
+
+    // Focus really left the search box: "/" now re-focuses it instead of being
+    // typed into the query.
+    testSetup.mockInput.pressKey("/");
+    await testSetup.renderOnce();
+    expect(testSetup.captureCharFrame()).not.toContain("纳瓦尔/");
+
+    // Editing the query is what restores the full library.
+    testSetup.mockInput.pressBackspace();
+    testSetup.mockInput.pressBackspace();
+    testSetup.mockInput.pressBackspace();
+    await testSetup.renderOnce();
+    const afterClear = testSetup.captureCharFrame();
+    expect(afterClear).toContain("搜索结果 (2)");
+    expect(afterClear).toContain("深入理解计算机系统");
+  });
+
   test("ignores stale annotation responses after rapid navigation", async () => {
     testSetup = await createTestRenderer({ width: 100, height: 24 });
     let releaseFirst: (() => void) | undefined;
