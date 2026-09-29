@@ -2311,6 +2311,120 @@ fn a_concurrent_waiter_receives_the_first_terminal_error_without_a_second_provid
     );
 }
 
+/// 失败的 `--regenerate` 提交：旧 version 仍是 current pointer，且不留半成品。
+///
+/// 用一个普通文件占住 Speech 状态根的 tmp 目录，让「provider 已成功」之后的原子放置
+/// 必然失败。`state.json` 必须继续指向旧音频，普通 generate 也必须继续命中它。
+#[test]
+fn a_failed_regenerate_commit_leaves_the_old_pointer_and_audio_intact() {
+    let fixture = Fixture::new();
+    let first_provider = provider_with_catalog_and_synthesis("trace-atomic-1");
+    let first = succeeded(&fixture.run_with(
+        &[
+            "speech", "generate", "--asset-id", "book-1", "--annotation-id", "annotation-41",
+            "--content", "highlight", "--json",
+        ],
+        &first_provider,
+        Some(TEST_KEY),
+    ));
+    first_provider.finish();
+    let clip_id = first["receipt"]["clip_id"].as_str().expect("clip id");
+    let first_audio = first["receipt"]["audio"]["sha256"].as_str().expect("audio sha");
+    let versions = fixture.speech_root().join("clips").join(clip_id).join("versions");
+    assert_eq!(std::fs::read_dir(&versions).expect("versions").count(), 1);
+
+    // 占住 tmp：新 version 的原子放置必然失败，但旧 pointer 不能被丢弃。
+    // 首次生成已经建过 tmp 目录，先移除再换成普通文件。
+    std::fs::remove_dir_all(fixture.speech_root().join("tmp")).expect("remove tmp dir");
+    std::fs::create_dir_all(fixture.speech_root()).expect("speech root");
+    std::fs::write(fixture.speech_root().join("tmp"), b"not a directory").expect("block tmp");
+    let catalog = catalog_response();
+    // 不同帧数 → 不同音频字节 → 新的 version 目录（否则 intact 版本会被直接复用）。
+    let synthesis = synthesis_response("trace-atomic-2", 3);
+    let failing = MockProvider::serve(Response {
+        status: Response::status(200),
+        body: Arc::new(move |path: &str| {
+            if path.ends_with("/v1/t2a_v2") {
+                synthesis.clone()
+            } else {
+                catalog.clone()
+            }
+        }),
+        delay: None,
+        drop: Response::never_drop(),
+    });
+    let value = failed(&fixture.run_with(
+        &[
+            "speech", "generate", "--asset-id", "book-1", "--annotation-id", "annotation-41",
+            "--content", "highlight", "--regenerate", "--json",
+        ],
+        &failing,
+        Some(TEST_KEY),
+    ));
+    let failing_records = failing.finish();
+    assert_eq!(value["error"]["code"], "SPEECH_ARTIFACT_COMMIT_FAILED");
+    assert_eq!(
+        value["error"]["details"]["outcome"],
+        "provider_succeeded_artifact_missing"
+    );
+    assert_eq!(MockProvider::synthesis_count(&failing_records), 1);
+
+    let state = fixture.clip_state(clip_id);
+    assert_eq!(
+        state["current_audio_sha256"], first_audio,
+        "a failed commit must not move the current pointer"
+    );
+    assert_eq!(state["current_cache_status"], "ready");
+    assert_eq!(
+        state["generation_blocked"], false,
+        "the old valid version keeps the clip ungated after a failed commit"
+    );
+    assert_eq!(
+        state["latest_attempt_status"],
+        "provider_succeeded_artifact_missing"
+    );
+    assert_eq!(
+        std::fs::read_dir(&versions).expect("versions").count(),
+        1,
+        "a failed commit must not leave a partially placed version"
+    );
+
+    // 普通 generate 继续播放/复用旧音频：零连接。
+    let replay = provider_with_catalog_and_synthesis("trace-atomic-3");
+    let cached = succeeded(&fixture.run_with(
+        &[
+            "speech", "generate", "--asset-id", "book-1", "--annotation-id", "annotation-41",
+            "--content", "highlight", "--json",
+        ],
+        &replay,
+        Some(TEST_KEY),
+    ));
+    assert_eq!(cached["receipt"]["source"], "cache");
+    assert_eq!(cached["receipt"]["audio"]["sha256"], first_audio);
+    assert_eq!(replay.finish().len(), 0);
+
+    // 腾出 tmp 后显式 --regenerate 仍然可以替换当前版本。
+    std::fs::remove_file(fixture.speech_root().join("tmp")).expect("unblock tmp");
+    let recovered = provider_with_catalog_and_synthesis("trace-atomic-4");    let value = succeeded(&fixture.run_with(
+        &[
+            "speech", "generate", "--asset-id", "book-1", "--annotation-id", "annotation-41",
+            "--content", "highlight", "--regenerate", "--json",
+        ],
+        &recovered,
+        Some(TEST_KEY),
+    ));
+    assert_eq!(value["receipt"]["source"], "provider");
+    assert_eq!(MockProvider::synthesis_count(&recovered.finish()), 1);
+    assert_ne!(
+        value["receipt"]["attempt_id"],
+        first["receipt"]["attempt_id"],
+        "the recovered regeneration is a new Speech Attempt"
+    );
+    // 相同音频内容是内容寻址的：version 目录被复用，pointer 仍然只有一个。
+    assert_eq!(fixture.clip_state(clip_id)["generation_blocked"], false);
+    assert_eq!(std::fs::read_dir(&versions).expect("versions").count(), 1);
+}
+
 fn real_user_speech_root() -> PathBuf {
     PathBuf::from(std::env::var("HOME").expect("test process HOME"))
         .join("Library/Application Support/books-exporter/speech")
