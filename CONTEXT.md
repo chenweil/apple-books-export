@@ -183,7 +183,7 @@ The Headless Mainline is the `main` product surface without a shipped GUI. It pr
 
 ## Canonical Rust Data Core
 
-The Canonical Rust Data Core is the single source of truth for reading Apple Books data, normalizing books and annotations, applying selection identity, and producing export results. Human CLI, TUI, Agent Data Skill, and the future AppKit GUI consume its contracts rather than maintaining separate database rules.
+The Canonical Rust Data Core is the single source of truth for reading Apple Books data, normalizing books and annotations, applying selection identity, and producing export results. Human CLI, TUI, Agent Data Skill, and the AppKit GUI consume its contracts rather than maintaining separate database rules.
 
 ## Machine JSON Protocol
 
@@ -203,7 +203,7 @@ The Agent Data Skill is the repository-managed workflow that lets an AI agent li
 
 ## AppKit GUI Surface
 
-The AppKit GUI Surface is the future official macOS graphical experience. It remains a separate implementation during migration, then consumes the Canonical Rust Data Core through the Machine JSON Protocol before it is merged into the Headless Mainline.
+The AppKit GUI Surface is the official macOS graphical experience. It lives on the Headless Mainline and consumes the Canonical Rust Data Core through the Machine JSON Protocol rather than maintaining separate database rules. Removing the Tauri Legacy GUI remains a separate step tracked by the Cutover Gate.
 
 ## Tauri Legacy GUI
 

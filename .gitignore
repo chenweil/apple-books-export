@@ -39,3 +39,22 @@ __pycache__/
 *.pyc
 venv/
 .pytest_cache/
+
+# Xcode
+DerivedData/
+Packages/
+*.xcodeproj/
+xcuserdata/
+*.xcuserstate
+*.moved-aside
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# Python (extra, kept for reference)
+.venv/
+*.egg
+*.egg-info/
+*.so
+.Python
