@@ -10,16 +10,15 @@ Canonical Rust Data Core。
 ## 与主线的关系
 
 `main` 是 **Headless Mainline**：默认产品入口是 Rust CLI、Read-only TUI 和
-Agent Data Skill。Tauri Legacy GUI 已在 `main` 标记废弃，源码保留用于回滚，回滚
-锚点是标签 `legacy/tauri-gui-mainline`。
+Agent Data Skill。
 
 AppKit 已经在 `main` 上（源码树由 #35 引入，与本分支逐字相同），是本仓库的正式
 GUI。它通过机器协议消费与 Headless Mainline 完全相同的 Rust 契约，不维护第二套
 数据规则。
 
 Tauri Legacy GUI 已在 `main` 标记废弃，源码暂留用于回滚，回滚锚点是标签
-`legacy/tauri-gui-mainline`。删除 Tauri 是 Cutover Gate（issue #19）的独立步骤，
-尚未执行；在那之前两者并存，但 AppKit 是唯一受 CI 门禁覆盖的图形界面。
+`legacy/tauri-gui-mainline`。删除 Tauri 是 Cutover Gate（issue #19，见 #43）的独立
+步骤，尚未执行；在那之前两者并存，但 AppKit 是唯一受 CI 门禁覆盖的图形界面。
 
 ## 系统要求
 

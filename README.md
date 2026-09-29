@@ -151,7 +151,9 @@ swift test                # 47 项 XCTest
 ./Scripts/verify-ui.sh    # 106 条 UI 断言回归探针
 ```
 
-`appkit` CI job（`macos-14` / Swift 5.10）在每次 push 和 PR 上执行上面三条命令。
+`appkit` CI job（`macos-14`）在每次 push 到 `main` 以及每个 PR 上执行上面三条命令。
+该 job 不固定 Swift 版本，而是打印 runner 自带的 `swift --version`；源码须同时兼容
+`appkit/Package.swift` 声明的 5.9 与 runner 当时提供的工具链。
 
 运行需要先构建 canonical Rust CLI，并用 `APPLE_BOOKS_EXPORTER_BIN` 指向它
 （解析优先级：`APPLE_BOOKS_EXPORTER_BIN` 环境变量 → App 包内

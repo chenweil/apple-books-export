@@ -3,8 +3,8 @@
 - 日期：2026-08-11（**2026-09-30 刷新**）
 - 关联：[`CONTEXT.md`](../../CONTEXT.md)、[`ADR 0005`](../adr/0005-headless-mainline-appkit-cutover.md)、[`ADR 0006`](../adr/0006-appkit-initial-capability-boundary.md)、[`Headless Mainline + AppKit Cutover Spec`](2026-08-07-headless-mainline-appkit-cutover-spec.md)
 - `main` Headless Mainline 基线：`662e1bb`（#40，AppKit CI 门禁）
-- `appkit`：`2bf3ff1`（#41，AppKit 首次获得 Swift 5.10 CI 覆盖）
-- 本记录范围：本机 arm64 macOS、当前 Apple Books 数据源、fixture/contract、unsigned 本地 AppKit 包、本机对 x86_64 的交叉编译验证，以及 CI runner 上的 Swift 5.10 构建与测试
+- `appkit`：`2bf3ff1`（#41，AppKit 首次获得 CI 门禁覆盖）
+- 本记录范围：本机 arm64 macOS（Swift 6.3.3）、当前 Apple Books 数据源、fixture/contract、unsigned 本地 AppKit 包、本机对 x86_64 的交叉编译验证，以及 CI runner 上的构建与测试。CI job 不固定 Swift 版本：首次运行时 `macos-14` 提供的工具链观测为 5.10，下文凡涉及该版本均指这次实际观测值。
 
 ## 结论
 
@@ -31,7 +31,7 @@
 | Read-only TUI | ✅ 通过 | `bun test`：**18 pass、46 assertions**（原始记录为 16 pass、39 assertions）；`bun run --cwd tui typecheck` 通过。#15 新增 `scripts/tui-smoke.sh`：独立 tmux socket 起真实 pty 驱动真实 Bun/OpenTUI 与真实 Rust 后端，**28/28 断言通过，`TUI_EXIT=0`**；把 `APPLE_BOOKS_EXPORTER_BIN` 指向记录 argv 的 shim，断言子命令集合恰好是 `{list, annotations}`；并枚举 tmux pane 进程树证明没有 `.app/`/`osascript`/Gatekeeper 启动。 |
 | Agent Data Skill | ✅ 通过（仓库副本） | `skills/apple-books-export-rust/tests/contract.sh` 通过（含 runtime validation，需 debug + release 两个二进制）。#16 修正了 SKILL.md 第 4/5 步的真实漏洞：导出器固定为每本书建子目录（`src/exporter.rs:109`），原文的扁平 `*.md` 匹配会误报成功为失败；并补充可选收据字段 `audio_links` / `warnings`。 |
 | AppKit Rust bridge | ✅ 通过（本机 arm64 + CI） | `swift build` / `swift test` **47 tests, 0 failures** / `./Scripts/verify-ui.sh` **106 条断言全部通过**。#17 修复了打包脚本的目录无关性。 |
-| AppKit CI 门禁 | ✅ 通过 | #40 在 main、#41 在 appkit 分支各新增 `appkit` job（`macos-14`）：`swift build` → `swift test` → `./Scripts/verify-ui.sh`，全部为硬门禁。**首次运行即抓到 main 上真实的编译断裂**：`BookDetailView.swift:174` 的 `allAnnotations.count { … }` 只在 Swift 6 成立，CI 的 Swift 5.10 报 `cannot call value of non-function type 'Int'`。本机 6.3.3 能编过，所以这个缺陷在零覆盖期间一直隐形。修正改用 `reduce(into:)`，两工具链均正确。 |
+| AppKit CI 门禁 | ✅ 通过 | #40 在 main、#41 在 appkit 分支各新增 `appkit` job（`macos-14`）：`swift build` → `swift test` → `./Scripts/verify-ui.sh`，全部为硬门禁。job 不固定 Swift 版本，只打印 `swift --version`；首次运行时该 runner 提供的是 5.10。**首次运行即抓到 main 上真实的编译断裂**：`BookDetailView.swift:174` 的 `allAnnotations.count { … }` 只在 Swift 6 成立，在该 runner 上报 `cannot call value of non-function type 'Int'`。本机 6.3.3 能编过，所以这个缺陷在零覆盖期间一直隐形。修正改用 `reduce(into:)`（Swift 4 起可用，两工具链均正确）。源码须同时兼容 `Package.swift` 声明的 5.9 与 runner 工具链，这是该 job 存在的理由。 |
 | AppKit 真实数据正向 smoke | ✅ 通过（间接） | Rust canonical binary 已通过真实 list/annotations/export/doctor；打包 DMG 后用包内二进制读到 **70 本真实书**，asset_id 匹配，带全部 **7 个 speech 子命令**。未把用户书名、正文或路径写入日志。 |
 | Full Disk Access 负向 smoke | ⏳ **待人工 → #45** | Rust fixture/integration、TUI 和 AppKit stable-error tests 已覆盖 `FULL_DISK_ACCESS_REQUIRED`；`sandbox-exec` 模拟 OS 级拒读，真实 CLI exit=1 且 stderr code 正确。**但这不等价于真实 TCC 拒权**：尚未证明 AppKit 会弹出引导并可重试。不得为取证而修改生产环境隐私权限。 |
 | arm64 packaging | ✅ 通过（unsigned/local） | unsigned DMG 已生成、挂载成功，`Contents/Resources/apple-books-exporter` 存在且可执行；包内 binary `--help` exit=0。 |
