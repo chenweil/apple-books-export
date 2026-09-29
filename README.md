@@ -182,6 +182,38 @@ apple-books-exporter speech voices --json
   不存在的标签组合；
 - 本地缓存文件损坏或 schema 不匹配不会阻断 `--refresh`：刷新成功后原子替换掉损坏文档。
 
+### 语音 Cache 与 Attempt History
+
+维护本地 Cached Speech Clip 与 Speech Attempt History。两者都是纯本地操作：不联网，
+不调用 Speech Provider。
+
+```bash
+# 只读视图：预算、占用、已接受/无音频/阻塞/损坏/占用中 entry 与可回收孤立 version
+apple-books-exporter speech cache status
+apple-books-exporter speech cache status --json
+
+# 删除可淘汰 Cached Speech Clip，并显式清除没有有效音频的阻塞门
+apple-books-exporter speech cache clear
+apple-books-exporter speech cache clear --json
+
+# 只删除 attempt history
+apple-books-exporter speech history clear
+apple-books-exporter speech history clear --json
+```
+
+- 默认预算 1 GiB（`config.json` 的非秘密字段 `cache_budget_bytes` 可调），其中必须保留
+  128 MiB 安全余量，因此真正可给缓存内容使用的是 `budget - 128 MiB`；
+- `cache status` 不删除、不改写任何东西，也不调用 provider：损坏 entry 与未被 current
+  pointer 引用的孤立 version 只被报告；
+- LRU 与 `cache clear` 都不淘汰当前 clip，也不淘汰正在生成（跨进程 writer 锁）、播放或
+  导出（usage marker）的 entry；`cache clear` 的 receipt 用 `skipped_reasons` 说明每个
+  跳过 entry 的占用原因；
+- `history clear` 只删 attempt metadata：不动缓存、不动 unknown gate、不动导出状态，也不删
+  用户自己的音频；超过 90 天的 attempt metadata 由正常维护自动删除，与音频 LRU 相互独立；
+- 根目录不可写、可用空间保不住安全余量或没有可淘汰空间时，`generate` 在 provider 调用
+  **之前**返回 `SPEECH_STORAGE_UNAVAILABLE`。运维可以用
+  `APPLE_BOOKS_SPEECH_MIN_FREE_BYTES` 调高要求的空闲空间（只能调高，不能削弱保护）。
+
 ## AI Agent Skill
 
 本项目提供 skill，支持 AI 助手直接调用。

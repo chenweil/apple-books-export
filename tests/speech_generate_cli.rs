@@ -3056,6 +3056,15 @@ fn a_budget_smaller_than_the_safety_margin_fails_locally() {
     ));
     assert_eq!(provider.finish().len(), 0);
     assert_eq!(value["error"]["code"], "SPEECH_STORAGE_UNAVAILABLE");
+    assert!(
+        value["error"]["message"].as_str().unwrap_or_default().contains("safety margin"),
+        "a budget below the safety margin must be reported as such: {value}"
+    );
+    assert_eq!(
+        fixture.clip_dirs().len(),
+        2,
+        "a budget that cannot preserve the safety margin must not evict anything on the way out"
+    );
     // 状态视图如实反映这个配置：可用预算为 0。
     let status = provider_with_catalog_and_synthesis("trace-budget-4");
     let report = succeeded(&fixture.run_with(&["speech", "cache", "status", "--json"], &status, Some(TEST_KEY)));

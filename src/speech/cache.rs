@@ -2496,12 +2496,12 @@ mod tests {
         let stale = "b".repeat(64);
         committed_clip(&cache, &current);
         committed_clip(&cache, &stale);
-        // current 是最近使用的，stale 是最早使用的：去掉 keep 就会被先淘汰。
+        // current 反而更旧：去掉 keep 保护它会第一个被淘汰，因此这条断言对 guard 敏感。
         let mut current_state = cache.load_state(&current).expect("state").expect("state");
-        current_state.last_used_at = Some("2026-09-20T00:00:00Z".to_string());
+        current_state.last_used_at = Some("2026-09-01T00:00:00Z".to_string());
         cache.save_state(&current_state).expect("save");
         let mut stale_state = cache.load_state(&stale).expect("state").expect("state");
-        stale_state.last_used_at = Some("2026-09-01T00:00:00Z".to_string());
+        stale_state.last_used_at = Some("2026-09-20T00:00:00Z".to_string());
         cache.save_state(&stale_state).expect("save");
         pad(&cache, &current, 5 * 1024 * 1024);
         pad(&cache, &stale, 100 * 1024 * 1024);
@@ -2817,12 +2817,15 @@ mod tests {
         // broken 正在播放：它既有占用也有孤立 version 之外的损坏状态。
         let playing = ClipUseGuard::acquire(&cache, &broken, ClipUseKind::Playback, now())
             .expect("acquire playback");
-        let orphan = cache
-            .clip_dir(&ready)
-            .expect("clip dir")
-            .join("versions")
-            .join("c".repeat(64));
-        fs::create_dir_all(&orphan).expect("orphan dir");
+        // ready 未被占用：它的孤立 version 可回收；broken 正在播放：它的孤立 version 不可回收。
+        for clip_id in [&ready, &broken] {
+            let orphan = cache
+                .clip_dir(clip_id)
+                .expect("clip dir")
+                .join("versions")
+                .join("c".repeat(64));
+            fs::create_dir_all(&orphan).expect("orphan dir");
+        }
 
         let status = cache.cache_status().expect("cache status");
 
@@ -2836,7 +2839,7 @@ mod tests {
         assert_eq!(status.locked_entries, 1);
         assert_eq!(
             status.reclaimable_versions, 1,
-            "the locked clip's versions must not be reported as reclaimable"
+            "only the unlocked clip's orphan version may be reported as reclaimable"
         );
         assert_eq!(
             status
