@@ -238,6 +238,24 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
+        // 默认 fixture：annotation-41 同时有高亮与笔记，annotation-42 只有高亮。
+        Self::with_annotations(&[
+            (
+                41,
+                "book-1",
+                Some("高亮正文"),
+                Some("我的笔记"),
+            ),
+            (42, "book-1", Some("只有高亮"), None),
+        ])
+    }
+
+    /// 用给定的标注行建库：每行是 `(pk, asset_id, selected_text, note)`。
+    ///
+    /// CLI 测试因此可以注入任意正文，包括字面 `<break>` 形状的控制标记和超过
+    /// 10000 字符的超长文本，从而端到端覆盖 provider-safe 处理与
+    /// `SPEECH_TEXT_TOO_LONG` 路径。
+    fn with_annotations(rows: &[(i64, &str, Option<&str>, Option<&str>)]) -> Self {
         let home = tempfile::tempdir().expect("fixture home");
         let annotation_dir = home
             .path()
@@ -264,34 +282,14 @@ impl Fixture {
                 );",
             )
             .expect("annotation schema");
-        annotation_conn
-            .execute(
-                "INSERT INTO ZAEANNOTATION VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0)",
-                rusqlite::params![
-                    41,
-                    "book-1",
-                    "高亮正文",
-                    "我的笔记",
-                    "epubcfi(/6/10[Section0003.xhtml]!/4/82/1,:0,:44)",
-                    60.0,
-                    3
-                ],
-            )
-            .expect("both-sides annotation");
-        annotation_conn
-            .execute(
-                "INSERT INTO ZAEANNOTATION VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0)",
-                rusqlite::params![
-                    42,
-                    "book-1",
-                    "只有高亮",
-                    Option::<String>::None,
-                    "epubcfi(/6/12[chapter5.xhtml]!/4/2)",
-                    120.0,
-                    3
-                ],
-            )
-            .expect("highlight-only annotation");
+        for (index, (pk, asset, text, note)) in rows.iter().enumerate() {
+            annotation_conn
+                .execute(
+                    "INSERT INTO ZAEANNOTATION VALUES (?1, ?2, ?3, ?4, 'epubcfi(/6/2)', ?5, 3, 0)",
+                    rusqlite::params![pk, asset, text, note, index as f64],
+                )
+                .expect("annotation row");
+        }
 
         let library_conn = rusqlite::Connection::open(library_dir.join("library.sqlite"))
             .expect("library database");
@@ -306,12 +304,14 @@ impl Fixture {
                 );",
             )
             .expect("library schema");
-        library_conn
-            .execute(
-                "INSERT INTO ZBKLIBRARYASSET VALUES (1, 'book-1', '测试书', '测试作者', '测试书')",
-                [],
-            )
-            .expect("library row");
+        for (index, (_, asset, _, _)) in rows.iter().enumerate() {
+            library_conn
+                .execute(
+                    "INSERT OR IGNORE INTO ZBKLIBRARYASSET VALUES (?1, ?2, '测试书', '测试作者', ?3)",
+                    rusqlite::params![index as i64 + 1, asset, asset],
+                )
+                .expect("library row");
+        }
 
         Self { home }
     }
@@ -492,6 +492,41 @@ fn provider_with_dropped_synthesis() -> MockProvider {
         delay: None,
         // 只有合成请求被断开：目录仍然可用。
         drop: Arc::new(|path: &str| path.ends_with("/v1/t2a_v2")),
+    })
+}
+
+/// 目录可用、合成返回可解析 MP3，但 `extra_info` 声明的音频规格与帧解析矛盾。
+fn provider_with_contradicting_declared_audio() -> MockProvider {
+    let catalog = catalog_response();
+    let synthesis = || {
+        serde_json::to_vec(&json!({
+            "data": {"audio": hex_encode(&silent_mp3(2)), "status": 2},
+            "extra_info": {
+                "audio_length": 72,
+                // 本地 MP3 帧是 32000Hz/128000bps/2 声道：声明必须与解析一致。
+                "audio_sample_rate": 44100,
+                "audio_size": 2 * 576,
+                "bitrate": 128000,
+                "audio_format": "mp3",
+                "audio_channel": 2,
+                "usage_characters": 8
+            },
+            "trace_id": "trace-declared-mismatch",
+            "base_resp": {"status_code": 0, "status_msg": "success"}
+        }))
+        .expect("response JSON")
+    };
+    MockProvider::serve(Response {
+        status: Response::status(200),
+        body: Arc::new(move |path: &str| {
+            if path.ends_with("/v1/t2a_v2") {
+                synthesis()
+            } else {
+                catalog.clone()
+            }
+        }),
+        delay: None,
+        drop: Response::never_drop(),
     })
 }
 
@@ -1233,13 +1268,108 @@ fn an_uncertain_outcome_records_an_unknown_gate_and_never_replays() {
 }
 
 #[test]
-fn provider_control_markup_in_the_annotation_is_neutralized() {
-    let fixture = Fixture::new();
+fn literal_control_markup_in_the_annotation_is_neutralized() {
+    // 参数化 fixture 直接把字面 `<break>` 形状的控制标记写进高亮正文。
+    let fixture = Fixture::with_annotations(&[(
+        7,
+        "book-markup",
+        Some("停顿<break time=\"500\"/>结束 < 比较 </close>"),
+        None,
+    )]);
     let provider = provider_with_catalog_and_synthesis("trace-markup");
 
-    // 直接用 fixture 里的文本无法注入控制标记，因此这里断言请求体与原文一致，
-    // 并由单元测试覆盖 `<break>` 守卫；此处确认 CLI 不会改写或删除原文。
     let value = succeeded(&fixture.run_with(
+        &[
+            "speech",
+            "generate",
+            "--asset-id",
+            "book-markup",
+            "--annotation-id",
+            "annotation-7",
+            "--content",
+            "highlight",
+            "--json",
+        ],
+        &provider,
+        Some(TEST_KEY),
+    ));
+    let records = provider.finish();
+
+    assert_eq!(value["receipt"]["source"], "provider");
+    let synthesis = records
+        .iter()
+        .find(|record| record.path.ends_with("/v1/t2a_v2"))
+        .expect("synthesis request");
+    let body: Value = serde_json::from_slice(&synthesis.body).expect("request JSON");
+    let text = body["text"].as_str().expect("request text");
+
+    // 每个 ASCII `<` 后面都必须紧跟 U+200B 守卫：控制标签无法闭合生效。
+    let characters: Vec<char> = text.chars().collect();
+    for (index, character) in characters.iter().enumerate() {
+        if *character == '<' {
+            assert_eq!(
+                characters.get(index + 1),
+                Some(&'\u{200b}'),
+                "guard must follow every < : {text}"
+            );
+        }
+    }
+    assert_eq!(
+        characters.iter().filter(|c| **c == '<').count(),
+        3,
+        "every ASCII < must be guarded: {text}"
+    );
+    // 去掉守卫后必须与原文快照完全一致：一个字符都没有被删除或改写。
+    let stripped: String = text.chars().filter(|c| *c != '\u{200b}').collect();
+    assert_eq!(stripped, "停顿<break time=\"500\"/>结束 < 比较 </close>");
+    assert_eq!(
+        value["receipt"]["unicode_characters"],
+        "停顿<break time=\"500\"/>结束 < 比较 </close>"
+            .chars()
+            .count(),
+        "the local character count is computed from the original snapshot"
+    );
+}
+
+#[test]
+fn overlong_annotation_text_fails_before_any_provider_call() {
+    let overlong = "字".repeat(10_001);
+    let fixture = Fixture::with_annotations(&[(9, "book-long", Some(overlong.as_str()), None)]);
+    let provider = provider_with_catalog_and_synthesis("trace-long");
+
+    let value = failed(&fixture.run_with(
+        &[
+            "speech",
+            "generate",
+            "--asset-id",
+            "book-long",
+            "--annotation-id",
+            "annotation-9",
+            "--content",
+            "highlight",
+            "--json",
+        ],
+        &provider,
+        Some(TEST_KEY),
+    ));
+    let records = provider.finish();
+
+    assert_eq!(value["error"]["code"], "SPEECH_TEXT_TOO_LONG");
+    assert_eq!(value["error"]["details"]["reason"], "text_too_long");
+    assert_eq!(records.len(), 0, "overlong text must not reach the provider");
+    assert!(
+        !String::from_utf8_lossy(&serde_json::to_vec(&value).expect("error JSON"))
+            .contains("字".repeat(100).as_str()),
+        "the error envelope must not carry the source text"
+    );
+}
+
+#[test]
+fn declared_audio_metadata_that_contradicts_the_parsed_mp3_is_rejected() {
+    let fixture = Fixture::new();
+    let provider = provider_with_contradicting_declared_audio();
+
+    let value = failed(&fixture.run_with(
         &[
             "speech",
             "generate",
@@ -1256,13 +1386,241 @@ fn provider_control_markup_in_the_annotation_is_neutralized() {
     ));
     let records = provider.finish();
 
-    assert_eq!(value["receipt"]["source"], "provider");
-    let synthesis = records
+    assert_eq!(value["error"]["code"], "SPEECH_AUDIO_INVALID");
+    assert_eq!(
+        value["error"]["details"]["outcome"],
+        "provider_succeeded_artifact_missing"
+    );
+    assert_eq!(MockProvider::synthesis_count(&records), 1);
+    assert!(
+        fixture.clip_dirs().iter().all(|dir| dir
+            .join("versions")
+            .read_dir()
+            .map(|mut entries| entries.next().is_none())
+            .unwrap_or(true)),
+        "a rejected artifact must not create an immutable audio version"
+    );
+
+    // provider 成功但没有可用产物：普通 generate 被 unknown gate 挡住，不自动重放。
+    let blocked_provider = provider_with_catalog_and_synthesis("trace-declared-blocked");
+    let blocked = failed(&fixture.run_with(
+        &[
+            "speech",
+            "generate",
+            "--asset-id",
+            "book-1",
+            "--annotation-id",
+            "annotation-41",
+            "--content",
+            "highlight",
+            "--json",
+        ],
+        &blocked_provider,
+        Some(TEST_KEY),
+    ));
+    let blocked_records = blocked_provider.finish();
+    assert_eq!(blocked["error"]["code"], "SPEECH_RESULT_UNKNOWN");
+    assert_eq!(blocked_records.len(), 0);
+}
+
+#[test]
+fn human_display_indices_out_of_range_fail_without_targeting_the_first_book() {
+    let fixture = Fixture::new();
+    let provider = provider_with_catalog_and_synthesis("trace-index");
+
+    // 0 与越界都必须失败；绝不能降级成第一本书/第一条 Annotation。
+    for args in [
+        vec!["speech", "generate", "0", "--annotation", "1", "--content", "highlight"],
+        vec!["speech", "generate", "99", "--annotation", "1", "--content", "highlight"],
+        vec!["speech", "generate", "1", "--annotation", "0", "--content", "highlight"],
+        vec!["speech", "generate", "1", "--annotation", "9", "--content", "highlight"],
+    ] {
+        let output = fixture.run_with(&args, &provider, Some(TEST_KEY));
+        assert!(!output.status.success(), "{args:?} must fail");
+        assert!(
+            output.stdout.is_empty(),
+            "{args:?} must not print a receipt on stdout"
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let error: Value = serde_json::from_slice(&output.stderr).expect("error envelope");
+        assert_eq!(error["error"]["code"], "INVALID_ARGUMENT", "{args:?}");
+        assert!(
+            stderr.contains("序号"),
+            "{args:?} must name the invalid index: {stderr}"
+        );
+    }
+    let records = provider.finish();
+    assert_eq!(
+        records.len(),
+        0,
+        "an out-of-range index must not reach the provider at all"
+    );
+
+    // 合法序号照常工作（人类模式输出不是 JSON envelope）。
+    let ok_provider = provider_with_catalog_and_synthesis("trace-index-ok");
+    let ok = fixture.run_with(
+        &[
+            "speech",
+            "generate",
+            "1",
+            "--annotation",
+            "2",
+            "--content",
+            "highlight",
+        ],
+        &ok_provider,
+        Some(TEST_KEY),
+    );
+    assert!(ok.status.success(), "stderr: {:?}", String::from_utf8_lossy(&ok.stderr));
+    let stdout = String::from_utf8_lossy(&ok.stdout);
+    assert!(stdout.contains("Voice ID: male_0004_a"), "{stdout}");
+    assert_eq!(MockProvider::synthesis_count(&ok_provider.finish()), 1);
+}
+
+#[test]
+fn an_in_place_corrupted_version_is_repaired_and_never_served_as_a_cache_hit() {
+    let fixture = Fixture::new();
+
+    // 第一次生成落一个不可变 version。
+    let first = provider_with_catalog_and_synthesis("trace-repair-1");
+    let value = succeeded(&fixture.run_with(
+        &[
+            "speech", "generate", "--asset-id", "book-1", "--annotation-id", "annotation-41",
+            "--content", "highlight", "--json",
+        ],
+        &first,
+        Some(TEST_KEY),
+    ));
+    let clip_id = value["receipt"]["clip_id"].as_str().expect("clip id").to_string();
+    assert_eq!(MockProvider::synthesis_count(&first.finish()), 1);
+
+    let audio_path = fixture
+        .speech_root()
+        .join("clips")
+        .join(&clip_id)
+        .join("versions")
+        .join(value["receipt"]["audio"]["sha256"].as_str().expect("sha256"))
+        .join("audio.mp3");
+    let bytes = std::fs::read(&audio_path).expect("audio version");
+    let mut tampered = bytes.clone();
+    tampered[10] ^= 0xFF;
+    std::fs::write(&audio_path, &tampered).expect("tamper");
+
+    // 普通 generate：损坏的 version 被识别，重新生成并修复目录。
+    let second = provider_with_catalog_and_synthesis("trace-repair-2");
+    let repaired = succeeded(&fixture.run_with(
+        &[
+            "speech", "generate", "--asset-id", "book-1", "--annotation-id", "annotation-41",
+            "--content", "highlight", "--json",
+        ],
+        &second,
+        Some(TEST_KEY),
+    ));
+    assert_eq!(repaired["receipt"]["source"], "provider");
+    assert_eq!(
+        MockProvider::synthesis_count(&second.finish()),
+        1,
+        "a corrupt version must be repaired by exactly one provider call"
+    );
+    assert_eq!(
+        std::fs::read(&audio_path).expect("repaired audio"),
+        bytes,
+        "the repaired version must hold the original bytes again"
+    );
+
+    // 修复后重复的普通 generate 命中缓存：0 次 provider 调用，且不再返回坏音频。
+    let third = provider_with_catalog_and_synthesis("trace-repair-3");
+    let cached = succeeded(&fixture.run_with(
+        &[
+            "speech", "generate", "--asset-id", "book-1", "--annotation-id", "annotation-41",
+            "--content", "highlight", "--json",
+        ],
+        &third,
+        Some(TEST_KEY),
+    ));
+    let third_records = third.finish();
+    assert_eq!(cached["receipt"]["source"], "cache");
+    assert_eq!(third_records.len(), 0, "a repaired cache must make no connection");
+    assert_eq!(std::fs::read(&audio_path).expect("served audio"), bytes);
+}
+
+#[test]
+fn a_commit_failure_returns_artifact_commit_failed_and_gates_the_clip() {
+    let fixture = Fixture::new();
+
+    // 用一个普通文件占住 Speech 状态根的 tmp 目录：provider 成功之后的原子放置必然失败，
+    // 但调用前的 state 写入仍然可行，于是失败点正好落在「provider 已计费」之后。
+    std::fs::create_dir_all(fixture.speech_root()).expect("speech root");
+    std::fs::write(fixture.speech_root().join("tmp"), b"not a directory").expect("block tmp");
+
+    let failing = provider_with_catalog_and_synthesis("trace-commit-1");
+    let failing_output = fixture.run_with(
+        &[
+            "speech", "generate", "--asset-id", "book-1", "--annotation-id", "annotation-41",
+            "--content", "highlight", "--json",
+        ],
+        &failing,
+        Some(TEST_KEY),
+    );
+    let failed_records = failing.finish();
+    assert!(!failing_output.status.success());
+    let failed_value = serde_json::from_slice::<Value>(&failing_output.stderr).expect("error JSON");
+    assert_eq!(failed_value["error"]["code"], "SPEECH_ARTIFACT_COMMIT_FAILED");
+    assert_eq!(
+        failed_value["error"]["details"]["outcome"],
+        "provider_succeeded_artifact_missing",
+        "a commit failure must be recorded as provider-succeeded-artifact-missing"
+    );
+    assert!(failed_value["error"]["details"]["attempt_id"].is_string());
+    assert_eq!(MockProvider::synthesis_count(&failed_records), 1);
+    // 没有任何音频 version 被留下。
+    assert!(fixture
+        .clip_dirs()
         .iter()
-        .find(|record| record.path.ends_with("/v1/t2a_v2"))
-        .expect("synthesis request");
-    let body: Value = serde_json::from_slice(&synthesis.body).expect("request JSON");
-    assert_eq!(body["text"], "高亮正文");
+        .all(|dir| !dir.join("versions").exists()));
+
+    // attempt history 与 clip state 必须留下这次失败，并设置 unknown gate。
+    let clip_dir = fixture.clip_dirs().into_iter().next().expect("clip dir");
+    let state: Value = serde_json::from_slice(
+        &std::fs::read(clip_dir.join("state.json")).expect("state.json"),
+    )
+    .expect("state JSON");
+    assert_eq!(
+        state["generation_blocked"], true,
+        "provider-succeeded-artifact-missing must gate a plain generate"
+    );
+    assert_eq!(state["latest_error_code"], "SPEECH_ARTIFACT_COMMIT_FAILED");
+    assert_eq!(
+        state["latest_attempt_status"], "provider_succeeded_artifact_missing"
+    );
+
+    // 普通 generate 被 gate 挡住：零连接，不自动重放。
+    let blocked = provider_with_catalog_and_synthesis("trace-commit-2");
+    let blocked_value = failed(&fixture.run_with(
+        &[
+            "speech", "generate", "--asset-id", "book-1", "--annotation-id", "annotation-41",
+            "--content", "highlight", "--json",
+        ],
+        &blocked,
+        Some(TEST_KEY),
+    ));
+    assert_eq!(blocked_value["error"]["code"], "SPEECH_RESULT_UNKNOWN");
+    assert_eq!(blocked_value["error"]["details"]["outcome"], "unknown");
+    assert_eq!(blocked.finish().len(), 0);
+
+    // 只有显式 --regenerate 才能越过 gate。
+    std::fs::remove_file(fixture.speech_root().join("tmp")).expect("unblock tmp");
+    let regenerated = provider_with_catalog_and_synthesis("trace-commit-3");
+    let recovered = succeeded(&fixture.run_with(
+        &[
+            "speech", "generate", "--asset-id", "book-1", "--annotation-id", "annotation-41",
+            "--content", "highlight", "--regenerate", "--json",
+        ],
+        &regenerated,
+        Some(TEST_KEY),
+    ));
+    assert_eq!(recovered["receipt"]["source"], "provider");
+    assert_eq!(MockProvider::synthesis_count(&regenerated.finish()), 1);
 }
 
 /// 同一 clip 的两个并发 generate：只有一个 provider writer。

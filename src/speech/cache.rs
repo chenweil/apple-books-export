@@ -921,7 +921,7 @@ mod tests {
             audio_sha256,
             "the repaired bytes must hash to the version directory name"
         );
-        assert_eq!(ready.state.generation_blocked, false);
+        assert!(!ready.state.generation_blocked);
     }
 
     #[test]

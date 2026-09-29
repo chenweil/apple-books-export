@@ -18,7 +18,7 @@
 //! `--regenerate` 才能越过。
 
 use crate::models::Annotation;
-use crate::speech::audio::{validate_audio, AudioDecodeError};
+use crate::speech::audio::{validate_audio, AudioDecodeError, AudioFacts};
 use crate::speech::cache::{
     AttemptRecord, AttemptStatus, ClipCache, ClipCacheError, ClipLock, ClipLockError, ClipState,
     ClipVersionMetadata, ATTEMPT_SCHEMA_VERSION, CLIP_STATE_SCHEMA_VERSION,
@@ -673,9 +673,11 @@ where
     };
 
     // 9. 校验音频：hex 已在 adapter 解码，这里校验格式与本地 metadata 一致性。
+    //    同时按 spec 8.2 步骤 7 交叉核对供应商声明的音频规格与本地 MP3 帧解析结果。
+    let declared = DeclaredAudio::from_response(&response);
     let facts = match validate_audio(&response.audio_bytes, &profile.audio) {
-        Ok(facts) => facts,
-        Err(error) => {
+        Ok(facts) if !declared.contradicts(&facts) => facts,
+        _ => {
             let mut next = state.clone();
             next.latest_attempt_id = Some(attempt_id.clone());
             record_attempt_and_gate(
@@ -695,7 +697,7 @@ where
             return Err(GenerationError::AudioInvalid {
                 attempt_id,
                 trace_id: response.trace_id,
-                message: audio_invalid_message(&error),
+                message: audio_invalid_message(&AudioDecodeError::InvalidCharacter),
             });
         }
     };
@@ -885,6 +887,59 @@ fn load_or_init_state(
 /// 把 adapter 失败映射成产品错误与 attempt 终态。
 ///
 /// transport 失败是「不确定」：请求可能已到达供应商，因此记 unknown gate 并且不自动重放；
+/// 供应商 `extra_info` 声明的音频规格（实施 spec 8.2 步骤 7）。
+///
+/// 声明缺失不算矛盾；声明存在但与本地的 MP3 帧解析结果不一致才算矛盾，
+/// 此时产物必须被拒绝，不能进入不可变 version。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct DeclaredAudio {
+    /// 声明的采样率（Hz）。
+    sample_rate: Option<u32>,
+    /// 声明的声道数。
+    channel: Option<u32>,
+    /// 声明的码率（bps）。
+    bitrate: Option<u32>,
+    /// 声明的音频格式。
+    format: Option<String>,
+}
+
+impl DeclaredAudio {
+    /// 从成功响应里取出供应商声明；只保留音频规格，不保存原始响应体。
+    fn from_response(response: &SynthesisResponse) -> Self {
+        Self {
+            sample_rate: response.audio_sample_rate,
+            channel: response.audio_channel,
+            bitrate: response.audio_bitrate,
+            format: response.audio_format.clone(),
+        }
+    }
+
+    /// 是否有任何字段与本地解析到的 MP3 事实矛盾。
+    fn contradicts(&self, facts: &AudioFacts) -> bool {
+        if let Some(sample_rate) = self.sample_rate {
+            if sample_rate != facts.sample_rate {
+                return true;
+            }
+        }
+        if let Some(channel) = self.channel {
+            if channel != facts.channel {
+                return true;
+            }
+        }
+        if let Some(bitrate) = self.bitrate {
+            if bitrate != facts.bitrate {
+                return true;
+            }
+        }
+        if let Some(format) = &self.format {
+            if format.as_str() != facts.format {
+                return true;
+            }
+        }
+        false
+    }
+}
+
 /// provider 成功但音频不可用记 `provider_succeeded_artifact_missing`，同样阻塞普通重放。
 fn map_provider_error(
     error: &SenseAudioError,
@@ -1150,6 +1205,23 @@ mod tests {
             description: vec![],
             created_time: None,
         }]
+    }
+
+    /// 默认 fixture 请求的 clip ID（与本地测试输入一致）。
+    fn clip_id_of(kind: SpeechContentKind) -> String {
+        clip_id(&ClipFingerprint {
+            provider: SENSEAUDIO_PROVIDER,
+            model: DEFAULT_MODEL,
+            asset_id: "book-1",
+            annotation_id: "annotation-41",
+            content_kind: kind,
+            normalized_speech_text: "高亮正文",
+            voice_id: DEFAULT_VOICE_ID,
+            speed_x100: 100,
+            volume_x100: 100,
+            pitch: 0,
+            audio: &AudioSettings::v1(),
+        })
     }
 
     fn success_response(trace_id: &str) -> SynthesisResponse {
@@ -1501,24 +1573,14 @@ mod tests {
         assert!(!error.blocks_generation());
 
         let cache = ClipCache::new(store.clone());
-        let clip_id = crate::speech::clip::clip_id(&crate::speech::clip::ClipFingerprint {
-            provider: SENSEAUDIO_PROVIDER,
-            model: DEFAULT_MODEL,
-            asset_id: "book-1",
-            annotation_id: "annotation-41",
-            content_kind: SpeechContentKind::Highlight,
-            normalized_speech_text: "高亮正文",
-            voice_id: DEFAULT_VOICE_ID,
-            speed_x100: 100,
-            volume_x100: 100,
-            pitch: 0,
-            audio: &crate::speech::profile::AudioSettings::v1(),
-        });
         let state = cache
-            .load_state(&clip_id)
+            .load_state(&clip_id_of(SpeechContentKind::Highlight))
             .expect("load state")
             .expect("state");
-        assert_eq!(state.generation_blocked, false);
+        assert!(
+            !state.generation_blocked,
+            "an explicit failure must not write an unknown gate"
+        );
         assert_eq!(
             state.latest_attempt_status,
             Some(AttemptStatus::ProviderFailed),
@@ -1621,6 +1683,91 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn declared_audio_metadata_that_contradicts_the_parsed_mp3_is_rejected() {
+        let home = tempfile::tempdir().expect("home");
+        let store = SpeechStore::from_home(home.path());
+        let mut response = success_response("trace-declared");
+        // 本地 MP3 帧解析是 32000Hz/128000bps/2 声道：声明值必须与之一致。
+        response.audio_sample_rate = Some(44_100);
+        let (catalog_fetch, synthesize, counters) = fake(Ok(response));
+
+        let error = generate_clip(
+            input(store.clone(), SpeechContentKind::Highlight),
+            Some("test-key".to_string()),
+            now(),
+            catalog_fetch,
+            synthesize,
+        )
+        .await
+        .expect_err("contradicting declared metadata");
+
+        assert_eq!(error.machine_code(), "SPEECH_AUDIO_INVALID");
+        assert_eq!(error.outcome(), "provider_succeeded_artifact_missing");
+        assert!(error.blocks_generation());
+        assert_eq!(counters.synthesis.load(Ordering::SeqCst), 1);
+        let cache = ClipCache::new(store.clone());
+        let clip_id = clip_id_of(SpeechContentKind::Highlight);
+        assert!(
+            cache
+                .clip_dir(&clip_id)
+                .expect("clip dir")
+                .join("versions")
+                .read_dir()
+                .map(|mut entries| entries.next().is_none())
+                .unwrap_or(true),
+            "a rejected artifact must not create an immutable audio version"
+        );
+    }
+
+    #[tokio::test]
+    async fn declared_audio_metadata_matching_the_parsed_mp3_is_accepted() {
+        let home = tempfile::tempdir().expect("home");
+        let store = SpeechStore::from_home(home.path());
+        let mut response = success_response("trace-declared-ok");
+        response.audio_format = Some("mp3".to_string());
+        let (catalog_fetch, synthesize, _) = fake(Ok(response));
+
+        let outcome = generate_clip(
+            input(store.clone(), SpeechContentKind::Highlight),
+            Some("test-key".to_string()),
+            now(),
+            catalog_fetch,
+            synthesize,
+        )
+        .await
+        .expect("consistent declared metadata");
+
+        assert_eq!(outcome.sample_rate, 32_000);
+        assert_eq!(outcome.bitrate, 128_000);
+        assert_eq!(outcome.channel, 2);
+        assert_eq!(outcome.audio_format, "mp3");
+    }
+
+    #[tokio::test]
+    async fn missing_declared_audio_metadata_is_not_a_contradiction() {
+        let home = tempfile::tempdir().expect("home");
+        let store = SpeechStore::from_home(home.path());
+        let mut response = success_response("trace-declared-absent");
+        response.audio_sample_rate = None;
+        response.audio_channel = None;
+        response.audio_bitrate = None;
+        response.audio_format = None;
+        let (catalog_fetch, synthesize, _) = fake(Ok(response));
+
+        let outcome = generate_clip(
+            input(store.clone(), SpeechContentKind::Highlight),
+            Some("test-key".to_string()),
+            now(),
+            catalog_fetch,
+            synthesize,
+        )
+        .await
+        .expect("absent declarations must not block a valid artifact");
+
+        assert_eq!(outcome.source, SpeechClipSource::Provider);
+    }
+
+    #[tokio::test]
     async fn regenerate_replaces_the_version_atomically_and_keeps_one_current_pointer() {
         let home = tempfile::tempdir().expect("home");
         let store = SpeechStore::from_home(home.path());
@@ -1666,7 +1813,7 @@ mod tests {
             ready.state.current_audio_sha256.as_deref(),
             Some(second.audio_sha256.as_str())
         );
-        assert_eq!(ready.state.generation_blocked, false);
+        assert!(!ready.state.generation_blocked);
         // 旧 version 仍由用户/应用所有，不被静默删除。
         let versions = cache
             .clip_dir(&first.clip_id)
