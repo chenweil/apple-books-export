@@ -171,7 +171,13 @@ final class BookDetailView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         case .all:
             return allAnnotations.count
         case .type(let type):
-            return allAnnotations.count { $0.type == type }
+            // Written as a reduce rather than `count { … }`: the trailing-closure
+            // spelling resolves only on Swift 6, where Sequence.count is a
+            // property, and fails with "cannot call value of non-function type
+            // 'Int'" on the Swift 5.10 toolchain CI builds with.
+            return allAnnotations.reduce(into: 0) { total, annotation in
+                if annotation.type == type { total += 1 }
+            }
         }
     }
 
