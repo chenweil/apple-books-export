@@ -1693,6 +1693,13 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), ClipCacheError> {
     Ok(())
 }
 
+/// `clip_id` 必须是 64 位小写 sha256 hex，否则一律拒绝（避免路径逃逸）。
+///
+/// 供 `speech play` 等只需要判断标识形状、不需要读缓存的调用方使用。
+pub fn is_valid_clip_id(value: &str) -> bool {
+    is_clip_id(value)
+}
+
 fn is_clip_id(value: &str) -> bool {
     value.len() == 64
         && value

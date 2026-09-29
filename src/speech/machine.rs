@@ -494,6 +494,109 @@ pub fn generate_error_response(error: &crate::speech::GenerationError) -> Machin
     )
 }
 
+/// `speech play --json` 的成功响应。
+#[derive(Debug, Serialize)]
+pub struct SpeechPlayResponse {
+    /// 与现有 Machine JSON 协议一致的 schema 版本。
+    pub schema_version: u32,
+    /// 结构化收据。
+    pub receipt: SpeechPlayReceipt,
+}
+
+/// `speech play` 的收据：已校验的路径与来源。
+///
+/// `--json` 不启动播放器，因此 `played` 恒为 `false`；收据不包含原文、密钥或音频字节。
+#[derive(Debug, Serialize)]
+pub struct SpeechPlayReceipt {
+    /// 稳定操作名。
+    pub operation: &'static str,
+    /// 完整 clip ID。
+    pub clip_id: String,
+    /// 音频来源：`cache`。
+    pub source: &'static str,
+    /// 已校验音频的绝对路径。
+    pub path: String,
+    /// 是否真的启动了播放器；machine 模式恒为 `false`。
+    pub played: bool,
+    /// 恒为 `false`：任何 play 路径都不联系 Speech Provider。
+    pub provider_called: bool,
+    /// 稳定内容身份。
+    pub asset_id: String,
+    /// 稳定内容身份。
+    pub annotation_id: String,
+    /// 内容部分。
+    pub content_kind: &'static str,
+    /// 本地音频事实。
+    pub audio: SpeechAudioDto,
+}
+
+impl SpeechPlayResponse {
+    /// 把播放 use case 结果转成稳定的 Machine JSON envelope。
+    pub fn new(outcome: &crate::speech::PlayOutcome) -> Self {
+        Self {
+            schema_version: SCHEMA_VERSION,
+            receipt: SpeechPlayReceipt {
+                operation: "play",
+                clip_id: outcome.clip_id.clone(),
+                source: outcome.source.as_str(),
+                path: outcome.audio_path.to_string_lossy().into_owned(),
+                played: outcome.played,
+                provider_called: false,
+                asset_id: outcome.asset_id.clone(),
+                annotation_id: outcome.annotation_id.clone(),
+                content_kind: outcome.content_kind.as_str(),
+                audio: SpeechAudioDto {
+                    path: Some(outcome.audio_path.to_string_lossy().into_owned()),
+                    sha256: Some(outcome.audio_sha256.clone()),
+                    format: "mp3".to_string(),
+                    size_bytes: Some(outcome.audio_size_bytes),
+                    duration_ms: Some(outcome.audio_duration_ms),
+                    sample_rate: outcome.sample_rate,
+                    bitrate: 128_000,
+                    channel: 2,
+                },
+            },
+        }
+    }
+}
+
+/// 把播放失败映射成稳定的 Machine JSON envelope。
+///
+/// 播放路径上没有任何 provider 能力，因此 `details` 只记录本地事实：来源、是否
+/// 尝试过播放器、失败原因。
+pub fn play_error_response(error: &crate::speech::PlayError) -> MachineError {
+    let mut details = serde_json::Map::new();
+    details.insert("reason".to_string(), json!(play_reason(error)));
+    if let crate::speech::PlayError::ClipNotFound { clip_id } = error {
+        details.insert("clip_id".to_string(), json!(clip_id));
+    }
+    if let crate::speech::PlayError::InvalidClipId(clip_id) = error {
+        details.insert("field".to_string(), json!("clip_id"));
+        details.insert("value".to_string(), json!(clip_id));
+    }
+    if let crate::speech::PlayError::CacheCorrupt { path, .. } = error {
+        details.insert("path".to_string(), json!(path.to_string_lossy()));
+    }
+    machine_error(
+        error.machine_code(),
+        error.message(),
+        error.remediation(),
+        Value::Object(details),
+    )
+}
+
+/// 播放失败的稳定原因串。
+fn play_reason(error: &crate::speech::PlayError) -> &'static str {
+    match error {
+        crate::speech::PlayError::Storage(..) => "storage_unavailable",
+        crate::speech::PlayError::InvalidClipId(..) => "invalid_clip_id",
+        crate::speech::PlayError::ClipNotFound { .. } => "clip_not_found",
+        crate::speech::PlayError::CacheCorrupt { .. } => "cache_corrupt",
+        crate::speech::PlayError::ClipInUse => "clip_in_use",
+        crate::speech::PlayError::PlaybackFailed { .. } => "playback_failed",
+    }
+}
+
 /// profile 校验失败：`SPEECH_PROFILE_INVALID` + 字段级 `details`。
 pub fn profile_invalid(error: &ProfileError) -> MachineError {
     machine_error(

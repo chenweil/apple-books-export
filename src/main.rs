@@ -234,6 +234,17 @@ enum SpeechCommands {
         json: bool,
     },
 
+    /// 播放一个已接受并通过校验的 Cached Speech Clip（不联网）
+    Play {
+        /// 完整 clip ID（64 位小写 sha256 hex）
+        #[arg(long, value_name = "CLIP_ID")]
+        clip_id: String,
+
+        /// 以稳定的机器可读 JSON 输出；只返回路径与来源，不启动播放器
+        #[arg(long)]
+        json: bool,
+    },
+
     /// 管理本地 Cached Speech Clip（可淘汰缓存与无有效音频的阻塞门）
     Cache {
         #[command(subcommand)]
@@ -534,6 +545,7 @@ async fn cmd_speech(command: SpeechCommands) -> anyhow::Result<()> {
             };
             cmd_speech_generate(arguments).await
         }
+        SpeechCommands::Play { clip_id, json } => cmd_speech_play(&clip_id, json),
         SpeechCommands::Cache { command } => match command {
             SpeechCacheCommands::Status { json: true } => {
                 finish_machine(speech_cache_status_json());
@@ -813,6 +825,60 @@ fn speech_lock_timeout() -> Option<std::time::Duration> {
     let timeout = std::time::Duration::from_millis(milliseconds);
     let allowed = !timeout.is_zero() && timeout <= speech::CLIP_LOCK_TIMEOUT;
     allowed.then_some(timeout)
+}
+
+/// `speech play`：校验并播放一个已接受的 Cached Speech Clip；任何路径都不联网。
+///
+/// human / machine 分流发生在同一个 use case 之前：human 模式才启动 macOS 系统播放器，
+/// `--json` 传入 [`speech::NeverPlayer`]——它一旦被调用就 panic，因此「machine 不启动
+/// 播放器」是被证明的，而不是一句约定。
+fn cmd_speech_play(clip_id: &str, json: bool) -> anyhow::Result<()> {
+    let store = match speech_store() {
+        Ok(store) => store,
+        Err(error) => {
+            if json {
+                fail_machine(speech_machine::error_response(&error));
+            }
+            return Err(speech_error(error));
+        }
+    };
+    let mode = if json {
+        speech::PlayMode::Machine
+    } else {
+        speech::PlayMode::Human
+    };
+    let request = speech::PlayRequest {
+        store,
+        clip_id: clip_id.to_string(),
+        mode,
+    };
+
+    let (outcome, _guard) = if json {
+        speech::play_clip(request, &speech::NeverPlayer, chrono::Utc::now())
+    } else {
+        speech::play_clip(request, &speech::AfplayPlayer, chrono::Utc::now())
+    }
+    .map_err(|error| {
+        if json {
+            fail_machine(speech_machine::play_error_response(&error));
+        }
+        anyhow::anyhow!("{}", error.message())
+    })?;
+
+    if json {
+        let json = serde_json::to_string(&speech::SpeechPlayResponse::new(&outcome))
+            .unwrap_or_else(|error| {
+                fail_machine(MachineError::protocol_serialization_failed(error.to_string()))
+            });
+        finish_machine(Ok(json));
+        return Ok(());
+    }
+    println!("Speech Clip 已播放");
+    println!("  Content: {}", outcome.content_kind.as_str());
+    println!("  Clip ID: {}", outcome.clip_id);
+    println!("  Source: {}", outcome.source.as_str());
+    println!("  Audio: {} ({} ms)", outcome.audio_path.display(), outcome.audio_duration_ms);
+    Ok(())
 }
 
 /// `speech cache status --json`：只读的本地 budget / 占用视图，零 provider 连接。

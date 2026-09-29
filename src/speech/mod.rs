@@ -10,6 +10,7 @@ pub mod catalog;
 pub mod clip;
 pub mod generate;
 pub mod machine;
+pub mod play;
 pub mod profile;
 pub mod senseaudio;
 pub mod store;
@@ -21,8 +22,13 @@ pub use cache::{
     CacheStatusEntry, CacheStatusReport, ClipCache, ClipCacheError, ClipCacheStatus, ClipLock,
     ClipLockError, ClipState, ClipUseGuard, ClipUseKind, ClipUseSkip, ClipVersionMetadata,
     HistoryClearReport, ReadyClip, ATTEMPT_HISTORY_RETENTION_DAYS, ATTEMPT_SCHEMA_VERSION,
-    usable_cache_budget, CACHE_SAFETY_MARGIN_BYTES, CLIP_LOCK_TIMEOUT, CLIP_STATE_SCHEMA_VERSION,
-    CLIP_VERSION_SCHEMA_VERSION, DEFAULT_CACHE_BUDGET_BYTES, MIN_FREE_BYTES_ENV,
+    is_valid_clip_id, usable_cache_budget, CACHE_SAFETY_MARGIN_BYTES, CLIP_LOCK_TIMEOUT,
+    CLIP_STATE_SCHEMA_VERSION, CLIP_VERSION_SCHEMA_VERSION, DEFAULT_CACHE_BUDGET_BYTES,
+    MIN_FREE_BYTES_ENV,
+};
+pub use play::{
+    play_clip, AfplayPlayer, AudioPlayer, NeverPlayer, PlayError, PlayMode, PlayOutcome, PlayRequest,
+    PlaybackSource,
 };
 pub use catalog::{
     CatalogAvailability, CatalogSourceType, CatalogVoice, NoCatalogSource, UnverifiedReason,
@@ -41,8 +47,8 @@ pub use machine::{
     SpeechCacheClearReceipt, SpeechCacheClearResponse, SpeechCacheStatusReceipt,
     SpeechCacheStatusResponse, SpeechGenerateReceipt,
     SpeechGenerateResponse, SpeechHistoryClearReceipt, SpeechHistoryClearResponse,
-    SpeechProfileDto, SpeechProfileResponse, VoiceCatalogResponse, VoiceCatalogReceipt,
-    VoiceCatalogVoiceDto,
+    SpeechPlayReceipt, SpeechPlayResponse, SpeechProfileDto, SpeechProfileResponse,
+    VoiceCatalogResponse, VoiceCatalogReceipt, VoiceCatalogVoiceDto,
 };
 pub use profile::{
     resolve_generation_profile, AudioSettings, Hundredths, ProfileDraft, ProfileError,
