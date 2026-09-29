@@ -1,5 +1,6 @@
 //! Stable machine-readable protocol for CLI consumers.
 
+use crate::speech::SpeechWarning;
 use crate::{cfi::extract_chapter_title, Annotation, Book};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
@@ -102,12 +103,16 @@ pub struct MachineError {
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub remediation: Option<String>,
+    /// 可选的结构化细节（speech 领域用于字段、原因、provider trace 等）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub details: Option<serde_json::Value>,
 }
 
 impl MachineError {
     pub fn from_database_error(error: crate::DatabaseAccessError) -> Self {
         match error {
             crate::DatabaseAccessError::NotFound { path } => Self {
+                details: None,
                 code: "DATABASE_NOT_FOUND",
                 message: format!("Apple Books database was not found: {}", path.display()),
                 remediation: Some(
@@ -115,6 +120,7 @@ impl MachineError {
                 ),
             },
             crate::DatabaseAccessError::PermissionDenied { path } => Self {
+                details: None,
                 code: "FULL_DISK_ACCESS_REQUIRED",
                 message: format!(
                     "Permission was denied while reading Apple Books data: {}",
@@ -126,6 +132,7 @@ impl MachineError {
                 ),
             },
             crate::DatabaseAccessError::Unreadable { path, message } => Self {
+                details: None,
                 code: "DATABASE_UNREADABLE",
                 message: format!("Apple Books database is unreadable at {}: {message}", path.display()),
                 remediation: Some(
@@ -136,8 +143,15 @@ impl MachineError {
         }
     }
 
+    /// 附加结构化细节。
+    pub fn with_details(mut self, details: serde_json::Value) -> Self {
+        self.details = Some(details);
+        self
+    }
+
     pub fn unsupported_schema_version(version: u32) -> Self {
         Self {
+            details: None,
             code: "UNSUPPORTED_SCHEMA_VERSION",
             message: format!("Schema version {version} is not supported."),
             remediation: Some(
@@ -148,6 +162,7 @@ impl MachineError {
 
     pub fn missing_asset_id() -> Self {
         Self {
+            details: None,
             code: "INVALID_ASSET_ID",
             message: "This machine command requires --asset-id.".to_string(),
             remediation: Some(
@@ -159,6 +174,7 @@ impl MachineError {
 
     pub fn invalid_asset_id(asset_id: &str) -> Self {
         Self {
+            details: None,
             code: "INVALID_ASSET_ID",
             message: format!("No Apple Books item was found for asset_id '{asset_id}'."),
             remediation: Some("Run `apple-books-exporter list --json` and use an asset_id from the refreshed response.".to_string()),
@@ -167,6 +183,7 @@ impl MachineError {
 
     pub fn database_unreadable(message: impl Into<String>) -> Self {
         Self {
+            details: None,
             code: "DATABASE_UNREADABLE",
             message: message.into(),
             remediation: Some(
@@ -178,6 +195,7 @@ impl MachineError {
 
     pub fn invalid_argument(message: impl Into<String>) -> Self {
         Self {
+            details: None,
             code: "INVALID_ARGUMENT",
             message: message.into(),
             remediation: Some(
@@ -189,6 +207,7 @@ impl MachineError {
 
     pub fn protocol_serialization_failed(message: impl Into<String>) -> Self {
         Self {
+            details: None,
             code: "PROTOCOL_SERIALIZATION_FAILED",
             message: message.into(),
             remediation: None,
@@ -197,6 +216,7 @@ impl MachineError {
 
     pub fn binary_incompatible() -> Self {
         Self {
+            details: None,
             code: "BINARY_INCOMPATIBLE",
             message: format!(
                 "This binary cannot read Apple Books on {} {}.",
@@ -211,6 +231,7 @@ impl MachineError {
 
     pub fn output_unwritable(message: impl Into<String>) -> Self {
         Self {
+            details: None,
             code: "OUTPUT_UNWRITABLE",
             message: message.into(),
             remediation: Some(
@@ -221,6 +242,7 @@ impl MachineError {
 
     pub fn output_file_exists(path: &std::path::Path) -> Self {
         Self {
+            details: None,
             code: "OUTPUT_FILE_EXISTS",
             message: format!("Output file already exists: {}", path.display()),
             remediation: Some(
@@ -260,6 +282,12 @@ pub struct ExportReceipt {
     pub format: &'static str,
     pub output_directory: String,
     pub generated_files: Vec<String>,
+    /// 已写入的相对音频链接（只有用户显式 `speech export` 过才有）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub audio_links: Vec<String>,
+    /// Speech 音频是可选的：缺失或校验失败只产生 warning，主体导出不失败。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<SpeechWarning>,
 }
 
 impl ExportResponse {
@@ -269,6 +297,7 @@ impl ExportResponse {
         format: crate::ExportFormat,
         output_directory: &std::path::Path,
         generated_files: &[std::path::PathBuf],
+        speech: &crate::exporter::SpeechExportLinks,
     ) -> Self {
         Self {
             schema_version: SCHEMA_VERSION,
@@ -285,6 +314,8 @@ impl ExportResponse {
                     .iter()
                     .map(|path| path.to_string_lossy().into_owned())
                     .collect(),
+                audio_links: speech.written.clone(),
+                warnings: speech.warnings.clone(),
             },
         }
     }
@@ -344,6 +375,30 @@ impl DoctorResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn existing_errors_keep_their_exact_json_shape_without_details() {
+        let error = MachineError::invalid_asset_id("book-1");
+        let value = serde_json::to_value(&error).expect("serialize error");
+
+        assert!(
+            value.get("details").is_none(),
+            "adding optional details must not change existing error payloads"
+        );
+        assert_eq!(value["code"], "INVALID_ASSET_ID");
+        assert!(value["message"].is_string());
+        assert!(value["remediation"].is_string());
+    }
+
+    #[test]
+    fn details_are_serialized_only_when_present() {
+        let error = MachineError::missing_asset_id()
+            .with_details(serde_json::json!({ "field": "voice_id" }));
+        let value = serde_json::to_value(&error).expect("serialize error");
+
+        assert_eq!(value["details"]["field"], "voice_id");
+        assert_eq!(value["code"], "INVALID_ASSET_ID");
+    }
 
     #[test]
     fn required_compatibility_errors_keep_stable_codes() {

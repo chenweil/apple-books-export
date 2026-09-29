@@ -11,6 +11,7 @@ pub mod machine;
 pub mod models;
 pub mod prompt;
 pub mod provider;
+pub mod speech;
 pub mod utils;
 
 pub use cache::LLMCache;
@@ -20,7 +21,10 @@ pub use chapter::{
 };
 pub use config::{load_config, save_config};
 pub use db::{DatabaseAccessError, DB};
-pub use exporter::{export_book, export_book_checked, ExportFormat, ExportWriteError};
+pub use exporter::{
+    export_book, export_book_checked, export_book_checked_with_speech, BookExportOutcome,
+    ExportFormat, ExportWriteError, SpeechExportLinks,
+};
 pub use machine::{
     AnnotationResponse, BookListResponse, DoctorResponse, ErrorResponse, ExportResponse,
     MachineError, SCHEMA_VERSION,
