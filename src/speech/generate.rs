@@ -1277,7 +1277,7 @@ fn recorded_provider_failure(cache: &ClipCache, state: &ClipState) -> Generation
         .or_else(|| state.latest_attempt_id.clone())
         .unwrap_or_default();
     GenerationError::ProviderFailed {
-        code: stable_failure_code(&code),
+        code: normalize_recorded_failure_code(&code),
         trace_id: recorded.as_ref().and_then(|record| record.trace_id.clone()),
         provider_code: recorded.and_then(|record| record.provider_code),
         attempt_id,
@@ -1288,7 +1288,11 @@ fn recorded_provider_failure(cache: &ClipCache, state: &ClipState) -> Generation
 ///
 /// `ProviderFailed::code` 是 `&'static str`，而记录里读回来的是 `String`；未知值按
 /// provider 明确失败返回，绝不把不确定结果伪装成已知失败。
-fn stable_failure_code(code: &str) -> &'static str {
+///
+/// 这是**跨进程队列等待方**的防泄漏闸门：终态码来自磁盘上的 attempt 记录或
+/// `state.json`，一个被篡改、过期或来自旧版本的记录不能让同一个 clip 在不同运行里
+/// 返回不同的 `code`。因此本函数是全模块唯一允许把外部字符串变成错误码的地方。
+pub fn normalize_recorded_failure_code(code: &str) -> &'static str {
     match code {
         "SPEECH_AUTH_FAILED" => "SPEECH_AUTH_FAILED",
         "SPEECH_RATE_LIMITED" => "SPEECH_RATE_LIMITED",

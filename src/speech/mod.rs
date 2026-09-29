@@ -44,16 +44,16 @@ pub use export::{
     SPEECH_EXPORT_MANIFEST_SCHEMA_VERSION,
 };
 pub use generate::{
-    generate_clip, to_adapter_request, GenerateOutcome, GenerationError, GenerationInput,
-    GenerationOverrides, GenerationRequest, SpeechClipSource, SpeechSynthesisOutcome,
-    SpeechSynthesisRequest,
+    generate_clip, normalize_recorded_failure_code, to_adapter_request, GenerateOutcome,
+    GenerationError, GenerationInput, GenerationOverrides, GenerationRequest, SpeechClipSource,
+    SpeechSynthesisOutcome, SpeechSynthesisRequest,
 };
 pub use machine::{
-    SpeechCacheClearReceipt, SpeechCacheClearResponse, SpeechCacheStatusReceipt,
-    SpeechCacheStatusResponse, SpeechGenerateReceipt, SpeechGenerateResponse,
-    SpeechHistoryClearReceipt, SpeechHistoryClearResponse, SpeechPlayReceipt, SpeechPlayResponse,
-    SpeechProfileDto, SpeechProfileResponse, VoiceCatalogReceipt, VoiceCatalogResponse,
-    VoiceCatalogVoiceDto,
+    is_stable_speech_error_code, SpeechCacheClearReceipt, SpeechCacheClearResponse,
+    SpeechCacheStatusReceipt, SpeechCacheStatusResponse, SpeechGenerateReceipt,
+    SpeechGenerateResponse, SpeechHistoryClearReceipt, SpeechHistoryClearResponse, SpeechPlayReceipt,
+    SpeechPlayResponse, SpeechProfileDto, SpeechProfileResponse, VoiceCatalogReceipt,
+    VoiceCatalogResponse, VoiceCatalogVoiceDto, STABLE_SPEECH_ERROR_CODES,
 };
 pub use play::{
     play_clip, AfplayPlayer, AudioPlayer, NeverPlayer, PlayError, PlayMode, PlayOutcome,

@@ -864,6 +864,51 @@ fn profile_details(error: &ProfileError) -> Value {
 /// 磁盘上本来就未被验证过的 Profile 使用的 warning 原因字符串。
 pub const STORED_UNVERIFIED_REASON: &str = "stored_unverified";
 
+/// 首版 Speech 领域的**稳定** Machine JSON 错误码全集。
+///
+/// 实施 spec 6.2 的错误码表是权威来源；`SPEECH_PLAYBACK_FAILED` 由 #26 引入并在此补录
+/// （它只来自 human `speech play` 的播放器 seam，不是 provider 语义）。这张表是
+/// **白名单**：任何 `machine_code()` 返回不在表内的值都是契约缺陷，而不是「新增能力」。
+///
+/// `UNSUPPORTED_SCHEMA_VERSION` 复用既有 Machine JSON 协议的共享码（见
+/// [`unsupported_schema_version`]），因此不在本表内；Speech 不得为它再发明一个别名。
+///
+/// 机器消费者可以依赖这张表：跨运行可变的错误码是缺陷，而不是扩展点。
+pub const STABLE_SPEECH_ERROR_CODES: &[&str] = &[
+    // 共享的既有协议码。
+    "INVALID_ASSET_ID",
+    "INVALID_ARGUMENT",
+    "UNSUPPORTED_SCHEMA_VERSION",
+    // 内容与身份。
+    "INVALID_ANNOTATION_ID",
+    "SPEECH_CONTENT_UNAVAILABLE",
+    "SPEECH_TEXT_TOO_LONG",
+    // Voice Profile 与目录。
+    "SPEECH_PROFILE_INVALID",
+    "SPEECH_VOICE_UNAVAILABLE",
+    // provider 语义。
+    "SPEECH_AUTH_FAILED",
+    "SPEECH_RATE_LIMITED",
+    "SPEECH_PROVIDER_FAILED",
+    "SPEECH_RESULT_UNKNOWN",
+    "SPEECH_AUDIO_INVALID",
+    "SPEECH_ARTIFACT_COMMIT_FAILED",
+    // 并发与本地状态。
+    "SPEECH_IN_PROGRESS",
+    "SPEECH_CACHE_CORRUPT",
+    "SPEECH_STORAGE_UNAVAILABLE",
+    // 导出与播放。
+    "SPEECH_CLIP_NOT_FOUND",
+    "SPEECH_OUTPUT_FILE_EXISTS",
+    "SPEECH_EXPORT_MANIFEST_INVALID",
+    "SPEECH_PLAYBACK_FAILED",
+];
+
+/// 判断一个错误码是否属于首版稳定 Speech 错误码集合。
+pub fn is_stable_speech_error_code(code: &str) -> bool {
+    STABLE_SPEECH_ERROR_CODES.contains(&code)
+}
+
 fn machine_error(
     code: &'static str,
     message: String,
@@ -1057,5 +1102,153 @@ mod tests {
             error.remediation.as_deref(),
             Some("Verify that this directory exists and is writable, then retry.")
         );
+    }
+
+    /// 契约锁：每个 Speech 错误类型的 `machine_code()` 必须落在稳定码白名单里。
+    ///
+    /// 跨运行可变的错误码是缺陷（机器消费者无法据此分支），因此这里枚举**每一条**可能
+    /// 的错误路径，而不是只抽查几个。新增错误变体时这张表会立刻失败，强制同步 spec 6.2。
+    #[test]
+    fn every_speech_error_code_is_in_the_documented_stable_set() {
+        use crate::speech::{
+            export::ExportError, generate::GenerationError, play::PlayError, text::SpeechTextError,
+        };
+
+        let mut codes: Vec<&'static str> = Vec::new();
+
+        // SpeechTextError
+        codes.push(SpeechTextError::TooLong { characters: 1 }.machine_code());
+        // SpeechContentError
+        codes.push(
+            crate::speech::SpeechContentError::InvalidAnnotationId {
+                asset_id: "a".to_string(),
+                annotation_id: "b".to_string(),
+            }
+            .machine_code(),
+        );
+        codes.push(
+            crate::speech::SpeechContentError::ContentUnavailable {
+                content_kind: crate::speech::SpeechContentKind::Highlight,
+            }
+            .machine_code(),
+        );
+        // PlayError
+        codes.push(PlayError::Storage(SpeechStoreError::UnsupportedSchemaVersion(2)).machine_code());
+        codes.push(PlayError::InvalidClipId("x".to_string()).machine_code());
+        codes.push(
+            PlayError::ClipNotFound {
+                clip_id: "x".to_string(),
+                warnings: Vec::new(),
+            }
+            .machine_code(),
+        );
+        codes.push(
+            PlayError::CacheCorrupt {
+                path: std::path::PathBuf::from("/tmp"),
+                reason: "r".to_string(),
+            }
+            .machine_code(),
+        );
+        codes.push(PlayError::ClipInUse.machine_code());
+        codes.push(
+            PlayError::PlaybackFailed {
+                reason: "r".to_string(),
+            }
+            .machine_code(),
+        );
+        // ExportError
+        codes.push(ExportError::Storage(SpeechStoreError::UnsupportedSchemaVersion(2)).machine_code());
+        codes.push(ExportError::InvalidClipId("x".to_string()).machine_code());
+        codes.push(ExportError::ClipNotFound { clip_id: "x".to_string() }.machine_code());
+        codes.push(
+            ExportError::CacheCorrupt {
+                path: std::path::PathBuf::from("/tmp"),
+                reason: "r".to_string(),
+            }
+            .machine_code(),
+        );
+        codes.push(
+            ExportError::ManifestInvalid {
+                reason: "d",
+                detail: "d".to_string(),
+            }
+            .machine_code(),
+        );
+        codes.push(
+            ExportError::OutputFileExists {
+                path: std::path::PathBuf::from("/tmp"),
+                relative_path: "a.mp3".to_string(),
+            }
+            .machine_code(),
+        );
+        codes.push(ExportError::ClipInUse.machine_code());
+        // GenerationError：每个变体各取一个代表值。
+        codes.push(GenerationError::Storage(SpeechStoreError::UnsupportedSchemaVersion(2)).machine_code());
+        codes.push(GenerationError::MissingApiKey.machine_code());
+        codes.push(GenerationError::InProgress {
+            clip_id: "c".to_string(),
+            attempt_id: None,
+        }
+        .machine_code());
+        for code in [
+            "SPEECH_AUTH_FAILED",
+            "SPEECH_RATE_LIMITED",
+            "SPEECH_PROVIDER_FAILED",
+        ] {
+            codes.push(
+                GenerationError::ProviderFailed {
+                    code,
+                    trace_id: None,
+                    provider_code: None,
+                    attempt_id: "a".to_string(),
+                }
+                .machine_code(),
+            );
+        }
+        // ProviderFailed 的 code 是从磁盘记录还原的：白名单之外的值必须被归一化，
+        // 否则一个被篡改/过期的 attempt 记录就能让同一个 clip 每次返回不同错误码。
+        assert_eq!(
+            GenerationError::ProviderFailed {
+                code: crate::speech::generate::normalize_recorded_failure_code("SPEECH_TEXT_TOO_LONG"),
+                trace_id: None,
+                provider_code: None,
+                attempt_id: "a".to_string(),
+            }
+            .machine_code(),
+            "SPEECH_PROVIDER_FAILED",
+            "a recorded code outside the failure set must normalize, not leak"
+        );
+
+        for code in codes {
+            assert!(
+                is_stable_speech_error_code(code),
+                "`{code}` is emitted by the Speech feature but is not in STABLE_SPEECH_ERROR_CODES; \
+                 either it belongs in implementation spec 6.2 or it is a contract defect"
+            );
+        }
+    }
+
+    /// `SPEECH_PLAYBACK_FAILED` 是 #26 引入的稳定码，但实施 spec 6.2 的表里还没有它。
+    /// 这条断言锁定「它必须留在白名单里」，文档同步在 spec 6.2。
+    #[test]
+    fn the_playback_failure_code_is_a_documented_stable_code() {
+        assert!(is_stable_speech_error_code("SPEECH_PLAYBACK_FAILED"));
+        assert_eq!(
+            crate::speech::PlayError::PlaybackFailed {
+                reason: "afplay".to_string()
+            }
+            .machine_code(),
+            "SPEECH_PLAYBACK_FAILED"
+        );
+    }
+
+    /// 白名单本身必须与实施 spec 6.2 保持一致：表里没有的文档化代码会让这张表腐化。
+    #[test]
+    fn the_stable_set_has_no_duplicates() {
+        let mut sorted = STABLE_SPEECH_ERROR_CODES.to_vec();
+        sorted.sort_unstable();
+        let count = sorted.len();
+        sorted.dedup();
+        assert_eq!(sorted.len(), count, "STABLE_SPEECH_ERROR_CODES has duplicates");
     }
 }
