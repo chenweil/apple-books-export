@@ -35,6 +35,44 @@ cargo build --release
 ./target/release/apple-books-exporter doctor
 ```
 
+### Machine JSON 协议（供 TUI / Agent Skill / GUI 消费）
+
+GUI 与自动化入口应消费 `--json` 输出，不要解析人类可读表格。
+
+```bash
+# 一次性环境预检：binary、两个 Apple Books 数据库、HOME、输出目录、可用空间
+./target/release/apple-books-exporter doctor --json
+
+# 用稳定 asset_id 查询，而不是显示序号
+./target/release/apple-books-exporter list --json
+./target/release/apple-books-exporter annotations --asset-id <asset_id> --json
+./target/release/apple-books-exporter export --asset-id <asset_id> --format markdown --json
+```
+
+约定：
+
+- 成功 JSON 走 **stdout** 并以 0 退出；结构化错误走 **stderr** 并以非 0 退出。
+- 每个响应都带 `schema_version`。
+- 身份用 `asset_id`，不要从人类输出里取序号。
+- `list`、`annotations`、`export` **不做任何网络请求**（Local Data Boundary），
+  由 `tests/machine_cli.rs::read_only_machine_commands_make_no_network_requests`
+  在运行时用连接计数证明。
+- `doctor --json` 的 `environment` 块用于一次性发现环境问题：
+
+```json
+"environment": {
+  "home": { "status": "ok", "path": "/Users/you" },
+  "default_output_dir": { "status": "missing", "path": "/Users/you/books-exported", "writable": true },
+  "free_bytes": 72806043648
+}
+```
+
+`default_output_dir.status` 为 `missing` 表示尚未创建（全新机器的正常状态，
+此时 `writable` 描述的是**将要接收它的父目录**），为 `unwritable` 才需要
+用户处理。`doctor` 只报告，不创建也不修复任何东西。
+
+真机冒烟记录见 [`docs/evidence/2026-09-29-machine-protocol-smoke.md`](docs/evidence/2026-09-29-machine-protocol-smoke.md)。
+
 ### 方式二：Read-only TUI
 
 ```bash
