@@ -2,7 +2,8 @@
 
 从 macOS Apple Books 导出笔记/标注为 Markdown 的 Headless Mainline，默认提供 Rust CLI、Read-only TUI 和 Agent Data Skill。
 
-Tauri Legacy GUI 源码保留用于迁移和回滚，但不属于 `main` 的默认入口、构建或发布路径。
+Tauri Legacy GUI 源码已删除（issue #43）。需要取回时用标签
+`legacy/tauri-gui-mainline`，详见根 `README.md` 的回滚锚点一节。
 
 ## 技术栈
 
@@ -10,7 +11,8 @@ Tauri Legacy GUI 源码保留用于迁移和回滚，但不属于 `main` 的默�
 - **CLI**: 单文件二进制,依赖 `clap` + `rusqlite (bundled)` + `reqwest/rustls` + `chrono`
 - **TUI**: Bun + OpenTUI (`tui/`)
 - **Agent Data Skill**: `skills/apple-books-export-rust/`
-- **Tauri Legacy GUI**: Tauri 2 + Svelte (src-tauri/, src/),仅保留源码
+- **AppKit GUI**: Swift + AppKit (`appkit/`),main 上的正式图形界面,受 `appkit` CI job 门禁覆盖
+- **Tauri Legacy GUI**: Tauri 2 + Svelte,源码已删除(issue #43);回滚锚点 `legacy/tauri-gui-mainline`
 - **AI 增强**: 支持多 LLM provider (OpenAI 兼容),通过 `provider.rs` 调用
 - **图片卡片**: `card.rs` 生成 Markdown/图片卡片
 - **数据源**: Apple Books SQLite 数据库 (`~/Library/Containers/com.apple.iBooksX/`)
@@ -31,19 +33,13 @@ src/                    # CLI 核心
 ├── models.rs           # 数据结构
 └── utils.rs            # 工具函数
 
-src-tauri/              # Tauri Legacy GUI (保留源码,不进入 main 默认发布)
-├── src/lib.rs          # Tauri 命令注册
-├── src/commands.rs     # 前端 ↔ Rust 命令
-└── tauri.conf.json
+src-tauri/ 与 Svelte 前端  # Tauri Legacy GUI,已删除(issue #43)
+                              # 回滚锚点:标签 legacy/tauri-gui-mainline -> 6bac3e5
 
-src/                    # Svelte 前端 (Tauri Legacy GUI)
-├── App.svelte
-└── lib/pages/
-    ├── Export.svelte
-    ├── Enrich.svelte
-    ├── Card.svelte
-    ├── Coach.svelte    # 章节陪练
-    └── Cache.svelte
+appkit/                   # AppKit GUI (Swift, main 上的正式图形界面)
+├── Sources/BooksExporter/
+├── Tests/BooksExporterCoreTests/
+└── Scripts/verify-ui.sh  # UI 回归探针
 
 skills/
 └── apple-books-export-rust/   # 可安装的 Skill (Claude/Gemini CLI)
@@ -73,8 +69,8 @@ bun run --cwd tui start
 # 跨平台编译(本地)
 ./skills/apple-books-export-rust/scripts/build.sh
 
-# Tauri Legacy GUI 开发（仅在明确迁移/回滚任务中使用）
-cd src-tauri && cargo tauri dev
+# AppKit GUI 构建
+cd appkit && swift build && swift test && ./Scripts/verify-ui.sh
 
 ```
 
@@ -84,7 +80,9 @@ cd src-tauri && cargo tauri dev
 - Full Disk Access 权限(系统设置 → 隐私与安全性)
 - Rust stable toolchain
 - Bun(仅 Read-only TUI 开发需要)
-- Node.js(仅 Tauri Legacy GUI 开发需要)
+- Swift 5.9+(仅 AppKit GUI 开发需要)
+
+仓库根已无 `package.json`:Node.js 不再是任何入口的前置依赖。
 
 ## 笔记分类
 
@@ -139,7 +137,7 @@ git tag v0.3.3 && git push --tags
 ## 常见问题
 
 - **Full Disk Access 缺失** → 数据库读不到,提示权限错误
-- **Tauri Legacy GUI 启动失败** → 仅在明确使用 legacy GUI 时检查 Full Disk Access
+- **AppKit 启动失败** → 检查 Full Disk Access,并确认随包 Rust binary 可解析
 - **章节显示为原始 CFI** → 确认用 `cfi.rs` 里的解析函数,不要直接读 `ZANNOTATIONLOCATION`
 
 ## Agent skills
