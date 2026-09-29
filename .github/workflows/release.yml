@@ -48,6 +48,20 @@ jobs:
       - name: Validate headless mainline
         run: bash tests/headless_mainline.sh
 
+      # The tag used to only name the GitHub Release, so a mismatch between it
+      # and Cargo.toml shipped a release page reading 0.4.0 around a binary
+      # whose --version reported 0.3.3, with nothing failing. This runs before
+      # any build so a mistyped tag costs seconds rather than a full build.
+      # The check lives in a script so the workflow and the local guard share
+      # one implementation and cannot drift.
+      - name: Verify the tag matches Cargo.toml
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          bash scripts/check-release-tag.sh "$TAG"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
       # ── CLI 构建准备 ──────────────────────────────
       - name: Install Rust toolchain (CLI)
         uses: dtolnay/rust-toolchain@stable

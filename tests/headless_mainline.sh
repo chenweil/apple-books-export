@@ -30,21 +30,109 @@ for text in "${required_release_text[@]}"; do
   fi
 done
 
+# These forbid the Tauri release path coming back. They are deliberately
+# narrow: an AppKit DMG is now a legitimate release artifact, so `.dmg` on its
+# own is no longer a signal, and a bare "tauri" would also match a comment or
+# the rollback explanation. Only real build invocations are forbidden.
 for forbidden in \
   'cargo tauri' \
   'npm ci' \
+  'npm install' \
   'Setup Node.js' \
   'Build GUI' \
   'locate-gui' \
   'gui-app-' \
   'gui-dmg-' \
   '.app.zip' \
-  '.dmg'; do
+  'tauri.conf.json' \
+  'Books-Exporter-GUI'; do
   if grep -Fq -- "$forbidden" "$RELEASE_WORKFLOW"; then
     printf 'legacy GUI release path remains: %s\n' "$forbidden" >&2
     exit 1
   fi
 done
+
+# ---------------------------------------------------------------------------
+# One tag, one product version.
+#
+# release.yml only ever used the tag to name the GitHub Release; Cargo.toml's
+# version was never compared against it, so `git tag v0.4.0` would publish a
+# release page reading 0.4.0 around a binary whose --version reports 0.3.3,
+# with nothing failing. The tag and the manifest must now agree.
+# ---------------------------------------------------------------------------
+
+if ! command -v python3 >/dev/null 2>&1; then
+  printf 'python3 is required to read the crate version\n' >&2
+  exit 1
+fi
+
+# Read the crate version through a pipe rather than command substitution with
+# an inline heredoc: the nested heredoc form breaks the parser here, and
+# mktemp would add a new failure mode (a full disk) that the guard did not have.
+CRATE_VERSION="$(
+  python3 -c '
+import re, sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    for line in handle:
+        # Only the [package] version, never a dependency\x27s.
+        match = re.match(r"^version\s*=\s*\"([^\"]+)\"", line)
+        if match:
+            print(match.group(1))
+            break
+    else:
+        raise SystemExit("no [package] version in Cargo.toml")
+' "$ROOT_DIR/Cargo.toml"
+)"
+
+if ! grep -Fq -- 'check-release-tag.sh' "$RELEASE_WORKFLOW"; then
+  printf 'release.yml does not verify the tag against Cargo.toml\n' >&2
+  exit 1
+fi
+
+# And the check itself has to work. A guard that only greps for the name of
+# the script would pass against a script that always exits 0.
+if ! bash "$ROOT_DIR/scripts/check-release-tag.sh" "v${CRATE_VERSION}" >/dev/null; then
+  printf 'check-release-tag.sh rejects the current version v%s\n' "$CRATE_VERSION" >&2
+  exit 1
+fi
+
+if bash "$ROOT_DIR/scripts/check-release-tag.sh" 'v99.99.99' >/dev/null 2>&1; then
+  printf 'check-release-tag.sh accepts a mismatched tag\n' >&2
+  exit 1
+fi
+
+# The AppKit bundle version has to be stamped from the same tag rather than
+# kept as a hand-edited literal, otherwise the GUI and the CLI drift apart
+# again after this change.
+for required in 'APP_VERSION' 'BUILD_VERSION'; do
+  if ! grep -Fq -- "$required" "$ROOT_DIR/appkit/Scripts/package-dmg.sh"; then
+    printf 'package-dmg.sh no longer honours %s\n' "$required" >&2
+    exit 1
+  fi
+done
+
+if ! grep -Fq -- 'APP_VERSION' "$ROOT_DIR/appkit/Scripts/package-dmg.sh"; then
+  printf 'package-dmg.sh no longer honours APP_VERSION\n' >&2
+  exit 1
+fi
+
+# The checked-in Info.plist is a template that package-dmg.sh overwrites, so its
+# literal does not have to equal the crate version. It does have to be a real
+# version string rather than a placeholder, because a developer who packages by
+# hand reads that file.
+if ! grep -Eq '<string>[0-9]+\.[0-9]+\.[0-9]+</string>' "$ROOT_DIR/appkit/Resources/Info.plist"; then
+  printf 'appkit/Resources/Info.plist has no concrete CFBundleShortVersionString\n' >&2
+  exit 1
+fi
+
+# The release runbook quotes the tag to cut. That literal is exactly the kind
+# of copy that goes stale silently the day the crate version moves, so it is
+# pinned to Cargo.toml rather than trusted.
+if ! grep -Fq -- "git tag v${CRATE_VERSION}" "$AGENTS"; then
+  printf 'the release runbook does not tag the current crate version v%s\n' \
+    "$CRATE_VERSION" >&2
+  exit 1
+fi
 
 # The AppKit gate is the only GUI that ships. Removing Tauri must not take the
 # AppKit coverage with it.

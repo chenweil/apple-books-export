@@ -156,6 +156,26 @@ swift test                # 47 项 XCTest
 `Contents/Resources` → 可执行文件同级 → `PATH`）。二进制解析、能力边界和已知
 限制详见 [`appkit/README.md`](appkit/README.md)。
 
+## 发布
+
+版本号只有一个来源：`Cargo.toml` 的 `version`。推送 `v*` tag 会触发
+[`.github/workflows/release.yml`](.github/workflows/release.yml)：
+
+```bash
+# tag 版本号必须与 Cargo.toml 的 version 完全一致
+git tag v0.3.3 && git push --tags
+```
+
+流水线**在任何构建之前**先校验 tag 与 `Cargo.toml` 是否一致，不一致直接失败。
+这条检查是补上的：此前 tag 只用于命名 GitHub Release，从不与 `Cargo.toml` 比对，
+因此 `git tag v0.4.0` 会发布出一个页面写着 v0.4.0、而二进制 `--version` 报 0.3.3 的
+产物，且全流程无任何报错。校验逻辑在 `scripts/check-release-tag.sh`，由发布流水线和
+`tests/headless_mainline.sh` 共用，避免两处实现漂移。
+
+**当前发布产物只有 Rust CLI**（arm64 与 Intel 两个二进制 + `SHA256SUMS`）。
+AppKit 的 DMG 尚未进入发布流水线，且没有 Developer ID 签名或 notarization——
+`xattr -d com.apple.quarantine` 之类的用户侧绕过手段不算发布证据。跟踪 issue #44。
+
 ## Headless 能力矩阵
 
 **没有任何功能只存在于已废弃的 Tauri GUI 里**：下面每一项都能在 Headless Mainline
