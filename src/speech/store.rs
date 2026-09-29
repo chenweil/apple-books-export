@@ -7,7 +7,6 @@
 //! 配置文件只保存非秘密字段：Voice Profile 与 API Key 的**环境变量名**。
 //! 任何密钥值都不会进入这个文件。
 
-use crate::speech::cache::DEFAULT_CACHE_BUDGET_BYTES;
 use crate::speech::catalog::VoiceCatalog;
 use crate::speech::profile::{
     parse_api_key_env, ProfileError, ProfileVerification, VerificationStatus, VoiceProfile,
@@ -480,6 +479,7 @@ impl ProfileFile {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::speech::cache::DEFAULT_CACHE_BUDGET_BYTES;
     use crate::speech::catalog::{CatalogSourceType, CatalogVoice};
     use crate::speech::profile::{Hundredths, ProfileErrorReason, VerificationStatus};
     use chrono::Utc;

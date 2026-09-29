@@ -613,6 +613,8 @@ where
     let has_valid_cache = cached.is_some();
     if let Some(ready) = cached {
         if !request.regenerate {
+            // 缓存命中就是一次「使用」：LRU 因此知道这个 entry 最近被读走过。
+            cache.touch_clip(&id, now);
             drop(lock);
             return Ok(outcome_from_ready(
                 &id,
@@ -660,10 +662,12 @@ where
         return Err(recorded_provider_failure(&cache, &state));
     }
 
-    // 7. 调用 provider 前的预检：API Key、音色可用性、存储可写。
+    // 7. 调用 provider 前的预检：API Key、存储可写与 budget、音色可用性。
     if api_key.as_deref().unwrap_or_default().trim().is_empty() {
         return Err(GenerationError::MissingApiKey);
     }
+    // 7a. budget 预检放在 Voice Catalog 之前：存储不足时连目录请求都不该发出。
+    ensure_cache_room(&cache, &id, now)?;
     let catalog_outcome =
         load_or_refresh_voice_catalog(&store, SENSEAUDIO_PROVIDER, now, false, catalog_fetch)
             .await
@@ -685,8 +689,6 @@ where
             });
         }
     }
-    ensure_storage_writable(&cache)?;
-
     // 8. 建 attempt，发起唯一一次同步请求。
     let attempt_id = new_attempt_id(&id, now);
     let synthesis_request = SpeechSynthesisRequest {
@@ -811,6 +813,12 @@ where
     attempt.provider_usage_characters = response.usage_characters;
     attempt.trace_id = response.trace_id.clone();
     let _ = cache.record_attempt(&attempt, now);
+
+    // 新 entry 接受后再执行 LRU：把总量压回预算内。当前 clip 由本进程持锁，正在
+    // 生成、播放、导出或持锁的 entry 一律保留；压不回去也如实保留（已接受的 entry
+    // 不会因为预算压力被丢掉）。
+    cache.touch_clip(&id, now);
+    let _ = cache.maintain_budget(&[&id], now);
 
     Ok(GenerateOutcome {
         source: SpeechClipSource::Provider,
@@ -1169,8 +1177,17 @@ fn storage_error(error: ClipCacheError) -> GenerationError {
     }
 }
 
-/// 调用 provider 前确认 Speech 根目录可写。
-fn ensure_storage_writable(cache: &ClipCache) -> Result<(), GenerationError> {
+/// 调用 provider 前的存储预检（实施 spec 7.4）。
+///
+/// 依次确认：Speech 根可写；配置预算留得出安全余量（`budget - 128 MiB`）；文件系统
+/// 报告的可用空间保得住安全余量；清理已过 budget 且可淘汰的旧 entry（含确认没有
+/// lock/reference 的 orphan version）之后仍然在预算内。任一条不成立都在**付费之前**
+/// 本地返回 `SPEECH_STORAGE_UNAVAILABLE`——先计费再发现无处落盘是不可接受的。
+fn ensure_cache_room(
+    cache: &ClipCache,
+    clip_id: &str,
+    now: DateTime<Utc>,
+) -> Result<(), GenerationError> {
     let root = cache.root().to_path_buf();
     std::fs::create_dir_all(&root).map_err(|error| {
         GenerationError::Storage(SpeechStoreError::Unavailable {
@@ -1186,6 +1203,51 @@ fn ensure_storage_writable(cache: &ClipCache) -> Result<(), GenerationError> {
         })
     })?;
     let _ = std::fs::remove_file(&probe);
+
+    let budget = cache
+        .cache_budget_bytes()
+        .map_err(storage_error)?;
+    let usable = crate::speech::usable_cache_budget(budget);
+    if usable == 0 {
+        // 预算连安全余量都留不出：这不是运行时压力，是配置问题，本地失败。
+        return Err(GenerationError::Storage(SpeechStoreError::Unavailable {
+            path: root.clone(),
+            message: format!(
+                "the Speech cache budget of {budget} bytes leaves no room above the {} byte safety margin",
+                crate::speech::CACHE_SAFETY_MARGIN_BYTES
+            ),
+        }));
+    }
+    let required = crate::speech::cache::required_free_bytes();
+    if let Some(available) = crate::speech::cache::available_bytes(&root) {
+        if available < required {
+            return Err(GenerationError::Storage(SpeechStoreError::Unavailable {
+                path: root.clone(),
+                message: format!(
+                    "only {available} bytes are available on the Speech cache volume; {required} bytes must stay free"
+                ),
+            }));
+        }
+    }
+
+    // 写入前先清理已过 budget 且可淘汰的旧 entry；当前 clip 由调用方持锁，不参与淘汰。
+    let maintenance = cache
+        .maintain_budget(&[clip_id], now)
+        .map_err(storage_error)?;
+    if !maintenance.safety_margin_preserved {
+        let held = if maintenance.skipped.is_empty() {
+            "none".to_string()
+        } else {
+            maintenance.skipped.join(", ")
+        };
+        return Err(GenerationError::Storage(SpeechStoreError::Unavailable {
+            path: root.clone(),
+            message: format!(
+                "the Speech cache still holds {} bytes of clips in use ({held}) and cannot keep {} bytes free",
+                maintenance.used_bytes_after, crate::speech::CACHE_SAFETY_MARGIN_BYTES
+            ),
+        }));
+    }
     Ok(())
 }
 

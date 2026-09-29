@@ -21,7 +21,7 @@ pub use cache::{
     CacheStatusEntry, CacheStatusReport, ClipCache, ClipCacheError, ClipCacheStatus, ClipLock,
     ClipLockError, ClipState, ClipUseGuard, ClipUseKind, ClipUseSkip, ClipVersionMetadata,
     HistoryClearReport, ReadyClip, ATTEMPT_HISTORY_RETENTION_DAYS, ATTEMPT_SCHEMA_VERSION,
-    CACHE_SAFETY_MARGIN_BYTES, CLIP_LOCK_TIMEOUT, CLIP_STATE_SCHEMA_VERSION,
+    usable_cache_budget, CACHE_SAFETY_MARGIN_BYTES, CLIP_LOCK_TIMEOUT, CLIP_STATE_SCHEMA_VERSION,
     CLIP_VERSION_SCHEMA_VERSION, DEFAULT_CACHE_BUDGET_BYTES, MIN_FREE_BYTES_ENV,
 };
 pub use catalog::{

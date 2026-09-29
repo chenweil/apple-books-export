@@ -143,19 +143,17 @@ impl ClipUseGuard {
             ));
         }
         let path = cache.usage_marker_path(clip_id, kind)?;
-        if fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&path)
-            .is_err()
-        {
-            // marker 已经存在（或写入目录失败）：占不到就不放行，绝不覆盖别人的凭证。
+        fs::create_dir_all(cache.locks_dir())
+            .map_err(|error| ClipLockError::Unavailable(cache.locks_dir(), error))?;
+        if path.exists() {
+            // marker 已经存在：占不到就不放行，绝不覆盖别人的凭证。
             if cache.usage_marker_is_stale(&path) {
                 let _ = fs::remove_file(&path);
             } else {
                 return Err(ClipLockError::InProgress);
             }
         }
+        // create_new 保证只可能是自己创建的这个文件：不会静默改写别人的凭证。
         let mut file = fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -1210,14 +1208,14 @@ impl ClipCache {
         Ok(report)
     }
 
-    /// LRU / budget 维护：先把总量压回 `usable_budget`，再报告是否保住安全余量。
+    /// LRU / budget 维护：超预算时先回收无引用的孤立 version，再淘汰最近最少使用的
+    /// clip，最后如实报告是否保住安全余量。
     ///
-    /// `keep` 是调用方**已经持锁**的 clip（例如当前正在生成的 clip）：它们与正在播放、
-    /// 导出或持锁的 entry 一样不可淘汰。可淘汰的候选按最近最少使用排序；没有可淘汰
-    /// 候选时停止并如实报告 `safety_margin_preserved = false`，由调用方决定是否本地失败
-    /// （provider 调用前必须失败，不能先计费再发现无处落盘）。
+    /// `keep` 是调用方**已经持锁**的 clip（例如当前正在生成的 clip）：它不参与淘汰。
+    /// 正在生成、播放、导出或持锁的 entry 也不参与淘汰。没有超预算时什么都不删：
+    /// 回收与淘汰都只由压力触发，不把「顺手清理」变成隐性删除。
     ///
-    /// 只有确认没有 lock/reference 的 version 目录会被回收（实施 spec 7.2）。
+    /// 只有确认没有 lock/reference 的 version 目录才会被回收（实施 spec 7.2）。
     pub fn maintain_budget(
         &self,
         keep: &[&str],
@@ -1243,32 +1241,44 @@ impl ClipCache {
         for clip_id in self.sorted_clip_ids()? {
             let clip_dir = self.clip_dir(&clip_id)?;
             let size = dir_size(&clip_dir);
-            if keep.contains(&clip_id.as_str()) {
-                // 调用方持有该 clip 的 writer 锁：它自己不会淘汰自己，但它已经提交的
-                // 孤立 version 可以安全回收（pointer 提交成功后才会有孤立版本）。
-                report.reclaimed_versions += self.reclaim_unreferenced_versions(&clip_id)?;
-                continue;
-            }
+            let protected = keep.contains(&clip_id.as_str());
             match self.clip_in_use(&clip_id) {
-                Some(kind) => in_use.push((clip_id, kind)),
-                None => {
-                    report.reclaimed_versions += self.reclaim_unreferenced_versions(&clip_id)?;
-                    let recency = self
-                        .load_state(&clip_id)
-                        .ok()
-                        .flatten()
-                        .map(|state| Self::recency_key(&state).to_string())
-                        .unwrap_or_default();
-                    candidates.push(Candidate {
-                        clip_id,
-                        used_bytes: size,
-                        recency,
-                    });
+                // 别的进程正在生成/播放/导出：既不能淘汰，也不能回收它的任何东西。
+                Some(kind) if !protected => in_use.push((clip_id, kind)),
+                _ => {
+                    if !protected {
+                        let recency = self
+                            .load_state(&clip_id)
+                            .ok()
+                            .flatten()
+                            .map(|state| Self::recency_key(&state).to_string())
+                            .unwrap_or_default();
+                        candidates.push(Candidate {
+                            clip_id: clip_id.clone(),
+                            used_bytes: size,
+                            recency,
+                        });
+                    }
                 }
             }
         }
         let mut used_bytes = self.total_used_bytes()?;
         report.used_bytes_before = used_bytes;
+
+        // 超预算时才动手：先回收确认没有 lock/reference 的孤立 version，再淘汰 clip。
+        if used_bytes > usable_budget_bytes {
+            for candidate in &candidates {
+                report.reclaimed_versions += self.reclaim_unreferenced_versions(&candidate.clip_id)?;
+            }
+            for clip_id in keep {
+                // 调用方持有这些 clip 的 writer 锁，因此它们没有「别人的 lock」；超预算时
+                // 其中未被 pointer 引用的旧 version 同样可以回收。
+                if self.clip_in_use(clip_id).is_none() {
+                    report.reclaimed_versions += self.reclaim_unreferenced_versions(clip_id)?;
+                }
+            }
+            used_bytes = self.total_used_bytes()?;
+        }
 
         while used_bytes > usable_budget_bytes {
             // 最近最少使用优先淘汰；排序键相同时按 clip ID 决定，保证输出稳定。
@@ -2417,5 +2427,483 @@ mod tests {
             !uncontended.waited(),
             "a fresh writer must not be treated as a waiter"
         );
+    }
+
+    /// 一个带自定义预算的 Speech 根；预算由非秘密 config 提供。
+    fn cache_with_budget(budget_bytes: u64) -> (tempfile::TempDir, ClipCache) {
+        let home = tempfile::tempdir().expect("temp home");
+        let store = SpeechStore::from_home(home.path());
+        store
+            .save_config(&crate::speech::SpeechConfig {
+                api_key_env: crate::speech::profile::DEFAULT_API_KEY_ENV.to_string(),
+                profile: VoiceProfile::default(),
+                cache_budget_bytes: budget_bytes,
+            })
+            .expect("save config");
+        (home, ClipCache::new(store))
+    }
+
+    /// 提交一个真实 version，返回 (state, audio sha256)。
+    fn committed_clip(cache: &ClipCache, clip_id: &str) -> (ClipState, String) {
+        let audio = silent_mp3(1);
+        let audio_sha256 = sha256_hex(&audio);
+        let metadata = metadata(clip_id, &audio_sha256, &audio);
+        let mut state = state(clip_id);
+        state.latest_attempt_id = Some("attempt-1".to_string());
+        state.latest_attempt_status = Some(AttemptStatus::Succeeded);
+        cache
+            .commit_version(&state, &metadata, &audio, now())
+            .expect("commit");
+        (state, audio_sha256)
+    }
+
+    /// 用稀疏文件把占用撑到 apparent `bytes`，不真的写这么多磁盘。
+    fn pad(cache: &ClipCache, clip_id: &str, bytes: u64) {
+        let path = cache.clip_dir(clip_id).expect("clip dir").join("bulk.bin");
+        let file = fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .open(&path)
+            .expect("pad file");
+        file.set_len(bytes).expect("pad length");
+    }
+
+    fn attempt_record(attempt_id: &str, clip_id: &str, started_at: DateTime<Utc>) -> AttemptRecord {
+        AttemptRecord {
+            schema_version: ATTEMPT_SCHEMA_VERSION,
+            attempt_id: attempt_id.to_string(),
+            clip_id: clip_id.to_string(),
+            provider: "senseaudio".to_string(),
+            model: "sensenova-tts-2.0".to_string(),
+            voice_id: "male_0004_a".to_string(),
+            started_at: started_at.to_rfc3339(),
+            finished_at: Some(started_at.to_rfc3339()),
+            status: AttemptStatus::Succeeded,
+            unicode_characters: 4,
+            estimated_billing_characters: 8,
+            provider_usage_characters: Some(8),
+            product_error_code: None,
+            provider_code: None,
+            trace_id: Some("trace-1".to_string()),
+        }
+    }
+
+    /// LRU 不淘汰当前 clip：调用方用 `keep` 声明「我正拿着这把锁」。
+    #[test]
+    fn budget_maintenance_never_evicts_the_current_clip() {
+        let (_home, cache) = cache_with_budget(200 * 1024 * 1024);
+        let current = "a".repeat(64);
+        let stale = "b".repeat(64);
+        committed_clip(&cache, &current);
+        committed_clip(&cache, &stale);
+        // current 是最近使用的，stale 是最早使用的：去掉 keep 就会被先淘汰。
+        let mut current_state = cache.load_state(&current).expect("state").expect("state");
+        current_state.last_used_at = Some("2026-09-20T00:00:00Z".to_string());
+        cache.save_state(&current_state).expect("save");
+        let mut stale_state = cache.load_state(&stale).expect("state").expect("state");
+        stale_state.last_used_at = Some("2026-09-01T00:00:00Z".to_string());
+        cache.save_state(&stale_state).expect("save");
+        pad(&cache, &current, 5 * 1024 * 1024);
+        pad(&cache, &stale, 100 * 1024 * 1024);
+
+        let report = cache
+            .maintain_budget(&[&current], now())
+            .expect("maintain budget");
+
+        assert_eq!(report.evicted, vec![stale.clone()]);
+        assert!(
+            cache.clip_dir(&current).expect("clip dir").exists(),
+            "the clip being generated must never be evicted"
+        );
+        assert!(
+            !cache.clip_dir(&stale).expect("clip dir").exists(),
+            "the least recently used clip must be evicted"
+        );
+        assert!(report.safety_margin_preserved);
+    }
+
+    /// LRU 不淘汰正在生成、播放、导出或持锁的 entry：判定只看占用，不看 keep 列表。
+    #[test]
+    fn budget_maintenance_never_evicts_an_entry_that_is_in_use() {
+        let kinds = [
+            (ClipUseKind::Generation, "lock"),
+            (ClipUseKind::Playback, "play"),
+            (ClipUseKind::Export, "export"),
+        ];
+        for (kind, marker) in kinds {
+            // 200 MiB 预算 → 72 MiB 可用：总额超预算，淘汰掉 stale 之后剩下的占用
+            // 仍然在可用预算内，因此安全余量是保得住的。
+            let (_home, cache) = cache_with_budget(200 * 1024 * 1024);
+            let held = "a".repeat(64);
+            let stale = "b".repeat(64);
+            committed_clip(&cache, &held);
+            committed_clip(&cache, &stale);
+            // held 是最早使用的：去掉占用检查它会第一个被淘汰。
+            let mut held_state = cache.load_state(&held).expect("state").expect("state");
+            held_state.last_used_at = Some("2026-09-01T00:00:00Z".to_string());
+            cache.save_state(&held_state).expect("save");
+            let mut stale_state = cache.load_state(&stale).expect("state").expect("state");
+            stale_state.last_used_at = Some("2026-09-20T00:00:00Z".to_string());
+            cache.save_state(&stale_state).expect("save");
+            pad(&cache, &held, 60 * 1024 * 1024);
+            pad(&cache, &stale, 60 * 1024 * 1024);
+
+            // 生成用 writer 锁表达；播放与导出用 ClipUseGuard 的 usage marker 表达。
+            let _lock = match kind {
+                ClipUseKind::Generation => Some(
+                    ClipLock::acquire(&cache, &held, now()).expect("writer lock"),
+                ),
+                _ => None,
+            };
+            let _use = match kind {
+                ClipUseKind::Generation => None,
+                _ => Some(
+                    ClipUseGuard::acquire(&cache, &held, kind, now()).expect("usage marker"),
+                ),
+            };
+            let _ = marker;
+
+            let report = cache.maintain_budget(&[], now()).expect("maintain budget");
+
+            assert!(
+                cache.clip_dir(&held).expect("clip dir").exists(),
+                "{kind:?}: an entry in use must never be evicted"
+            );
+            assert_eq!(report.skipped, vec![held.clone()], "{kind:?}");
+            assert_eq!(report.evicted, vec![stale.clone()], "{kind:?}");
+            assert!(report.safety_margin_preserved, "{kind:?}");
+            drop(_lock);
+            drop(_use);
+        }
+    }
+
+    /// 超预算时按 LRU 顺序淘汰，直到回到预算内。
+    #[test]
+    fn budget_maintenance_evicts_the_least_recently_used_clips_first() {
+        let (_home, cache) = cache_with_budget(200 * 1024 * 1024);
+        let oldest = "a".repeat(64);
+        let middle = "b".repeat(64);
+        let newest = "c".repeat(64);
+        for (index, clip_id) in [&oldest, &middle, &newest].into_iter().enumerate() {
+            committed_clip(&cache, clip_id);
+            pad(&cache, clip_id, 60 * 1024 * 1024);
+            let mut state = cache.load_state(clip_id).expect("state").expect("state");
+            state.last_used_at = Some(format!("2026-09-0{}T00:00:00Z", index + 1));
+            cache.save_state(&state).expect("save");
+        }
+
+        let report = cache.maintain_budget(&[], now()).expect("maintain budget");
+
+        assert_eq!(report.evicted, vec![oldest.clone(), middle.clone()]);
+        assert!(cache.clip_dir(&oldest).expect("dir").exists() == false);
+        assert!(cache.clip_dir(&middle).expect("dir").exists() == false);
+        assert!(cache.clip_dir(&newest).expect("dir").exists());
+        assert!(report.safety_margin_preserved);
+        assert_eq!(report.used_bytes_after <= report.usable_budget_bytes, true);
+    }
+
+    /// 没有可淘汰空间时如实报告，并且不删已经接受、正在使用的 entry。
+    #[test]
+    fn budget_maintenance_reports_insufficient_room_without_deleting_anything() {
+        let (_home, cache) = cache_with_budget(200 * 1024 * 1024);
+        let held = "a".repeat(64);
+        committed_clip(&cache, &held);
+        pad(&cache, &held, 200 * 1024 * 1024);
+        let lock = ClipLock::acquire(&cache, &held, now()).expect("writer lock");
+
+        let report = cache.maintain_budget(&[], now()).expect("maintain budget");
+
+        assert!(report.evicted.is_empty());
+        assert_eq!(report.skipped, vec![held.clone()]);
+        assert!(
+            !report.safety_margin_preserved,
+            "a cache that cannot keep the safety margin must be reported, not hidden"
+        );
+        assert!(cache.clip_dir(&held).expect("dir").exists());
+        drop(lock);
+    }
+
+    /// 孤立 version 只在超预算时回收：没有压力就不做隐性删除。
+    #[test]
+    fn budget_maintenance_reclaims_orphan_versions_only_under_pressure() {
+        let (_home, cache) = cache_with_budget(1024 * 1024 * 1024);
+        let clip_id = "a".repeat(64);
+        let (_, referenced) = committed_clip(&cache, &clip_id);
+        let orphan = cache
+            .clip_dir(&clip_id)
+            .expect("clip dir")
+            .join("versions")
+            .join("b".repeat(64));
+        fs::create_dir_all(&orphan).expect("orphan dir");
+        fs::write(orphan.join("audio.mp3"), b"orphan").expect("orphan audio");
+
+        // 没有压力：什么都不动。
+        let relaxed = cache.maintain_budget(&[], now()).expect("maintain budget");
+        assert_eq!(relaxed.reclaimed_versions, 0);
+        assert!(orphan.exists(), "no pressure must not delete anything");
+
+        // 超预算：调用方持有该 clip 的锁（keep），因此 clip 本身不淘汰，
+        // 但其中没有被 pointer 引用的 version 会被回收。
+        pad(&cache, &clip_id, 1024 * 1024 * 1024);
+        let pressured = cache
+            .maintain_budget(&[&clip_id], now())
+            .expect("maintain budget");
+        assert_eq!(pressured.reclaimed_versions, 1);
+        assert!(pressured.evicted.is_empty(), "the kept clip is never evicted");
+        assert!(!orphan.exists(), "an unreferenced version is reclaimable");
+        assert!(
+            cache
+                .clip_dir(&clip_id)
+                .expect("clip dir")
+                .join("versions")
+                .join(&referenced)
+                .exists(),
+            "the referenced version is never reclaimable"
+        );
+    }
+
+    /// attempt history 清理与音频 LRU 互相独立：清理不碰缓存，淘汰不碰 attempt metadata。
+    #[test]
+    fn attempt_history_pruning_and_lru_eviction_are_independent() {
+        let (_home, cache) = cache_with_budget(200 * 1024 * 1024);
+        let kept = "a".repeat(64);
+        let evicted = "b".repeat(64);
+        let (_, kept_audio) = committed_clip(&cache, &kept);
+        committed_clip(&cache, &evicted);
+        // kept 最近使用且被调用方持锁；evicted 是最早使用的淘汰候选。
+        let mut kept_state = cache.load_state(&kept).expect("state").expect("state");
+        kept_state.last_used_at = Some("2026-09-30T00:00:00Z".to_string());
+        kept_state.latest_attempt_id = Some("attempt-expired".to_string());
+        cache.save_state(&kept_state).expect("save");
+        let mut evicted_state = cache.load_state(&evicted).expect("state").expect("state");
+        evicted_state.last_used_at = Some("2026-09-01T00:00:00Z".to_string());
+        cache.save_state(&evicted_state).expect("save");
+        pad(&cache, &evicted, 100 * 1024 * 1024);
+        pad(&cache, &kept, 5 * 1024 * 1024);
+
+        // archived attempt 早于 90 天保留窗：必须被自动删除。直接落盘而不是走
+        // record_attempt，否则记录刚写下就被它自带的维护删掉，断言不到东西。
+        let expired_at = now() - chrono::Duration::days(120);
+        let expired_day = expired_at.format("%Y-%m-%d").to_string();
+        let expired_dir = cache.attempts_dir().join(&expired_day);
+        fs::create_dir_all(&expired_dir).expect("expired day dir");
+        let expired_record = attempt_record("attempt-expired", &kept, expired_at);
+        let mut json = serde_json::to_string_pretty(&expired_record).expect("record JSON");
+        json.push('\n');
+        fs::write(expired_dir.join("attempt-expired.json"), json).expect("expired record");
+        // 窗内的 attempt 同样直接落盘：`record_attempt` 自带维护，会在写下终态前
+        // 就把过期记录删掉，那样就断言不到「清理真的发生了」。
+        let fresh_dir = cache.attempts_dir().join(now().format("%Y-%m-%d").to_string());
+        fs::create_dir_all(&fresh_dir).expect("fresh day dir");
+        let fresh_record = attempt_record("attempt-fresh", &evicted, now());
+        let mut fresh_json = serde_json::to_string_pretty(&fresh_record).expect("record JSON");
+        fresh_json.push('\n');
+        fs::write(fresh_dir.join("attempt-fresh.json"), fresh_json).expect("fresh record");
+
+        let maintenance = cache.maintain_budget(&[&kept], now()).expect("maintain budget");
+        assert_eq!(maintenance.evicted, vec![evicted.clone()]);
+
+        let prune = cache
+            .prune_attempt_history(now(), ATTEMPT_HISTORY_RETENTION_DAYS)
+            .expect("prune");
+
+        assert_eq!(prune.removed_attempts, 1, "the expired metadata must go");
+        assert_eq!(
+            prune.reconciled_clip_states, 1,
+            "a state naming a removed attempt must be reconciled"
+        );
+        assert!(
+            cache.load_attempt("attempt-expired").expect("load").is_none(),
+            "expired attempt history is pruned"
+        );
+        assert!(
+            cache.load_attempt("attempt-fresh").expect("load").is_some(),
+            "in-window attempt history survives"
+        );
+        let state = cache.load_state(&kept).expect("state").expect("state");
+        assert_eq!(
+            state.latest_attempt_id, None,
+            "clip state must never keep naming a pruned attempt"
+        );
+        let ready = cache.load_ready_clip(&kept).expect("load").expect("ready");
+        assert_eq!(
+            ready.state.current_audio_sha256.as_deref(),
+            Some(kept_audio.as_str()),
+            "pruning must never remove a valid cache entry"
+        );
+        assert!(!state.generation_blocked, "pruning must never create a gate");
+        assert!(
+            !cache.clip_dir(&evicted).expect("dir").exists(),
+            "LRU still evicted the least recently used clip independently"
+        );
+    }
+
+    /// 单独跑 attempt 清理也不碰缓存、gate 或用户导出投影。
+    #[test]
+    fn history_clear_removes_only_attempt_history() {
+        let (_home, cache) = cache_with_budget(1024 * 1024 * 1024);
+        let clip_id = "a".repeat(64);
+        let (state, audio_sha256) = committed_clip(&cache, &clip_id);
+        // 一个 unknown gate + 一份 export locator 投影 + 一份用户导出的音频。
+        let mut gated = state.clone();
+        gated.generation_blocked = true;
+        gated.latest_attempt_status = Some(AttemptStatus::Unknown);
+        gated.latest_attempt_id = Some("attempt-gate".to_string());
+        gated.current_cache_status = ClipCacheStatus::Absent;
+        gated.current_audio_sha256 = None;
+        cache.save_state(&gated).expect("save gate");
+        cache
+            .record_attempt(
+                &attempt_record("attempt-gate", &clip_id, now()),
+                now(),
+            )
+            .expect("record");
+        let exports = cache.root().join("exports.json");
+        fs::write(&exports, b"{\"schema_version\":1}").expect("export projection");
+        let user_audio = cache.root().join("user-owned.mp3");
+        fs::write(&user_audio, b"user audio").expect("user audio");
+
+        let report = cache.clear_history(now()).expect("clear history");
+
+        assert_eq!(report.removed_attempts, 1);
+        assert_eq!(report.cleared_generation_gates, 0);
+        assert!(cache.load_attempt("attempt-gate").expect("load").is_none());
+        let after = cache.load_state(&clip_id).expect("state").expect("state");
+        assert_eq!(
+            after.latest_attempt_id, None,
+            "history clear must not leave a dangling attempt reference"
+        );
+        assert!(
+            after.generation_blocked,
+            "history clear must not lift the unknown gate"
+        );
+        assert!(
+            exports.exists() && user_audio.exists(),
+            "history clear must not touch export state or user-owned audio"
+        );
+        // gate clip 不再有有效音频：被 clear 的是 attempt history，缓存/门都保持原样。
+        assert_eq!(after.current_cache_status, ClipCacheStatus::Absent);
+        assert_eq!(after.text_sha256, gated.text_sha256);
+        let _ = audio_sha256;
+    }
+
+    /// 只读状态视图：预算、占用、损坏与孤立 version 的计数方式。
+    #[test]
+    fn cache_status_counts_accepted_corrupt_locked_and_reclaimable_entries() {
+        let (_home, cache) = cache_with_budget(200 * 1024 * 1024);
+        let ready = "a".repeat(64);
+        let broken = "b".repeat(64);
+        let (_, referenced) = committed_clip(&cache, &ready);
+        committed_clip(&cache, &broken);
+        pad(&cache, &ready, 4096);
+        // 破坏 broken 的音频字节：它必须是 corrupt 而不是 accepted。
+        let audio_path = cache
+            .clip_dir(&broken)
+            .expect("clip dir")
+            .join("versions")
+            .join(
+                cache
+                    .load_state(&broken)
+                    .expect("state")
+                    .expect("state")
+                    .current_audio_sha256
+                    .expect("pointer"),
+            )
+            .join("audio.mp3");
+        let mut bytes = fs::read(&audio_path).expect("audio");
+        let last = bytes.len() - 1;
+        bytes[last] ^= 0xFF;
+        fs::write(&audio_path, &bytes).expect("tamper");
+        // broken 正在播放：它既有占用也有孤立 version 之外的损坏状态。
+        let playing = ClipUseGuard::acquire(&cache, &broken, ClipUseKind::Playback, now())
+            .expect("acquire playback");
+        let orphan = cache
+            .clip_dir(&ready)
+            .expect("clip dir")
+            .join("versions")
+            .join("c".repeat(64));
+        fs::create_dir_all(&orphan).expect("orphan dir");
+
+        let status = cache.cache_status().expect("cache status");
+
+        assert_eq!(status.budget_bytes, 200 * 1024 * 1024);
+        assert_eq!(
+            status.usable_budget_bytes,
+            200 * 1024 * 1024 - 128 * 1024 * 1024
+        );
+        assert_eq!(status.accepted_entries, 1);
+        assert_eq!(status.corrupt_entries, 1);
+        assert_eq!(status.locked_entries, 1);
+        assert_eq!(
+            status.reclaimable_versions, 1,
+            "the locked clip's versions must not be reported as reclaimable"
+        );
+        assert_eq!(
+            status
+                .entries
+                .iter()
+                .find(|entry| entry.clip_id == ready)
+                .expect("ready entry")
+                .status,
+            ClipCacheStatus::Ready
+        );
+        assert_eq!(
+            status
+                .entries
+                .iter()
+                .find(|entry| entry.clip_id == broken)
+                .expect("broken entry")
+                .in_use,
+            Some(ClipUseKind::Playback)
+        );
+        assert_eq!(
+            cache
+                .clip_dir(&ready)
+                .expect("clip dir")
+                .join("versions")
+                .join(&referenced)
+                .exists(),
+            true,
+            "the referenced version must still be there"
+        );
+        drop(playing);
+    }
+
+    /// 预算连安全余量都留不出时，可用预算为 0：生成必须在 provider 前失败。
+    #[test]
+    fn a_budget_below_the_safety_margin_leaves_no_usable_cache_room() {
+        let (_home, cache) = cache_with_budget(64 * 1024 * 1024);
+
+        assert_eq!(crate::speech::usable_cache_budget(64 * 1024 * 1024), 0);
+        let status = cache.cache_status().expect("cache status");
+        assert_eq!(status.usable_budget_bytes, 0);
+        assert_eq!(status.budget_bytes, 64 * 1024 * 1024);
+    }
+
+    ///播放/导出 marker 过期后不再钉住 entry：崩溃遗留的凭证不能永久占用缓存。
+    #[test]
+    fn a_stale_usage_marker_does_not_pin_an_entry_forever() {
+        let (_home, cache) = cache_with_budget(200 * 1024 * 1024);
+        let clip_id = "a".repeat(64);
+        committed_clip(&cache, &clip_id);
+        let marker = cache
+            .usage_marker_path(&clip_id, ClipUseKind::Playback)
+            .expect("marker path");
+        fs::create_dir_all(marker.parent().expect("locks dir")).expect("locks dir");
+        fs::write(&marker, "{\"kind\":\"playback\"}\n").expect("marker");
+        // 把 marker 的 mtime 推到崩溃遗留阈值之外。
+        let stale = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+        let file = fs::OpenOptions::new()
+            .write(true)
+            .open(&marker)
+            .expect("open marker");
+        file.set_modified(stale).expect("backdate marker");
+
+        assert_eq!(
+            cache.clip_in_use(&clip_id),
+            None,
+            "a crashed holder must not pin the entry forever"
+        );
+        assert!(!marker.exists(), "the stale marker is dropped on sight");
     }
 }

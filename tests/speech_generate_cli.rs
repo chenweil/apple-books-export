@@ -2940,3 +2940,198 @@ fn cache_clear_skips_entries_held_for_playback_or_export() {
     assert_eq!(cached["receipt"]["source"], "cache");
     assert_eq!(replay.finish().len(), 0);
 }
+
+/// 用给定预算写一份非秘密 speech config：`cache_budget_bytes` 可以被测试注入。
+fn write_cache_budget(fixture: &Fixture, budget_bytes: u64) {
+    let path = fixture.speech_root().join("config.json");
+    std::fs::create_dir_all(fixture.speech_root()).expect("speech root");
+    std::fs::write(
+        &path,
+        serde_json::to_vec_pretty(&json!({
+            "schema_version": 1,
+            "api_key_env": "SENSEAUDIO_API_KEY",
+            "cache_budget_bytes": budget_bytes,
+            "voice_profile": {
+                "provider": "senseaudio",
+                "model": "sensenova-tts-2.0",
+                "voice_id": "male_0004_a",
+                "emotion_label": null,
+                "style_label": null,
+                "speed_x100": 100,
+                "volume_x100": 100,
+                "pitch": 0,
+                "verification_status": "unverified",
+                "verified_at": null,
+                "audio": { "format": "mp3", "sample_rate": 32000, "bitrate": 128000, "channel": 2 }
+            }
+        }))
+        .expect("config JSON"),
+    )
+    .expect("write config");
+}
+
+/// 把一个 clip 的占用撑到 apparent 字节数：稀疏文件，不真的写满磁盘。
+fn pad_clip(fixture: &Fixture, clip_id: &str, bytes: u64) {
+    let path = fixture
+        .speech_root()
+        .join("clips")
+        .join(clip_id)
+        .join("bulk.bin");
+    std::fs::create_dir_all(path.parent().expect("clip dir")).expect("clip dir");
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .open(&path)
+        .expect("pad file");
+    file.set_len(bytes).expect("pad length");
+}
+
+/// 已经存在的有效缓存 + 占用的 writer 锁 = 没有任何可淘汰空间：generate 必须在
+/// provider 调用之前本地失败（实施 spec 7.4「无法获得安全空间时先返回」）。
+#[test]
+fn a_cache_that_cannot_preserve_the_safety_margin_fails_before_any_provider_call() {
+    let fixture = Fixture::new();
+    let (first, _) = generate_two_cached_clips(&fixture);
+    // 预算 200 MiB → 可用 72 MiB；把这个 clip 撑到 80 MiB 并占住锁：无处可淘汰。
+    write_cache_budget(&fixture, 200 * 1024 * 1024);
+    pad_clip(&fixture, &first, 80 * 1024 * 1024);
+    fixture.occupy_lock(&first);
+
+    let provider = provider_with_catalog_and_synthesis("trace-budget-1");
+    let value = failed(&fixture.run_with(
+        &[
+            "speech", "generate", "--asset-id", "book-1", "--annotation-id", "annotation-42",
+            "--content", "highlight", "--regenerate", "--json",
+        ],
+        &provider,
+        Some(TEST_KEY),
+    ));
+    let records = provider.finish();
+
+    assert_eq!(value["error"]["code"], "SPEECH_STORAGE_UNAVAILABLE");
+    assert_eq!(
+        records.len(),
+        0,
+        "a budget preflight failure must not open a provider connection"
+    );
+    // 被占用的 entry 仍然完好：失败不能顺手删掉正在使用的缓存。
+    assert!(
+        fixture
+            .speech_root()
+            .join("clips")
+            .join(&first)
+            .join("state.json")
+            .exists(),
+        "the in-use cache entry must survive the failed preflight"
+    );
+
+    // human 模式给出一句可读错误，同样零连接。
+    let human_provider = provider_with_catalog_and_synthesis("trace-budget-2");
+    let human = fixture.run_with(
+        &["speech", "generate", "1", "--annotation", "2", "--content", "highlight", "--regenerate"],
+        &human_provider,
+        Some(TEST_KEY),
+    );
+    assert!(!human.status.success());
+    let stderr = String::from_utf8_lossy(&human.stderr);
+    assert!(stderr.contains("Speech"), "{stderr}");
+    assert_eq!(human_provider.finish().len(), 0);
+}
+
+/// 预算连安全余量都留不出（budget < 128 MiB）是配置问题：本地失败，零连接。
+#[test]
+fn a_budget_smaller_than_the_safety_margin_fails_locally() {
+    let fixture = Fixture::new();
+    let (first, _) = generate_two_cached_clips(&fixture);
+    write_cache_budget(&fixture, 64 * 1024 * 1024);
+
+    let provider = provider_with_catalog_and_synthesis("trace-budget-3");
+    let value = failed(&fixture.run_with(
+        &[
+            "speech", "generate", "--asset-id", "book-1", "--annotation-id", "annotation-41",
+            "--content", "highlight", "--regenerate", "--json",
+        ],
+        &provider,
+        Some(TEST_KEY),
+    ));
+    assert_eq!(provider.finish().len(), 0);
+    assert_eq!(value["error"]["code"], "SPEECH_STORAGE_UNAVAILABLE");
+    // 状态视图如实反映这个配置：可用预算为 0。
+    let status = provider_with_catalog_and_synthesis("trace-budget-4");
+    let report = succeeded(&fixture.run_with(&["speech", "cache", "status", "--json"], &status, Some(TEST_KEY)));
+    assert_eq!(status.finish().len(), 0);
+    assert_eq!(report["receipt"]["usable_budget_bytes"], 0);
+    assert!(fixture.clip_state(&first)["current_cache_status"] == "ready");
+}
+
+/// LRU 淘汰在调用 provider 之前就把总额压回预算，并且不动正在使用的 entry。
+#[test]
+fn pre_call_maintenance_evicts_the_least_recently_used_clip_before_the_request() {
+    let fixture = Fixture::new();
+    let (first, second) = generate_two_cached_clips(&fixture);
+    // 预算 200 MiB → 可用 72 MiB；把两个 clip 都撑到 60 MiB（总额 120 MiB）。
+    write_cache_budget(&fixture, 200 * 1024 * 1024);
+    pad_clip(&fixture, &first, 60 * 1024 * 1024);
+    pad_clip(&fixture, &second, 60 * 1024 * 1024);
+    // 让 second 成为最近使用的那一个：first 是淘汰候选。
+    let now = chrono::Utc::now().to_rfc3339();
+    for (clip_id, used_at) in [(&first, "2026-09-01T00:00:00Z"), (&second, now.as_str())] {
+        let path = fixture.speech_root().join("clips").join(clip_id).join("state.json");
+        let mut state: Value = serde_json::from_slice(&std::fs::read(&path).expect("state"))
+            .expect("state JSON");
+        state["last_used_at"] = json!(used_at);
+        std::fs::write(&path, serde_json::to_vec_pretty(&state).expect("state JSON"))
+            .expect("rewrite state");
+    }
+
+    // 生成第三个 clip：预检必须先淘汰 first（LRU），再允许这次 provider 调用。
+    let provider = provider_with_catalog_and_synthesis("trace-lru-1");
+    let value = succeeded(&fixture.run_with(
+        &[
+            "speech", "generate", "--asset-id", "book-1", "--annotation-id", "annotation-42",
+            "--content", "highlight", "--regenerate", "--json",
+        ],
+        &provider,
+        Some(TEST_KEY),
+    ));
+    assert_eq!(MockProvider::synthesis_count(&provider.finish()), 1);
+    assert_eq!(value["receipt"]["source"], "provider");
+
+    let clips = fixture.clip_dirs();
+    assert_eq!(
+        clips.len(),
+        1,
+        "the least recently used clip must be evicted to make room"
+    );
+    assert_eq!(
+        clips[0]
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .as_deref(),
+        Some(second.as_str()),
+        "the recently used clip survives, the least recently used one is evicted"
+    );
+}
+
+/// 文件系统可用空间保不住安全余量时，provider 调用之前本地失败。
+#[test]
+fn an_unavailable_storage_volume_fails_before_any_provider_call() {
+    let fixture = Fixture::new();
+    let provider = provider_with_catalog_and_synthesis("trace-free-1");
+    let value = failed(&fixture.run_with_env(
+        &[
+            "speech", "generate", "--asset-id", "book-1", "--annotation-id", "annotation-41",
+            "--content", "highlight", "--json",
+        ],
+        &provider,
+        Some(TEST_KEY),
+        // 只允许调高要求：注入一个不可能满足的余量，证明 guard 真的会触发。
+        &[("APPLE_BOOKS_SPEECH_MIN_FREE_BYTES", "1099511627776")],
+    ));
+    assert_eq!(value["error"]["code"], "SPEECH_STORAGE_UNAVAILABLE");
+    assert_eq!(
+        provider.finish().len(),
+        0,
+        "a free-space preflight failure must not open a provider connection"
+    );
+}
