@@ -2249,6 +2249,30 @@ fn cache_clear_skips_an_entry_that_holds_the_writer_lock() {
     assert_eq!(cleared.finish().len(), 0);
 }
 
+/// 目录可用，但合成请求被接收后延迟再以 5xx 拒绝：让等待方真的在等锁。
+fn provider_with_catalog_and_delayed_failed_synthesis(delay: StdDuration) -> MockProvider {
+    let catalog = catalog_response();
+    MockProvider::serve(Response {
+        status: Arc::new(move |path: &str| {
+            if path.ends_with("/v1/t2a_v2") {
+                500
+            } else {
+                200
+            }
+        }),
+        body: Arc::new(move |path: &str| {
+            if path.ends_with("/v1/t2a_v2") {
+                thread::sleep(delay);
+                br#"{"code":"internal","message":"boom"}"#.to_vec()
+            } else {
+                catalog.clone()
+            }
+        }),
+        delay: None,
+        drop: Response::never_drop(),
+    })
+}
+
 /// 同 clip 的并发等待方收到首个终态错误，且不产生第二次 provider 请求。
 ///
 /// 合成响应被故意延迟并断开：两个真实子进程，恰好一次 provider 连接，
@@ -2457,4 +2481,254 @@ fn speech_root_state(root: &Path) -> Vec<(PathBuf, Option<u64>, Option<std::time
     }
     entries.sort();
     entries
+}
+
+/// 明确的 provider 失败也是终态：同一 clip 的排队等待方必须原样拿到首个失败，
+/// 两个真实子进程合计只有一次 provider 合成连接。
+///
+/// 合成被故意延迟拒绝，保证第二个进程真的在等 writer 锁，而不是碰巧串行完成。
+/// 显式失败不写 generation gate（`blocks_generation == false`），所以这条路径只能靠
+/// 锁内的终态复查来阻止「同一 clip 的第二次计费请求」（ADR 0007、实施 spec 9
+/// 「failed：返回相同稳定失败，不自动调用 provider」）。
+#[test]
+fn a_failed_waiter_receives_the_first_terminal_failure_with_exactly_one_provider_connection() {
+    let fixture = Fixture::new();
+    let provider =
+        provider_with_catalog_and_delayed_failed_synthesis(StdDuration::from_millis(900));
+
+    let mut children = Vec::new();
+    // 第一个子进程先跑起来并持锁进入被延迟的 provider 调用。
+    for index in 0..2 {
+        if index == 1 {
+            thread::sleep(StdDuration::from_millis(350));
+        }
+        let mut command = fixture.command();
+        command
+            .args([
+                "speech",
+                "generate",
+                "--asset-id",
+                "book-1",
+                "--annotation-id",
+                "annotation-41",
+                "--content",
+                "highlight",
+                "--json",
+            ])
+            .env("SENSEAUDIO_API_BASE_URL", &provider.url)
+            .env("SENSEAUDIO_API_KEY", TEST_KEY)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        children.push(command.spawn().expect("spawn CLI"));
+    }
+
+    let mut outputs = Vec::new();
+    for child in children {
+        outputs.push(child.wait_with_output().expect("wait for CLI"));
+    }
+    let records = provider.finish();
+
+    let values: Vec<Value> = outputs
+        .iter()
+        .map(|output| {
+            let value = failed(output);
+            assert_eq!(
+                value["error"]["code"], "SPEECH_PROVIDER_FAILED",
+                "an explicit provider failure is a stable terminal error"
+            );
+            assert_eq!(value["error"]["details"]["outcome"], "failed");
+            value
+        })
+        .collect();
+    assert_eq!(
+        values[0]["error"]["details"]["attempt_id"], values[1]["error"]["details"]["attempt_id"],
+        "the queued waiter must receive the first attempt's terminal error verbatim"
+    );
+    assert!(
+        !values[0]["error"]["details"]["attempt_id"]
+            .as_str()
+            .unwrap_or_default()
+            .is_empty(),
+        "the terminal error must name the attempt that produced it"
+    );
+    assert_eq!(
+        MockProvider::synthesis_count(&records),
+        1,
+        "a same-clip waiter must never start a second provider request: duplicate billing"
+    );
+    assert_eq!(
+        records.len(),
+        2,
+        "the waiter must return the recorded failure before any preflight, so it opens no connection at all"
+    );
+
+    // 明确失败不是不确定结果：不写 gate，也不留任何音频版本。
+    let clip_id = fixture.clip_dirs()[0]
+        .file_name()
+        .expect("clip dir name")
+        .to_string_lossy()
+        .into_owned();
+    let state = fixture.clip_state(&clip_id);
+    assert_eq!(state["latest_attempt_status"], "provider_failed");
+    assert_eq!(state["generation_blocked"], false);
+    let versions = fixture
+        .speech_root()
+        .join("clips")
+        .join(&clip_id)
+        .join("versions");
+    assert!(
+        versions
+            .read_dir()
+            .map(|mut entries| entries.next().is_none())
+            .unwrap_or(true),
+        "an explicit failure must not leave a cached audio version"
+    );
+}
+
+/// attempt history 的 90 天保留是自动维护：过期 metadata 被删，generation gate、
+/// current pointer 与缓存都不动，`latest_attempt_id` 也不再指向被删掉的 attempt。
+#[test]
+fn expired_attempt_history_is_pruned_automatically_without_touching_the_gate_or_the_cache() {
+    let fixture = Fixture::new();
+    let gated = provider_with_dropped_synthesis();
+    let value = failed(&fixture.run_with(
+        &[
+            "speech",
+            "generate",
+            "--asset-id",
+            "book-1",
+            "--annotation-id",
+            "annotation-41",
+            "--content",
+            "highlight",
+            "--json",
+        ],
+        &gated,
+        Some(TEST_KEY),
+    ));
+    assert_eq!(value["error"]["code"], "SPEECH_RESULT_UNKNOWN");
+    assert_eq!(MockProvider::synthesis_count(&gated.finish()), 1);
+    let clip_id = fixture.clip_dirs()[0]
+        .file_name()
+        .expect("clip dir name")
+        .to_string_lossy()
+        .into_owned();
+    assert_eq!(fixture.clip_state(&clip_id)["generation_blocked"], true);
+
+    // 把这条 attempt 历史改到保留窗口之外（元数据只有，不碰音频与 state）。
+    let attempts_dir = fixture.speech_root().join("attempts");
+    let mut records = Vec::new();
+    for day in std::fs::read_dir(&attempts_dir)
+        .expect("attempts dir")
+        .flatten()
+    {
+        for file in std::fs::read_dir(day.path()).expect("records").flatten() {
+            records.push(file.path());
+        }
+    }
+    assert_eq!(
+        records.len(),
+        1,
+        "the uncertain outcome left one history record"
+    );
+    let expired_at = (chrono::Utc::now() - chrono::Duration::days(120)).to_rfc3339();
+    let mut record: Value =
+        serde_json::from_slice(&std::fs::read(&records[0]).expect("record")).expect("attempt JSON");
+    record["started_at"] = json!(expired_at);
+    record["finished_at"] = json!(expired_at);
+    std::fs::write(
+        &records[0],
+        serde_json::to_vec_pretty(&record).expect("record JSON"),
+    )
+    .expect("backdate the record");
+
+    // 另一个 clip 的新 attempt 触发「正常维护」：过期历史必须被自动删除。
+    let other = provider_with_catalog_and_synthesis("trace-prune-2");
+    let generated = succeeded(&fixture.run_with(
+        &[
+            "speech",
+            "generate",
+            "--asset-id",
+            "book-1",
+            "--annotation-id",
+            "annotation-42",
+            "--content",
+            "highlight",
+            "--json",
+        ],
+        &other,
+        Some(TEST_KEY),
+    ));
+    assert_eq!(generated["receipt"]["source"], "provider");
+    assert_eq!(MockProvider::synthesis_count(&other.finish()), 1);
+
+    let mut remaining = Vec::new();
+    for day in std::fs::read_dir(&attempts_dir)
+        .expect("attempts dir")
+        .flatten()
+    {
+        for file in std::fs::read_dir(day.path()).expect("records").flatten() {
+            remaining.push(file.path());
+        }
+    }
+    assert_eq!(
+        remaining.len(),
+        1,
+        "only the in-window attempt history may survive the automatic prune"
+    );
+
+    let state = fixture.clip_state(&clip_id);
+    assert_eq!(
+        state["latest_attempt_id"],
+        Value::Null,
+        "clip state must never keep naming a pruned attempt"
+    );
+    assert_eq!(
+        state["latest_attempt_status"], "unknown",
+        "the recorded outcome still explains the surviving gate"
+    );
+    assert_eq!(
+        state["generation_blocked"], true,
+        "the unknown gate must survive attempt history retention"
+    );
+
+    // 阻塞态仍然挡住普通 generate：零连接。
+    let blocked = provider_with_catalog_and_synthesis("trace-prune-3");
+    let blocked_value = failed(&fixture.run_with(
+        &[
+            "speech",
+            "generate",
+            "--asset-id",
+            "book-1",
+            "--annotation-id",
+            "annotation-41",
+            "--content",
+            "highlight",
+            "--json",
+        ],
+        &blocked,
+        Some(TEST_KEY),
+    ));
+    assert_eq!(blocked_value["error"]["code"], "SPEECH_RESULT_UNKNOWN");
+    assert_eq!(blocked.finish().len(), 0);
+
+    // 清理只删 attempt metadata：另一个 clip 的缓存仍然零连接命中。
+    let replay = provider_with_catalog_and_synthesis("trace-prune-4");
+    let cached = succeeded(&fixture.run_with(
+        &[
+            "speech",
+            "generate",
+            "--asset-id",
+            "book-1",
+            "--annotation-id",
+            "annotation-42",
+            "--content",
+            "highlight",
+            "--json",
+        ],
+        &replay,
+        Some(TEST_KEY),
+    ));
+    assert_eq!(cached["receipt"]["source"], "cache");
+    assert_eq!(replay.finish().len(), 0);
 }
