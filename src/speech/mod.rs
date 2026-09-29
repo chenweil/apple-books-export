@@ -8,6 +8,7 @@ pub mod audio;
 pub mod cache;
 pub mod catalog;
 pub mod clip;
+pub mod export;
 pub mod generate;
 pub mod machine;
 pub mod play;
@@ -37,6 +38,12 @@ pub use catalog::{
 pub use clip::{
     clip_id, select_speech_content, ClipFingerprint, SpeechContentError, SpeechContentKind,
     SpeechContentSelection, FINGERPRINT_VERSION,
+};
+pub use export::{
+    export_clip, resolve_export_links, resolve_contained_path, ExportError, ExportLinkReport,
+    ExportOutcome, ExportRequest, ExportedClipRecord, ExportedContentRecord, ResolvedAudioLink,
+    SpeechExportManifest, AUDIO_SUBDIRECTORY, SHORT_FINGERPRINT_LEN,
+    SPEECH_EXPORT_MANIFEST_SCHEMA_VERSION,
 };
 pub use generate::{
     generate_clip, to_adapter_request, GenerateOutcome, GenerationError, GenerationInput,
@@ -110,6 +117,12 @@ pub struct SpeechWarning {
 impl SpeechWarning {
     /// 未验证 Voice Profile 的 warning code。
     pub const UNVERIFIED_CODE: &'static str = "SPEECH_VOICE_UNVERIFIED";
+    /// 常规导出省略某条音频链接的 warning code（音频是可选的，主体导出仍成功）。
+    pub const EXPORT_AUDIO_OMITTED_CODE: &'static str = "SPEECH_AUDIO_LINK_OMITTED";
+    /// 常规导出读不到可信 Speech Export Manifest 的 warning code。
+    pub const EXPORT_MANIFEST_UNUSABLE_CODE: &'static str = "SPEECH_EXPORT_MANIFEST_UNUSABLE";
+    /// 非权威 export locator 投影没能更新的 warning code。
+    pub const EXPORT_LOCATOR_STALE_CODE: &'static str = "SPEECH_EXPORT_LOCATOR_STALE";
     /// 刷新失败、正在展示旧缓存目录时的 warning code。
     pub const STALE_CATALOG_CODE: &'static str = "SPEECH_VOICE_CATALOG_STALE";
     /// 账号目录三组全缺、当前没有任何可用音色时的 warning code。

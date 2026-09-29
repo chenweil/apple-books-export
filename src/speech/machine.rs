@@ -597,6 +597,126 @@ fn play_reason(error: &crate::speech::PlayError) -> &'static str {
     }
 }
 
+/// `speech export --json` 的成功响应。
+#[derive(Debug, Serialize)]
+pub struct SpeechExportResponse {
+    /// 与现有 Machine JSON 协议一致的 schema 版本。
+    pub schema_version: u32,
+    /// 结构化收据。
+    pub receipt: SpeechExportReceipt,
+}
+
+/// `speech export` 的收据：已校验的导出事实。
+///
+/// 只含稳定身份、相对路径、checksum、大小、格式和导出时间；**不包含** Speech Text、
+/// API Key 或供应商原始响应。
+#[derive(Debug, Serialize)]
+pub struct SpeechExportReceipt {
+    /// 稳定操作名。
+    pub operation: &'static str,
+    /// 完整 clip ID。
+    pub clip_id: String,
+    /// 书籍稳定 ID。
+    pub asset_id: String,
+    /// Annotation 稳定 ID。
+    pub annotation_id: String,
+    /// 内容部分。
+    pub content_kind: &'static str,
+    /// 相对书籍导出根目录的路径。
+    pub relative_path: String,
+    /// 已校验音频的绝对路径。
+    pub path: String,
+    /// 音频字节的 SHA-256。
+    pub sha256: String,
+    /// 音频字节数。
+    pub size_bytes: u64,
+    /// 音频格式。
+    pub format: &'static str,
+    /// 导出时间。
+    pub exported_at: String,
+    /// 该内容部分当前唯一 active 的 clip ID。
+    pub active_clip_id: String,
+    /// 目标文件字节一致、直接复用而没有重写。
+    pub reused: bool,
+    /// 本次显式替换了内容不同的已有文件。
+    pub replaced: bool,
+    /// 恒为 `false`：任何 export 路径都不联系 Speech Provider。
+    pub provider_called: bool,
+    /// 非致命 warning。
+    pub warnings: Vec<SpeechWarning>,
+}
+
+impl SpeechExportResponse {
+    /// 把导出 use case 结果转成稳定的 Machine JSON envelope。
+    pub fn new(outcome: &crate::speech::ExportOutcome) -> Self {
+        Self {
+            schema_version: SCHEMA_VERSION,
+            receipt: SpeechExportReceipt {
+                operation: "export",
+                clip_id: outcome.clip_id.clone(),
+                asset_id: outcome.asset_id.clone(),
+                annotation_id: outcome.annotation_id.clone(),
+                content_kind: outcome.content_kind.as_str(),
+                relative_path: outcome.relative_path.clone(),
+                path: outcome.audio_path.to_string_lossy().into_owned(),
+                sha256: outcome.audio_sha256.clone(),
+                size_bytes: outcome.audio_size_bytes,
+                format: "mp3",
+                exported_at: outcome.exported_at.clone(),
+                active_clip_id: outcome.active_clip_id.clone(),
+                reused: outcome.reused,
+                replaced: outcome.replaced,
+                provider_called: false,
+                warnings: outcome.warnings.clone(),
+            },
+        }
+    }
+}
+
+/// 把导出失败映射成稳定的 Machine JSON envelope。
+///
+/// 导出路径上没有任何 provider 能力，因此 `details` 只记录本地事实：冲突路径、
+/// manifest 判定原因或被占用的 clip。
+pub fn export_error_response(error: &crate::speech::ExportError) -> MachineError {
+    let mut details = serde_json::Map::new();
+    details.insert("reason".to_string(), json!(export_reason(error)));
+    if let crate::speech::ExportError::OutputFileExists { relative_path, .. } = error {
+        details.insert("relative_path".to_string(), json!(relative_path));
+    }
+    if let crate::speech::ExportError::ManifestInvalid { detail, .. } = error {
+        details.insert("manifest_detail".to_string(), json!(detail));
+    }
+    if let crate::speech::ExportError::CacheCorrupt { path, .. } = error {
+        details.insert("path".to_string(), json!(path.to_string_lossy()));
+    }
+    if let crate::speech::ExportError::ClipNotFound { clip_id } = error {
+        details.insert("clip_id".to_string(), json!(clip_id));
+    }
+    if let crate::speech::ExportError::InvalidClipId(clip_id) = error {
+        details.insert("field".to_string(), json!("clip_id"));
+        details.insert("value".to_string(), json!(clip_id));
+    }
+    machine_error(
+        error.machine_code(),
+        error.message(),
+        error.remediation(),
+        Value::Object(details),
+    )
+}
+
+/// 导出失败的稳定原因串。
+fn export_reason(error: &crate::speech::ExportError) -> &'static str {
+    match error {
+        crate::speech::ExportError::Storage(..) => "storage_unavailable",
+        crate::speech::ExportError::InvalidClipId(..) => "invalid_clip_id",
+        crate::speech::ExportError::ClipNotFound { .. } => "clip_not_found",
+        crate::speech::ExportError::CacheCorrupt { .. } => "cache_corrupt",
+        crate::speech::ExportError::ManifestInvalid { .. } => "manifest_invalid",
+        crate::speech::ExportError::OutputFileExists { .. } => "output_file_exists",
+        crate::speech::ExportError::ClipInUse => "clip_in_use",
+    }
+}
+
 /// profile 校验失败：`SPEECH_PROFILE_INVALID` + 字段级 `details`。
 pub fn profile_invalid(error: &ProfileError) -> MachineError {
     machine_error(

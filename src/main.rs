@@ -245,6 +245,25 @@ enum SpeechCommands {
         json: bool,
     },
 
+    /// 把一个已校验的 Cached Speech Clip 原子复制到书籍导出目录并更新导出清单（不联网）
+    Export {
+        /// 完整 clip ID（64 位小写 sha256 hex）
+        #[arg(long, value_name = "CLIP_ID")]
+        clip_id: String,
+
+        /// 已选择书籍的导出根目录（不是 assets/audio/ 本身）
+        #[arg(long, value_name = "BOOK_EXPORT_DIRECTORY")]
+        output: PathBuf,
+
+        /// 显式允许替换同一路径上内容不同的音频
+        #[arg(long)]
+        overwrite: bool,
+
+        /// 以稳定的机器可读 JSON 输出
+        #[arg(long)]
+        json: bool,
+    },
+
     /// 管理本地 Cached Speech Clip（可淘汰缓存与无有效音频的阻塞门）
     Cache {
         #[command(subcommand)]
@@ -546,6 +565,12 @@ async fn cmd_speech(command: SpeechCommands) -> anyhow::Result<()> {
             cmd_speech_generate(arguments).await
         }
         SpeechCommands::Play { clip_id, json } => cmd_speech_play(&clip_id, json),
+        SpeechCommands::Export {
+            clip_id,
+            output,
+            overwrite,
+            json,
+        } => cmd_speech_export(&clip_id, &output, overwrite, json),
         SpeechCommands::Cache { command } => match command {
             SpeechCacheCommands::Status { json: true } => {
                 finish_machine(speech_cache_status_json());
@@ -878,6 +903,66 @@ fn cmd_speech_play(clip_id: &str, json: bool) -> anyhow::Result<()> {
     println!("  Clip ID: {}", outcome.clip_id);
     println!("  Source: {}", outcome.source.as_str());
     println!("  Audio: {} ({} ms)", outcome.audio_path.display(), outcome.audio_duration_ms);
+    Ok(())
+}
+
+/// `speech export`：把已校验的 Cached Speech Clip 原子复制到书籍导出目录并提交 manifest。
+///
+/// 任何路径都不联网；`speech export` 也**从不修改已有 Markdown**——音频链接由下一次
+/// 常规 Markdown/Obsidian 导出读取 manifest 后生成。
+fn cmd_speech_export(
+    clip_id: &str,
+    output: &std::path::Path,
+    overwrite: bool,
+    json: bool,
+) -> anyhow::Result<()> {
+    let store = match speech_store() {
+        Ok(store) => store,
+        Err(error) => {
+            if json {
+                fail_machine(speech_machine::error_response(&error));
+            }
+            return Err(speech_error(error));
+        }
+    };
+    let request = speech::ExportRequest {
+        store,
+        clip_id: clip_id.to_string(),
+        book_export_root: output.to_path_buf(),
+        overwrite,
+    };
+    // guard 在整个导出期间持有（locks/<clip_id>.export），Drop 时释放。
+    let (outcome, _guard) =
+        speech::export_clip(request, chrono::Utc::now()).map_err(|error| {
+            if json {
+                fail_machine(speech_machine::export_error_response(&error));
+            }
+            anyhow::anyhow!("{}", error.message())
+        })?;
+
+    if json {
+        let document = serde_json::to_string(&speech_machine::SpeechExportResponse::new(&outcome))
+            .unwrap_or_else(|error| {
+                fail_machine(MachineError::protocol_serialization_failed(error.to_string()))
+            });
+        finish_machine(Ok(document));
+        return Ok(());
+    }
+    println!(
+        "Speech Clip 已{}",
+        if outcome.reused { "复用导出" } else { "导出" }
+    );
+    println!("  Content: {}", outcome.content_kind.as_str());
+    println!("  Clip ID: {}", outcome.clip_id);
+    println!("  Audio: {}", outcome.relative_path);
+    println!("  Active: {}", outcome.active_clip_id);
+    if outcome.replaced {
+        println!("  已按 --overwrite 替换同一路径上内容不同的音频");
+    }
+    println!("  下一次常规 Markdown/Obsidian 导出会写入该音频的相对链接");
+    for warning in &outcome.warnings {
+        println!("  [{}] {}", warning.code, warning.message);
+    }
     Ok(())
 }
 
@@ -1282,24 +1367,26 @@ fn cmd_export_json(
     });
     let export_format = ExportFormat::from(format);
     let llm_results = vec![None; annotations.len()];
-    let generated_files = apple_books_exporter::export_book_checked(
-        &book,
-        &annotations,
-        &llm_results,
-        &output_dir,
-        export_format,
-        overwrite,
-    )
-    .map_err(|error| match error {
-        ExportWriteError::OutputFileExists(path) => MachineError::output_file_exists(&path),
-        ExportWriteError::Other(error) => MachineError::output_unwritable(error.to_string()),
-    })?;
+    let export_outcome =
+        apple_books_exporter::export_book_checked_with_speech(
+            &book,
+            &annotations,
+            &llm_results,
+            &output_dir,
+            export_format,
+            overwrite,
+        )
+        .map_err(|error| match error {
+            ExportWriteError::OutputFileExists(path) => MachineError::output_file_exists(&path),
+            ExportWriteError::Other(error) => MachineError::output_unwritable(error.to_string()),
+        })?;
     serde_json::to_string(&ExportResponse::new(
         &book,
         annotations.len(),
         export_format,
         &output_dir,
-        &generated_files,
+        &export_outcome.files,
+        &export_outcome.speech,
     ))
     .map_err(|error| MachineError::protocol_serialization_failed(error.to_string()))
 }

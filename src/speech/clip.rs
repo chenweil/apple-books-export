@@ -13,7 +13,9 @@ use serde::{Deserialize, Serialize};
 pub const FINGERPRINT_VERSION: u32 = 1;
 
 /// 一个 Speech Clip 朗读的内容部分。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// 派生顺序也用于导出 manifest 里 `(annotation_id, content_kind)` 的稳定排序键。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SpeechContentKind {
     /// 只读 `Annotation.selected_text`。

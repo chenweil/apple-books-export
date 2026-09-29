@@ -1,5 +1,6 @@
 //! Stable machine-readable protocol for CLI consumers.
 
+use crate::speech::SpeechWarning;
 use crate::{cfi::extract_chapter_title, Annotation, Book};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
@@ -281,6 +282,12 @@ pub struct ExportReceipt {
     pub format: &'static str,
     pub output_directory: String,
     pub generated_files: Vec<String>,
+    /// 已写入的相对音频链接（只有用户显式 `speech export` 过才有）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub audio_links: Vec<String>,
+    /// Speech 音频是可选的：缺失或校验失败只产生 warning，主体导出不失败。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<SpeechWarning>,
 }
 
 impl ExportResponse {
@@ -290,6 +297,7 @@ impl ExportResponse {
         format: crate::ExportFormat,
         output_directory: &std::path::Path,
         generated_files: &[std::path::PathBuf],
+        speech: &crate::exporter::SpeechExportLinks,
     ) -> Self {
         Self {
             schema_version: SCHEMA_VERSION,
@@ -306,6 +314,8 @@ impl ExportResponse {
                     .iter()
                     .map(|path| path.to_string_lossy().into_owned())
                     .collect(),
+                audio_links: speech.written.clone(),
+                warnings: speech.warnings.clone(),
             },
         }
     }
