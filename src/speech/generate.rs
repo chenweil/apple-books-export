@@ -1660,22 +1660,31 @@ mod tests {
         assert_eq!(counters.synthesis.load(Ordering::SeqCst), 1);
 
         // 另一个 writer 先持锁：第二个调用因此排队等待，而不是碰巧串行完成。
-        let holder = {
+        // 持锁方用 channel 确认「锁已经在手」后才放行测试，等待方因此一定排队；
+        // 锁的释放由一个独立计时器触发，与等待方的返回解耦，避免互相死等。
+        let (holder, held) = {
             let cache = ClipCache::new(store.clone());
             let clip_id = clip_id_of(SpeechContentKind::Highlight);
-            std::thread::spawn(move || {
+            let (held_sender, held) = std::sync::mpsc::channel();
+            let holder = std::thread::spawn(move || {
                 let lock =
                     ClipLock::acquire(&cache, &clip_id, now()).expect("hold the writer lock");
-                std::thread::sleep(std::time::Duration::from_millis(200));
+                held_sender.send(()).expect("report the held lock");
+                std::thread::sleep(std::time::Duration::from_millis(300));
                 drop(lock);
-            })
+            });
+            (holder, held)
         };
-        std::thread::sleep(std::time::Duration::from_millis(25));
+        held.recv().expect("the writer lock is held");
 
         let (catalog_fetch, synthesize, waiter_counters) =
             fake(Ok(success_response("trace-waiter")));
+        let mut waiting_input = input(store.clone(), SpeechContentKind::Highlight);
+        // 持锁方在等待方拿到终态错误后才释放锁，因此把等待上限缩短到秒级：
+        // 测试不必真的等生产默认的 20 秒，也不会把「不自动重放」的边界拖长。
+        waiting_input.lock_timeout = Some(std::time::Duration::from_secs(5));
         let waited = generate_clip(
-            input(store.clone(), SpeechContentKind::Highlight),
+            waiting_input,
             Some("test-key".to_string()),
             now(),
             catalog_fetch,
@@ -1684,7 +1693,6 @@ mod tests {
         .await
         .expect_err("a queued waiter must not start a second provider request");
 
-        holder.join().expect("join the lock holder");
         assert_eq!(waited.machine_code(), "SPEECH_PROVIDER_FAILED");
         assert_eq!(waited.reason_code(), "provider_failed");
         assert_eq!(waited.outcome(), "failed");
@@ -1715,6 +1723,7 @@ mod tests {
         )
         .await
         .expect("an explicit generate is a new user action");
+        holder.join().expect("join the lock holder");
         assert_eq!(retried.source, SpeechClipSource::Provider);
         assert_ne!(
             retried.attempt_id.as_deref(),

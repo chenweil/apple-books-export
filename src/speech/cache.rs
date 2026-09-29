@@ -1766,17 +1766,21 @@ mod tests {
     fn a_queued_writer_lock_reports_that_it_waited() {
         let (_home, cache) = cache();
         let clip_id = "7".repeat(64);
-        let holder = {
+        // 持锁方确认「锁已经在手」后才放行，因此第二个调用方一定排队，不依赖时序假设。
+        let (holder, held) = {
             let cache = cache.clone();
             let clip_id = clip_id.clone();
-            std::thread::spawn(move || {
+            let (held_sender, held) = std::sync::mpsc::channel();
+            let holder = std::thread::spawn(move || {
                 let lock =
                     ClipLock::acquire(&cache, &clip_id, now()).expect("hold the writer lock");
+                held_sender.send(()).expect("report the held lock");
                 std::thread::sleep(std::time::Duration::from_millis(150));
                 drop(lock);
-            })
+            });
+            (holder, held)
         };
-        std::thread::sleep(std::time::Duration::from_millis(25));
+        held.recv().expect("the writer lock is held");
 
         let queued = ClipLock::acquire(&cache, &clip_id, now()).expect("acquire after the writer");
         assert!(
