@@ -442,7 +442,7 @@ fn run_export(
     }
 
     let (relative_path, reused, replaced) =
-        place_audio(root, &mut manifest, request, &ready, &source)?;
+        place_audio(root, &manifest, request, &ready, &source)?;
 
     let record = ExportedClipRecord {
         clip_id: request.clip_id.clone(),
@@ -544,8 +544,7 @@ fn place_audio(
     if let Some(existing) = manifest.path_of_clip(&request.clip_id) {
         let existing = existing.to_string();
         let path = resolve_contained_path(root, &existing)?;
-        if let Some(current) = read_if_same_content(&path, &source.sha256)? {
-            let _ = current;
+        if read_if_same_content(&path, &source.sha256)?.is_some() {
             return Ok((existing, true, false));
         }
         // 记录在案但文件缺失或被用户改过：只有显式 --overwrite 才恢复它。
@@ -775,9 +774,14 @@ pub fn relative_path_for(
 /// 把 manifest 里的相对路径解析成导出根目录内的绝对路径。
 ///
 /// 这是安全边界：manifest 是磁盘上的输入，因此必须防住 `..`、绝对路径和 symlink。
-/// 规则是逐段检查——只接受普通文件名段，拒绝绝对路径、`.`/`..` 段，并且路径上**任何**
-/// 一段是符号链接就整体拒绝（不做「解析后再看是否还在根内」这种跟随链接的检查）。
-/// 解析完成后仍然规范化一次根目录，确认结果确实在根内。
+/// 规则是逐段检查，只接受 [`Component::Normal`] 段：
+///
+/// - `..`、绝对根与盘符前缀一律拒绝（`Path::components()` 保证 `..` 只会以
+///   [`Component::ParentDir`] 出现，绝不会伪装成普通文件名段）；
+/// - 路径上**任何**一段是符号链接就整体拒绝——不做「跟随链接后再看是否还在根内」，
+///   因为那会把一次 TOCTOU 检查变成可被换链绕过的检查；
+/// - 中间的 `.` 由 `Path::components()` 规范化掉（结果仍在根内），开头的 `.` 则显式拒绝，
+///   让 manifest 里的路径保持唯一规范化形式。
 pub fn resolve_contained_path(root: &Path, relative_path: &str) -> Result<PathBuf, ExportError> {
     if relative_path.is_empty() {
         return Err(ExportError::ManifestInvalid {
@@ -795,12 +799,6 @@ pub fn resolve_contained_path(root: &Path, relative_path: &str) -> Result<PathBu
     for component in Path::new(relative_path).components() {
         match component {
             Component::Normal(segment) => {
-                if segment == ".." || segment == "." {
-                    return Err(ExportError::ManifestInvalid {
-                        reason: "the Speech Export Manifest escapes the export root",
-                        detail: format!("relative_path={relative_path} contains a path traversal segment"),
-                    });
-                }
                 current.push(segment);
                 // 逐段拒绝 symlink：manifest 不得通过链接把读或写带出导出根。
                 match fs::symlink_metadata(&current) {
@@ -823,7 +821,7 @@ pub fn resolve_contained_path(root: &Path, relative_path: &str) -> Result<PathBu
                     }
                 }
             }
-            // `..`、绝对根、前缀盘符全部拒绝。
+            // `..`、绝对根、盘符前缀全部拒绝。
             Component::ParentDir | Component::RootDir | Component::Prefix(..) => {
                 return Err(ExportError::ManifestInvalid {
                     reason: "the Speech Export Manifest escapes the export root",
@@ -1134,12 +1132,21 @@ mod tests {
             resolve_contained_path(root, "a\0b"),
             Err(ExportError::ManifestInvalid { .. })
         ));
-        // `.` 段被路径迭代器规范化掉，因此结果仍在根内（不是逃逸，也不是必须拒绝的形状）。
+        // 中间的 `.` 被规范化掉（仍在根内）；开头的 `.` 显式拒绝，保持唯一规范形式。
         assert_eq!(
             resolve_contained_path(root, "assets/./audio/x.mp3")
                 .expect("normalized"),
             root.join("assets/audio/x.mp3")
         );
+        assert!(matches!(
+            resolve_contained_path(root, "./assets/audio/x.mp3"),
+            Err(ExportError::ManifestInvalid { .. })
+        ));
+        // `..` 只以 ParentDir 出现，因此这一段必然被拒绝。
+        assert!(matches!(
+            resolve_contained_path(root, "assets/../../escape.mp3"),
+            Err(ExportError::ManifestInvalid { .. })
+        ));
 
         // symlink：即使它指向导出根内部也拒绝——manifest 不允许依赖链接解析。
         let outside = tempfile::tempdir().expect("outside");

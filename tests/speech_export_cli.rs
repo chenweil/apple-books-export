@@ -902,7 +902,10 @@ fn a_missing_exported_audio_becomes_a_warning_not_a_failed_export() {
     let note = fixture.main_note();
     assert!(!note.contains(&relative), "no dangling link is written");
     assert!(note.contains("> 高亮正文"), "the reading note is still complete");
-    assert!(value["receipt"]["generated_files"].as_array().expect("files").len() >= 1);
+    assert!(!value["receipt"]["generated_files"]
+        .as_array()
+        .expect("files")
+        .is_empty());
     // 常规导出不修复文件、不修改 manifest。
     assert!(!fixture.book_export_root().join(&relative).exists());
     assert_eq!(fixture.manifest()["records"][0]["active_clip_id"], clip_id.as_str());
