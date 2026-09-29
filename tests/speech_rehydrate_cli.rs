@@ -117,7 +117,7 @@ fn silent_mp3(frames: usize) -> Vec<u8> {
     for _ in 0..frames {
         bytes.extend_from_slice(&[0xFF, 0xFB, 0x98, 0x0C]);
         let length = 144 * 128_000 / 32_000;
-        bytes.extend(std::iter::repeat(0u8).take(length - 4));
+        bytes.resize(length, 0);
     }
     bytes
 }
@@ -647,7 +647,7 @@ fn a_rehydrated_clip_is_then_reused_as_a_cache_hit() {
 #[test]
 fn regenerate_still_calls_the_provider_instead_of_rehydrating() {
     let fixture = Fixture::new();
-    let (clip_id, exported) = generated_and_exported(&fixture, "trace-28-3");
+    let (_clip_id, exported) = generated_and_exported(&fixture, "trace-28-3");
     let exported_bytes = std::fs::read(&exported).expect("exported audio");
     let root = fixture.book_export_root();
 
@@ -722,7 +722,7 @@ fn play_falls_back_to_a_verified_active_exported_clip() {
         .join("locks")
         .join(format!("{clip_id}.play"))
         .exists());
-    assert!(std::fs::read(&exported).expect("exported audio").len() > 0);
+    assert!(!std::fs::read(&exported).expect("exported audio").is_empty());
 }
 
 /// 被用户改写过的导出文件不是有效 clip：`play` 失败并解释原因，绝不播放它。
@@ -1248,7 +1248,7 @@ fn machine_play_from_an_export_changes_no_clip_or_attempt_state() {
         .speech_state_files()
         .into_iter()
         .filter(|(path, _)| !path.starts_with(&clips_dir))
-        .filter(|(path, _)| !path.starts_with(&fixture.locator_path()))
+        .filter(|(path, _)| !path.starts_with(fixture.locator_path()))
         .collect();
 
     let provider = provider_with_catalog_and_synthesis("trace-28-15-play");
@@ -1272,7 +1272,7 @@ fn machine_play_from_an_export_changes_no_clip_or_attempt_state() {
         .speech_state_files()
         .into_iter()
         .filter(|(path, _)| !path.starts_with(&clips_dir))
-        .filter(|(path, _)| !path.starts_with(&fixture.locator_path()))
+        .filter(|(path, _)| !path.starts_with(fixture.locator_path()))
         .collect();
     assert_eq!(
         after, before,

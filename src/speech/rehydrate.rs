@@ -262,7 +262,7 @@ fn verify_candidate(
         detail,
     };
 
-    let manifest = match SpeechExportManifest::load(&export_root) {
+    let manifest = match SpeechExportManifest::load(export_root) {
         Ok(Some(manifest)) => manifest,
         Ok(None) => {
             return Err(reject(
@@ -391,17 +391,16 @@ fn verify_candidate(
     let clip = matched;
 
     // 路径 containment：复用 #27 的 guard 语义（逐段拒绝 `..`、绝对根与 symlink）。
-    let audio_path =
-        resolve_contained_path(&export_root, &clip.relative_path).map_err(|error| {
-            reject(
-                "path_not_contained",
-                format!(
-                    "the recorded relative path {} was rejected: {}",
-                    clip.relative_path,
-                    error.message()
-                ),
-            )
-        })?;
+    let audio_path = resolve_contained_path(export_root, &clip.relative_path).map_err(|error| {
+        reject(
+            "path_not_contained",
+            format!(
+                "the recorded relative path {} was rejected: {}",
+                clip.relative_path,
+                error.message()
+            ),
+        )
+    })?;
 
     let bytes = match fs::read(&audio_path) {
         Ok(bytes) => bytes,
@@ -518,7 +517,7 @@ mod tests {
     /// 一个可解析的最小 MP3。
     fn silent_mp3() -> Vec<u8> {
         let mut bytes = vec![0xFF, 0xFB, 0x98, 0x0C];
-        bytes.extend(std::iter::repeat(0u8).take(144 * 128_000 / 32_000 - 4));
+        bytes.resize(144 * 128_000 / 32_000, 0);
         bytes
     }
 
