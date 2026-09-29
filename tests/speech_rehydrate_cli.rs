@@ -1281,3 +1281,38 @@ fn machine_play_from_an_export_changes_no_clip_or_attempt_state() {
     assert_eq!(fixture.attempt_files(), attempts_before);
     assert!(!clips_dir.join(&clip_id).exists());
 }
+
+/// human 模式（不带 `--json`）也走同一个本地恢复路径：0 次 provider 调用，且不打印原文。
+#[test]
+fn human_generate_rehydrates_from_an_export_root_without_a_provider_call() {
+    let fixture = Fixture::new();
+    let (clip_id, _) = generated_and_exported(&fixture, "trace-28-16");
+    let root = fixture.book_export_root();
+
+    let provider = provider_with_catalog_and_synthesis("trace-28-16-human");
+    let output = fixture.run_with(
+        &[
+            "speech",
+            "generate",
+            "1",
+            "--annotation",
+            "1",
+            "--content",
+            "highlight",
+            "--export-root",
+            root.to_str().expect("root"),
+        ],
+        &provider,
+        Some(TEST_KEY),
+    );
+    assert_zero_connections(&provider.finish(), "speech generate (human)");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("export_rehydration"), "{stdout}");
+    assert!(stdout.contains(&clip_id), "{stdout}");
+    assert!(!stdout.contains("高亮正文"), "human output must not print the text");
+}
