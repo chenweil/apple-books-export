@@ -3,8 +3,7 @@
 Rust 版本 Apple Books 笔记导出工具，提供 CLI、只读 TUI 和 Agent Data Skill，可导出笔记、高亮、书签为 Markdown 文件，并支持 AI 增强和图片卡片生成。
 
 当前 `main` 是 Headless Mainline：默认入口是 Rust CLI、Read-only TUI 和
-Agent Data Skill。Tauri Legacy GUI 源码仍保留，但不属于默认文档、构建或
-发布路径。
+Agent Data Skill，图形界面是 AppKit。Tauri Legacy GUI 源码已删除。
 
 ## 功能
 
@@ -563,7 +562,8 @@ Apple Books 的笔记数据存储在：
 - **后端**: Rust CLI + rusqlite (bundled)
 - **TUI**: Bun + OpenTUI
 - **Agent Data Skill**: 仓库内 `apple-books-export-rust` Skill
-- **Legacy GUI**: Tauri 2 + Svelte 5（源码保留,不默认构建/发布）
+- **图形界面**: AppKit (Swift)，随包分发 canonical Rust CLI
+- **Legacy GUI**: Tauri 2 + Svelte 5（源码已删除，回滚锚点 `legacy/tauri-gui-mainline`）
 - **数据库**: rusqlite (bundled)
 - **HTTP**: reqwest + tokio
 - **图片**: image + rusttype

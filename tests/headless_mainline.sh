@@ -67,6 +67,7 @@ for removed_path in \
   'src-tauri' \
   'svelte.config.js' \
   'vite.config.ts' \
+  'tsconfig.json' \
   'package.json' \
   'package-lock.json'; do
   if [[ -e "$ROOT_DIR/$removed_path" ]]; then
@@ -215,6 +216,19 @@ for text in \
     printf 'missing README deprecation text: %s\n' "$text" >&2
     exit 1
   fi
+done
+
+# Requiring the tag name proves the ref is mentioned, not that the surrounding
+# prose agrees with the tree. A document can satisfy every check above while
+# still telling the reader the source is retained, so the retained-source
+# phrasing is rejected outright. CONTEXT.md is included because it is the live
+# domain glossary that every agent is instructed to read as current state.
+for doc in "$README" "$AGENTS" "$ROOT_DIR/CONTEXT.md"; do
+  while IFS= read -r stale_claim; do
+    printf '%s still claims the Tauri source is retained: %s\n' \
+      "$(basename "$doc")" "$stale_claim" >&2
+    exit 1
+  done < <(grep -En '源码(仍)?保留|source is retained|source remains|remains in source' "$doc" || true)
 done
 
 # A removed script must not still be documented as a working command. The
