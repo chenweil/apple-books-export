@@ -46,6 +46,14 @@ final class SpeechPanelViewController: NSViewController {
     /// Stored rather than local so a later addition of another action has one
     /// obvious place to go, and so the probe can see the whole action row.
     private let buttonsStack = NSStackView()
+    /// Re-runs the load, for a panel that opened before the key was stored or
+    /// that hit a transient failure. Without it the panel's state is frozen at
+    /// whatever the first `load()` found, and the only way to see the change is
+    /// to close the panel -- which, before `closePanel`, it could not do.
+    private let recheckButton = NSButton(frame: .zero)
+    /// The way out. A sheet presented with `presentAsSheet` has no title bar of
+    /// its own, so nothing else dismisses it: without this the panel is a trap.
+    private let closeButton = NSButton(frame: .zero)
 
     // State
     private var catalog: SpeechVoiceCatalog?
@@ -57,6 +65,32 @@ final class SpeechPanelViewController: NSViewController {
     /// The contract's hard cap, mirrored so the panel can refuse before
     /// spending a round trip on a request the CLI would reject locally.
     private static let maximumCharacters = 10_000
+
+    /// A sheet takes its size from the view controller, and this panel was the
+    /// only sheet in the app that never declared one.
+    ///
+    /// Without it the width came from the content: every wrapping label in the
+    /// stack reports its full single-line width as its intrinsic width, so a
+    /// single long highlight opened a sheet wider than the display, with the
+    /// voice pickers and the generate button pushed off screen. The probe never
+    /// caught it because its fixture text was nine characters long.
+    ///
+    /// Sized to the widest row -- 音色 plus a 200pt and a 260pt popup plus
+    /// padding -- rather than to the parent window, and clamped to the visible
+    /// frame so the sheet cannot run off a small display either.
+    /// ShareCardEditorViewController sets its size the same way.
+    private static let preferredSize = NSSize(width: 600, height: 500)
+
+    /// Never larger than what the display can actually show. Falls back to the
+    /// declared size when there is no screen to measure, which is the case in
+    /// some headless contexts.
+    private static func panelSize() -> NSSize {
+        guard let visible = NSScreen.main?.visibleFrame else { return preferredSize }
+        return NSSize(
+            width: min(preferredSize.width, visible.width - 80),
+            height: min(preferredSize.height, visible.height - 80)
+        )
+    }
 
     init(
         book: Book,
@@ -71,6 +105,7 @@ final class SpeechPanelViewController: NSViewController {
         self.player = player
         self.hasCredential = hasCredential
         super.init(nibName: nil, bundle: nil)
+        preferredContentSize = Self.panelSize()
     }
 
     required init?(coder: NSCoder) {
@@ -180,10 +215,29 @@ final class SpeechPanelViewController: NSViewController {
                         identifier: "speech.play")
         configureButton(regenerateButton, title: "重新生成（再次计费）",
                         action: #selector(regenerate), identifier: "speech.regenerate")
+        configureButton(recheckButton, title: "重新检查",
+                        action: #selector(recheck), identifier: "speech.recheck")
+        configureButton(closeButton, title: "关闭",
+                        action: #selector(closePanel), identifier: "speech.close")
         playButton.isEnabled = false
         regenerateButton.isHidden = true
 
-        for button in [generateButton, playButton, regenerateButton] {
+        // Both stay enabled whatever the load found. Gating them on the same
+        // state as generate would make the panel unrecoverable exactly when it
+        // is broken: the buttons that fix a bad state would themselves be
+        // disabled by that bad state.
+        recheckButton.isEnabled = true
+        closeButton.isEnabled = true
+
+        // macOS puts the dismissing action on the trailing edge, so a flexible
+        // gap pushes 关闭 away from the generation actions.
+        let gap = NSView()
+        gap.translatesAutoresizingMaskIntoConstraints = false
+        gap.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        gap.widthAnchor.constraint(greaterThanOrEqualToConstant: 24).isActive = true
+
+        for button in [generateButton, playButton, regenerateButton, recheckButton,
+                       gap, closeButton] {
             buttonsStack.addArrangedSubview(button)
         }
         buttonsStack.orientation = NSUserInterfaceLayoutOrientation.horizontal
@@ -281,6 +335,13 @@ final class SpeechPanelViewController: NSViewController {
             profile = profileResponse.receipt.profile
             let receipt = catalogResponse.receipt
 
+            // Cleared before the two messages below rather than after, so a
+            // successful load cannot leave the previous failure's text on
+            // screen. That matters once the panel can be re-checked: without
+            // this, configuring the key and pressing 重新检查 would repopulate
+            // the pickers while still claiming no key is configured.
+            statusLabel.stringValue = ""
+
             // A stale catalog is usable but says so, because ADR 0007 warns it
             // is not a guarantee of what the account may use.
             if receipt.stale {
@@ -299,6 +360,38 @@ final class SpeechPanelViewController: NSViewController {
         } catch {
             statusLabel.stringValue = error.localizedDescription
         }
+    }
+
+    /// Re-runs the whole load so a panel that opened before the key was stored,
+    /// or that hit a transient failure, can recover where it stands.
+    ///
+    /// The previous result is dropped rather than merged: a catalog and an
+    /// error from the failed attempt must not survive into the next one, or the
+    /// pickers and the message would describe two different states.
+    @objc private func recheck() {
+        catalog = nil
+        profile = nil
+        statusLabel.stringValue = "正在重新检查…"
+        Task { await load() }
+    }
+
+    /// The way out of the sheet.
+    ///
+    /// `presentAsSheet` attaches the panel to the window without giving it a
+    /// title bar, so there is no close box and no menu item that reaches it.
+    @objc private func closePanel() {
+        if let presentingViewController {
+            presentingViewController.dismiss(self)
+        } else {
+            view.window?.close()
+        }
+    }
+
+    /// Escape closes the panel, like every other sheet. The inherited
+    /// implementation is NSResponder's, which does nothing, so without this the
+    /// key silently did nothing.
+    override func cancelOperation(_ sender: Any?) {
+        closePanel()
     }
 
     private func applyProfileDefaults() {
