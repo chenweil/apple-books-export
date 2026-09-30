@@ -121,13 +121,24 @@ enum RustCLIError: LocalizedError, Sendable {
 /// launching a process or touching a user's Apple Books database.  Production
 /// instances use `Process` and keep the process streams separate.
 final class RustCLIClient: @unchecked Sendable {
-    typealias Runner = @Sendable (URL, [String]) async throws -> RustCLICommandResult
+    /// Runs one CLI invocation.
+    ///
+    /// The environment is a parameter because `speech` cannot receive a
+    /// credential any other way: there is no flag that sets an API key, the
+    /// config file stores only the *name* of the variable to read, and no
+    /// receipt ever echoes the value. The only channel is the environment the
+    /// child process is launched with. Passing it here rather than reading a
+    /// keychain from inside the runner keeps the default runner a plain process
+    /// launch and keeps the credential out of the arguments, where it would be
+    /// visible in `ps` output.
+    typealias Runner = @Sendable (URL, [String], [String: String]?) async throws -> RustCLICommandResult
 
     private static let supportedSchemaVersion = 1
-    private static let defaultRunner: Runner = { executableURL, arguments in
+    private static let defaultRunner: Runner = { executableURL, arguments, environment in
         try await RustCLIProcessRunner.run(
             executableURL: executableURL,
-            arguments: arguments
+            arguments: arguments,
+            environment: environment
         )
     }
     private let executableURL: URL?
@@ -269,16 +280,32 @@ final class RustCLIClient: @unchecked Sendable {
     }
 
     private func run(arguments: [String]) async throws -> RustCLICommandResult {
+        let result = try await execute(arguments: arguments, environment: nil)
+        guard result.terminationStatus == 0 else {
+            throw parseCommandError(result)
+        }
+        return result
+    }
+
+    /// Launch the CLI and hand back the raw streams and exit status, without
+    /// interpreting a non-zero status.
+    ///
+    /// Speech needs this because its failure JSON carries `details.outcome`,
+    /// which is the only thing that says whether the provider was billed.
+    /// `parseCommandError` keeps `code`, `message` and `remediation` but drops
+    /// `details`, so routing a speech failure through the ordinary path would
+    /// discard the one field the retry decision depends on. Launch problems
+    /// still throw, because a missing binary is not a speech result.
+    func execute(
+        arguments: [String],
+        environment: [String: String]?
+    ) async throws -> RustCLICommandResult {
         guard let executableURL else {
             throw RustCLIError.binaryNotFound(path: "(未配置)")
         }
 
         do {
-            let result = try await runner(executableURL, arguments)
-            guard result.terminationStatus == 0 else {
-                throw parseCommandError(result)
-            }
-            return result
+            return try await runner(executableURL, arguments, environment)
         } catch let error as RustCLIError {
             throw error
         } catch {
@@ -486,16 +513,22 @@ private struct ExportReceiptDTO: Decodable {
 private enum RustCLIProcessRunner {
     static func run(
         executableURL: URL,
-        arguments: [String]
+        arguments: [String],
+        environment: [String: String]? = nil
     ) async throws -> RustCLICommandResult {
         try await Task.detached(priority: .userInitiated) {
-            try runSynchronously(executableURL: executableURL, arguments: arguments)
+            try runSynchronously(
+                executableURL: executableURL,
+                arguments: arguments,
+                environment: environment
+            )
         }.value
     }
 
     private static func runSynchronously(
         executableURL: URL,
-        arguments: [String]
+        arguments: [String],
+        environment: [String: String]?
     ) throws -> RustCLICommandResult {
         guard FileManager.default.isExecutableFile(atPath: executableURL.path) else {
             throw RustCLIError.binaryNotFound(path: executableURL.path)
@@ -508,6 +541,18 @@ private enum RustCLIProcessRunner {
         process.arguments = arguments
         process.standardOutput = stdoutPipe
         process.standardError = stderrPipe
+        if let environment {
+            // Merged, never replaced. A child launched with only the injected
+            // variables would lose HOME, PATH and TMPDIR, and the speech
+            // contract puts its own state under
+            // ~/Library/Application Support/books-exporter/speech -- so a
+            // replaced environment would look like a missing profile rather
+            // than like a broken launch.
+            process.environment = ProcessInfo.processInfo.environment.merging(
+                environment,
+                uniquingKeysWith: { _, injected in injected }
+            )
+        }
 
         do {
             try process.run()
