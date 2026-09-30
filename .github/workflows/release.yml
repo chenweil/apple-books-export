@@ -179,15 +179,39 @@ jobs:
             echo "::error::the shipped bundle version does not match the tag"
             exit 1
           fi
-          file "$MOUNT_DIR/Books Exporter.app/Contents/MacOS/BooksExporter"
-          file "$MOUNT_DIR/Books Exporter.app/Contents/Resources/apple-books-exporter"
+          if [ -z "$bundle_build" ]; then
+            echo "::error::the bundle carries no CFBundleVersion"
+            exit 1
+          fi
+          # `file` alone only prints the architecture, so a wrong-arch binary
+          # inside the bundle would ship green. This leg is the arm64 one, so
+          # both executables have to be arm64.
+          for binary in \
+            "$MOUNT_DIR/Books Exporter.app/Contents/MacOS/BooksExporter" \
+            "$MOUNT_DIR/Books Exporter.app/Contents/Resources/apple-books-exporter"; do
+            if [ ! -f "$binary" ]; then
+              echo "::error::missing from the bundle: $binary"
+              exit 1
+            fi
+            file "$binary"
+            if ! file "$binary" | grep -q 'arm64'; then
+              echo "::error::expected an arm64 binary in the arm64 bundle: $binary"
+              exit 1
+            fi
+          done
 
       - name: Upload AppKit artifact
         if: matrix.label == 'macos-arm64'
         uses: actions/upload-artifact@v4
         with:
           name: appkit-aarch64-${{ steps.tag.outputs.version }}
-          path: dist/Books-Exporter-*.dmg
+          # ADR 0004 requires a stable Release to carry both the DMG and a valid
+          # latest.json; the manifest is what the app's update check reads, so
+          # shipping the DMG alone would leave version discovery permanently
+          # unresolved.
+          path: |
+            dist/Books-Exporter-*.dmg
+            dist/latest.json
           if-no-files-found: error
           retention-days: 7
 
@@ -220,11 +244,11 @@ jobs:
       - name: Generate SHA256 checksums (files only)
         working-directory: dist
         run: |
-          # Both the CLI binaries and the AppKit disk image are downloadable
-          # artifacts, so both are checksummed. The update manifest is not: it
-          # is consumed by the app's update check, not verified by a downloader.
+          # Everything a user downloads is checksummed, including the AppKit DMG
+          # and the update manifest.
           find . -maxdepth 2 -type f \
-            \( -name "apple-books-exporter-*" -o -name "Books-Exporter-*.dmg" \) \
+            \( -name "apple-books-exporter-*" -o -name "Books-Exporter-*.dmg" \
+               -o -name "latest.json" \) \
             -exec sha256sum {} \; | tee SHA256SUMS
           echo ""
           echo "=== 文件清单 ==="
@@ -241,13 +265,14 @@ jobs:
           generate_release_notes: true
           draft: false
           prerelease: ${{ contains(steps.version.outputs.VERSION, '-') }}  # 含 - 视为预发布
-          # The AppKit DMG is globbed rather than named: only the arm64 matrix
-          # leg produces one today, so listing it literally would trip
+          # The AppKit artifacts are globbed rather than named: only the arm64
+          # matrix leg produces them, so listing them literally would trip
           # fail_on_unmatched_files.
           files: |
             dist/apple-books-exporter-aarch64-apple-darwin
             dist/apple-books-exporter-x86_64-apple-darwin
             dist/Books-Exporter-*.dmg
+            dist/latest.json
             dist/SHA256SUMS
           fail_on_unmatched_files: true
           overwrite_files: true
