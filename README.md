@@ -163,7 +163,7 @@ swift test                # 47 项 XCTest
 
 ```bash
 # tag 版本号必须与 Cargo.toml 的 version 完全一致
-git tag v0.3.3 && git push --tags
+git tag v0.3.4-rc1 && git push --tags
 ```
 
 流水线**在任何构建之前**先校验 tag 与 `Cargo.toml` 是否一致，不一致直接失败。
