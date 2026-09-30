@@ -16,6 +16,21 @@ BUILD_VERSION="${BUILD_VERSION:-9}"
 MINIMUM_MACOS_VERSION="${MINIMUM_MACOS_VERSION:-14.0}"
 ARCHITECTURE="${ARCHITECTURE:-$(uname -m)}"
 RELEASE_NOTES="${RELEASE_NOTES:-}"
+# The channel is derived from the version rather than fixed, because
+# UpdateChecker only accepts a manifest whose channel is exactly "stable"
+# (ADR 0004). Hardcoding "stable" meant a prerelease build shipped a manifest
+# that passed that check and was offered to every stable user as an update,
+# which is the outcome ADR 0004 rules out: only the stable channel takes part
+# in comparison, and a prerelease must not appear on it. Deriving it makes the
+# lie unrepresentable instead of merely discouraged.
+#
+# SemVer: the "-" introduces a prerelease, "+" only adds build metadata. So
+# 0.3.4-rc1 is a prerelease, and 0.3.4+build is not.
+if [[ "$APP_VERSION" == *-* ]]; then
+    CHANNEL="prerelease"
+else
+    CHANNEL="stable"
+fi
 RELEASE_URL="${RELEASE_URL:-https://github.com/chenweil/apple-books-export/releases/tag/v${APP_VERSION}}"
 APP_NAME="Books Exporter.app"
 DMG_NAME="Books-Exporter-${APP_VERSION}-unsigned.dmg"
@@ -78,7 +93,7 @@ UPDATE_MANIFEST_PATH="$DIST_DIR/$UPDATE_MANIFEST_NAME"
 
 plutil -create xml1 "$MANIFEST_PLIST"
 plutil -insert schema_version -integer 1 "$MANIFEST_PLIST"
-plutil -insert channel -string "stable" "$MANIFEST_PLIST"
+plutil -insert channel -string "$CHANNEL" "$MANIFEST_PLIST"
 plutil -insert version -string "$APP_VERSION" "$MANIFEST_PLIST"
 plutil -insert minimum_macos -string "$MINIMUM_MACOS_VERSION" "$MANIFEST_PLIST"
 plutil -insert architectures -array "$MANIFEST_PLIST"
