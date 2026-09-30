@@ -30,6 +30,57 @@ for text in "${required_release_text[@]}"; do
   fi
 done
 
+# Every matrix leg needs a timeout. A leg whose runner label no longer exists is
+# not rejected by Actions: it is accepted, then sits queued with no runner
+# assigned, forever. The rehearsal tag on 2026-09-30 proved it -- the x86_64
+# leg had been queued for 80 minutes against a retired label, and because the
+# release job declares `needs: build` that stall blocks the entire release
+# while looking like nothing is wrong. A timeout converts the hang into a
+# visible red run.
+if ! grep -Eq '^[[:space:]]*timeout-minutes:[[:space:]]*[0-9]+' "$RELEASE_WORKFLOW"; then
+  printf 'the release build job has no timeout, so a stalled leg blocks the release silently\n' >&2
+  exit 1
+fi
+
+# An x86_64 target needs an Intel runner, and a bare `macos-<version>` label is
+# no longer one: macos-latest, macos-14 and macos-15 are all arm64, and Intel
+# is spelled `macos-<version>-intel`. Checking the shape rather than an
+# allow-list of live labels is deliberate -- an allow-list of runner labels
+# rots the moment GitHub retires another image, and a guard that silently
+# blocks a legitimate new image is worse than no guard. This shape invariant
+# is the thing that actually broke: `macos-13` was Intel when it was written.
+python3 - "$RELEASE_WORKFLOW" <<'PY'
+import re
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    text = handle.read()
+
+# Each matrix include entry is a block of `key: value` lines under a dash.
+entries = re.findall(r'(?m)^\s*-\s+(\S+)\s*:\s*(\S+)\s*$(.*?)(?=^\s*-\s+\S+\s*:|\Z)',
+                     text, re.S)
+seen_x86 = False
+for first_key, first_value, body in entries:
+    fields = {first_key: first_value}
+    for key, value in re.findall(r'(?m)^\s*([\w-]+)\s*:\s*(\S+)\s*$', body):
+        fields.setdefault(key, value)
+    if fields.get("target") != "x86_64-apple-darwin":
+        continue
+    seen_x86 = True
+    runner = fields.get("os", "")
+    if not runner.endswith("-intel"):
+        print(f"release.yml: the x86_64-apple-darwin leg runs on '{runner}', "
+              f"which is not an Intel runner. Since macos-latest/macos-14/macos-15 "
+              f"are arm64, only a 'macos-<version>-intel' label builds x86_64.",
+              file=sys.stderr)
+        sys.exit(1)
+
+if not seen_x86:
+    print("release.yml: no matrix leg builds x86_64-apple-darwin, so the "
+          "Intel CLI binary would never ship", file=sys.stderr)
+    sys.exit(1)
+PY
+
 # These forbid the Tauri release path coming back.
 #
 # `.dmg` used to be in this list on its own, because the only disk image the
