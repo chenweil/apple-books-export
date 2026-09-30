@@ -128,20 +128,96 @@ if grep -Fq -- '.dmg' "$RELEASE_WORKFLOW"; then
   fi
 fi
 
-# The manifest's channel must be derived from the version, not fixed to
-# "stable". UpdateChecker accepts only channel == "stable", so a fixed value
-# makes a prerelease release look like a stable one and get offered to every
-# stable user -- which ADR 0004 rules out. The release workflow asserts the
-# correct behaviour against the produced file; this is the cheap CI-time lint
-# that catches the wrong form coming back, on every push rather than only at
-# release time. It is a text check and does not pretend to be more than one.
-PACKAGE_DMG="$ROOT_DIR/appkit/Scripts/package-dmg.sh"
-if grep -Fq -- 'channel -string "stable"' "$PACKAGE_DMG"; then
-  printf 'package-dmg.sh pins the manifest channel to "stable"; a prerelease release would be advertised to stable users\n' >&2
+# The manifest's channel must describe the version it ships with. It used to be
+# a literal "stable" in package-dmg.sh, so a prerelease release published a
+# manifest claiming to be stable.
+#
+# This is a behavioural test, not a lint. An earlier version of this guard
+# grepped for the absence of one literal, and five of six mutations that
+# reintroduced the defect -- including the same bug reformatted, and a comment
+# naming the right words -- sailed past it. Grepping script text cannot tell the
+# bug from the fix. So the rules live in one script that both the packaging
+# step and the release workflow call, and those rules are executed here against
+# a table of versions.
+CHANNEL_SCRIPT="$ROOT_DIR/appkit/Scripts/release-channel.sh"
+if [[ ! -x "$CHANNEL_SCRIPT" ]]; then
+  printf 'missing %s; the channel rules must have exactly one implementation\n' "$CHANNEL_SCRIPT" >&2
   exit 1
 fi
-if ! grep -Eq 'CHANNEL="(stable|prerelease)"' "$PACKAGE_DMG"; then
-  printf 'package-dmg.sh no longer derives a manifest channel from the version\n' >&2
+
+# version:expected. The +build cases are the interesting ones: SemVer build
+# metadata is ignored for precedence, so 1.0.0+build-1 is a stable version that
+# happens to contain a hyphen, and a naive "contains a -" test misclassifies it.
+channel_cases=(
+  '0.3.3:stable'
+  '0.3.4-rc1:prerelease'
+  '0.3.4-rc.1:prerelease'
+  '1.0.0:stable'
+  '0.3.4+build7:stable'
+  '1.0.0+build-1:stable'
+  '1.0.0-alpha+build7:prerelease'
+  '1.0.0-x-y-z:prerelease'
+)
+for case_spec in "${channel_cases[@]}"; do
+  version="${case_spec%%:*}"
+  expected="${case_spec##*:}"
+  actual="$(bash "$CHANNEL_SCRIPT" "$version" 2>/dev/null || printf '<error>')"
+  if [[ "$actual" != "$expected" ]]; then
+    printf 'channel for %s should be %s, got %s\n' "$version" "$expected" "$actual" >&2
+    exit 1
+  fi
+done
+
+# The packaging script must take its channel from that one implementation and
+# hand it to plutil unchanged. These two are invocation-shape checks, not
+# behaviour: package-dmg.sh builds with swift and shells out to hdiutil, so
+# running it just to watch what channel it passes to plutil is not something
+# this guard should do -- it would be a release build in a contract check. They
+# are
+# anchored to the exact line and the exact variable name on purpose: a looser
+# "does the file mention release-channel.sh" check passed a mutation that
+# renamed the variable to MANIFEST_CHANNEL, leaving plutil to write an empty
+# channel, and a comment containing the required words satisfied one outright.
+# Comment lines are stripped first so the explanation above the assignment
+# cannot satisfy them.
+assignment_pattern='^CHANNEL="\$\(bash .*release-channel\.sh.*\)"[[:space:]]*$'
+plutil_pattern='^plutil -insert channel -string "\$CHANNEL" "\$MANIFEST_PLIST"[[:space:]]*$'
+
+body="$(grep -v '^[[:space:]]*#' "$ROOT_DIR/appkit/Scripts/package-dmg.sh")"
+if ! grep -Eq "$assignment_pattern" <<<"$body"; then
+  printf 'package-dmg.sh does not assign CHANNEL from release-channel.sh\n' >&2
+  exit 1
+fi
+if ! grep -Eq "$plutil_pattern" <<<"$body"; then
+  printf 'package-dmg.sh does not pass CHANNEL through to plutil verbatim\n' >&2
+  exit 1
+fi
+
+# The release workflow has to *call* that same script, in both places it
+# classifies a version, rather than carrying its own copy of the rule. Two call
+# sites, because there are two jobs: the arm64 leg derives the expected channel
+# to check the produced manifest against, and the release job decides whether
+# the Release is flagged as a prerelease. A divergent inline copy would let a
+# prerelease publish as a full release with the local guard still green --
+# both sides would be deriving their expectation from the same wrong rule.
+# The literal invocation is required: a comment naming the script would
+# satisfy a looser check, which is the mistake this file has made before.
+for call_site in \
+  'bash appkit/Scripts/release-channel.sh "$APP_VERSION"' \
+  'bash appkit/Scripts/release-channel.sh "${{ steps.version.outputs.VERSION }}"'; do
+  if ! grep -Fq -- "$call_site" "$RELEASE_WORKFLOW"; then
+    printf 'release.yml does not invoke release-channel.sh: %s\n' "$call_site" >&2
+    exit 1
+  fi
+done
+
+# The Release's prerelease flag has to read that step's output, not re-derive
+# the answer with an inline expression. `contains(VERSION, '-')` is the rule
+# this replaced, and it disagreed with the shipped manifest for a version like
+# 1.0.0+build-1, which has a hyphen in its build metadata but is stable.
+if ! grep -Eq 'prerelease:[[:space:]]*\$\{\{[[:space:]]*steps\.channel\.outputs\.is_prerelease' \
+     "$RELEASE_WORKFLOW"; then
+  printf 'the Release prerelease flag does not come from the shared channel step\n' >&2
   exit 1
 fi
 

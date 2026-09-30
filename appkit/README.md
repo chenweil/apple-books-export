@@ -79,6 +79,12 @@ APP_VERSION=0.3.4 BUILD_VERSION=14 RELEASE_NOTES='修复版本检查' ./Scripts/
 Version Discovery 使用的 `dist/latest.json`；发布 stable 版本时把两者一起上传到
 对应 GitHub Release。
 
+`latest.json` 的 `channel` 由版本号推导，不需要手工填写：版本含 `-` 就是
+`prerelease`，否则是 `stable`（`+` 只是 SemVer 的 build metadata，不算预发布）。
+客户端只认 `channel == "stable"` 的清单，所以预发布包的清单会被客户端直接忽略 ——
+这是有意为之。规则实现在 `Scripts/release-channel.sh`，打包脚本和发布流水线共用
+同一份，`tests/headless_mainline.sh` 会对它做表驱动测试。
+
 安装时把 DMG 里的 `Books Exporter.app` 拖到 `/Applications`。首次打开若被
 Gatekeeper 拦截，优先在 Finder 中右键应用并选择“打开”；必要时：
 

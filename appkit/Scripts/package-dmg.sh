@@ -16,21 +16,17 @@ BUILD_VERSION="${BUILD_VERSION:-9}"
 MINIMUM_MACOS_VERSION="${MINIMUM_MACOS_VERSION:-14.0}"
 ARCHITECTURE="${ARCHITECTURE:-$(uname -m)}"
 RELEASE_NOTES="${RELEASE_NOTES:-}"
-# The channel is derived from the version rather than fixed, because
-# UpdateChecker only accepts a manifest whose channel is exactly "stable"
-# (ADR 0004). Hardcoding "stable" meant a prerelease build shipped a manifest
-# that passed that check and was offered to every stable user as an update,
-# which is the outcome ADR 0004 rules out: only the stable channel takes part
-# in comparison, and a prerelease must not appear on it. Deriving it makes the
-# lie unrepresentable instead of merely discouraged.
+# One implementation of the channel rules, shared with the release workflow and
+# with tests/headless_mainline.sh, so the rules only have to be changed in one
+# place.
 #
-# SemVer: the "-" introduces a prerelease, "+" only adds build metadata. So
-# 0.3.4-rc1 is a prerelease, and 0.3.4+build is not.
-if [[ "$APP_VERSION" == *-* ]]; then
-    CHANNEL="prerelease"
-else
-    CHANNEL="stable"
-fi
+# This used to be a literal `channel -string "stable"`, which meant a
+# prerelease release published a manifest claiming to be on the stable
+# channel. That was a false statement inside a public artifact, not a live
+# update-safety hole: UpdateChecker separately refuses any manifest whose
+# version is a prerelease, so a prerelease was never actually offered to
+# stable users. See release-channel.sh for the full reasoning.
+CHANNEL="$(bash "$APPKIT_DIR/Scripts/release-channel.sh" "$APP_VERSION")"
 RELEASE_URL="${RELEASE_URL:-https://github.com/chenweil/apple-books-export/releases/tag/v${APP_VERSION}}"
 APP_NAME="Books Exporter.app"
 DMG_NAME="Books-Exporter-${APP_VERSION}-unsigned.dmg"

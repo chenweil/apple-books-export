@@ -179,14 +179,20 @@ jobs:
             ls -la dist/ 2>/dev/null || true
             exit 1
           fi
-          # The update manifest travels with the DMG and the app reads it to
-          # decide whether a newer version exists. Two things about it are load
-          # bearing: it has to name this tag, and it must not offer a
-          # prerelease on the stable channel. UpdateChecker accepts only
-          # channel == "stable", so a manifest that hardcodes it would push
-          # every rc to every stable user -- the exact outcome ADR 0004 rules
-          # out. Checking the produced file, not the script's text, is what
-          # makes this an assertion rather than a lint.
+          # The update manifest is a sibling release asset, not content of
+          # the image: package-dmg.sh writes the DMG first and only then
+          # emits latest.json into dist/. The app reads it to decide whether a
+          # newer version exists, so two things about it matter: it has to name
+          # this tag, and its channel has to be the one the tag implies.
+          #
+          # The channel used to be a literal "stable", so a prerelease
+          # published a manifest claiming to be stable. That was wrong, but it
+          # was not a live update-safety hole -- UpdateChecker independently
+          # refuses any manifest whose version is a prerelease, so prereleases
+          # were never offered to stable users either way. Asserting against
+          # the produced file, rather than the script's text, is what makes
+          # this a behavioural check: the bytes read here are the bytes that
+          # get uploaded and eventually downloaded.
           MANIFEST="dist/latest.json"
           if [ ! -f "$MANIFEST" ]; then
             echo "::error::the update manifest was not produced: $MANIFEST"
@@ -199,11 +205,12 @@ jobs:
             echo "::error::the manifest names $manifest_version, not the tag $APP_VERSION"
             exit 1
           fi
-          # SemVer: "-" introduces a prerelease, "+" only adds build metadata.
-          case "$APP_VERSION" in
-            *-*) expected_channel="prerelease" ;;
-            *)   expected_channel="stable" ;;
-          esac
+          # The same implementation the packaging step ran, so the expected
+          # value is derived from the version by one rule rather than two.
+          # python3 is used above to read the JSON; it is present on the macOS
+          # runner images, and this step has now run green there against a real
+          # prerelease tag (run 36656323693).
+          expected_channel="$(bash appkit/Scripts/release-channel.sh "$APP_VERSION")"
           if [ "$manifest_channel" != "$expected_channel" ]; then
             echo "::error::a $APP_VERSION build must ship on the $expected_channel channel, not $manifest_channel"
             exit 1
@@ -298,13 +305,29 @@ jobs:
         id: version
         run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
 
+      # Decided by the shared script rather than an inline `contains(...,'-')`,
+      # so the Release's prerelease flag and the shipped manifest cannot
+      # disagree about whether a version is a prerelease.
+      - name: Classify the version
+        id: channel
+        run: |
+          set -euo pipefail
+          channel="$(bash appkit/Scripts/release-channel.sh "${{ steps.version.outputs.VERSION }}")"
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+          if [ "$channel" = "prerelease" ]; then
+            echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Create / Update Release
         uses: softprops/action-gh-release@v2
         with:
           name: v${{ steps.version.outputs.VERSION }}
           generate_release_notes: true
           draft: false
-          prerelease: ${{ contains(steps.version.outputs.VERSION, '-') }}  # 含 - 视为预发布
+          # 含 prerelease 视为预发布；与打包脚本共用同一套 channel 规则
+          prerelease: ${{ steps.channel.outputs.is_prerelease == 'true' }}
           # The AppKit artifacts are globbed rather than named: only the arm64
           # matrix leg produces them, so listing them literally would trip
           # fail_on_unmatched_files.
