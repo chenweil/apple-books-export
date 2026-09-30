@@ -16,6 +16,17 @@ BUILD_VERSION="${BUILD_VERSION:-9}"
 MINIMUM_MACOS_VERSION="${MINIMUM_MACOS_VERSION:-14.0}"
 ARCHITECTURE="${ARCHITECTURE:-$(uname -m)}"
 RELEASE_NOTES="${RELEASE_NOTES:-}"
+# One implementation of the channel rules, shared with the release workflow and
+# with tests/headless_mainline.sh, so the rules only have to be changed in one
+# place.
+#
+# This used to be a literal `channel -string "stable"`, which meant a
+# prerelease release published a manifest claiming to be on the stable
+# channel. That was a false statement inside a public artifact, not a live
+# update-safety hole: UpdateChecker separately refuses any manifest whose
+# version is a prerelease, so a prerelease was never actually offered to
+# stable users. See release-channel.sh for the full reasoning.
+CHANNEL="$(bash "$APPKIT_DIR/Scripts/release-channel.sh" "$APP_VERSION")"
 RELEASE_URL="${RELEASE_URL:-https://github.com/chenweil/apple-books-export/releases/tag/v${APP_VERSION}}"
 APP_NAME="Books Exporter.app"
 DMG_NAME="Books-Exporter-${APP_VERSION}-unsigned.dmg"
@@ -78,7 +89,7 @@ UPDATE_MANIFEST_PATH="$DIST_DIR/$UPDATE_MANIFEST_NAME"
 
 plutil -create xml1 "$MANIFEST_PLIST"
 plutil -insert schema_version -integer 1 "$MANIFEST_PLIST"
-plutil -insert channel -string "stable" "$MANIFEST_PLIST"
+plutil -insert channel -string "$CHANNEL" "$MANIFEST_PLIST"
 plutil -insert version -string "$APP_VERSION" "$MANIFEST_PLIST"
 plutil -insert minimum_macos -string "$MINIMUM_MACOS_VERSION" "$MANIFEST_PLIST"
 plutil -insert architectures -array "$MANIFEST_PLIST"
