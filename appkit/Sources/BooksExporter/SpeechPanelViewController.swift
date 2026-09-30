@@ -352,6 +352,22 @@ final class SpeechPanelViewController: NSViewController {
                 statusLabel.stringValue = "音色目录为空，供应商没有返回可用音色。"
             }
 
+            // The receipt is decoded and checked and then, until this line, it
+            // was thrown away: `catalog` was only ever assigned nil, so
+            // `rebuildVoiceMenus` hit `guard let catalog else { return }` and
+            // left both pickers empty -- silently, because the guard returns
+            // without a message. The builder was exercised by nine unit tests
+            // and called from nowhere in the app.
+            //
+            // No `unavailableReason`: that argument marks the whole catalog
+            // unusable for a reason the account reported, and the panel has no
+            // such information. The stored profile being unverified is not one
+            // -- the contract validates at generation time, and the CLI does
+            // it. Passing it here would disable every row and leave
+            // `selectedVoiceID` nil, which is the same broken panel by another
+            // route.
+            catalog = SpeechVoiceCatalogBuilder.build(from: receipt)
+
             applyProfileDefaults()
             rebuildVoiceMenus()
             reloadPreview()
