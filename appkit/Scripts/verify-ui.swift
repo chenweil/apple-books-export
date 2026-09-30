@@ -5,6 +5,32 @@ import AppKit
 
 private var failures: [String] = []
 
+/// Collects the result of an async step from inside a `Task`.
+///
+/// A captured `var` would be an error under the Swift 5.10 toolchain on CI and
+/// a non-issue under 6.3 locally, which is precisely the kind of difference
+/// that only shows up in one place.
+private final class ProbeOutcome: @unchecked Sendable {
+    private let lock = NSLock()
+    private var error: String?
+
+    func record(_ work: @escaping @Sendable () async throws -> Void) async {
+        do {
+            try await work()
+        } catch {
+            lock.lock()
+            self.error = "\(error)"
+            lock.unlock()
+        }
+    }
+
+    var errorDescription: String? {
+        lock.lock()
+        defer { lock.unlock() }
+        return error
+    }
+}
+
 private func check(_ name: String, _ condition: Bool, _ detail: String) {
     print("\(condition ? "  ok  " : " FAIL ") \(name) — \(detail)")
     if !condition { failures.append(name) }
@@ -99,6 +125,109 @@ enum VerifyLayout {
         invoke(popup)
         check("修改刷新间隔立即持久化", settings.refreshInterval == .fifteenMinutes,
               settings.refreshInterval.displayName)
+
+        checkSpeechSettings(controller: controller, defaults: defaults)
+    }
+
+    /// The speech section, asserted on behaviour rather than on the presence
+    /// of controls: the property worth protecting is that the key reaches the
+    /// keychain and nothing else. A probe that only checks a text field exists
+    /// would stay green if someone switched it to a plain field and started
+    /// echoing the value, which is the failure that matters.
+    private static func checkSpeechSettings(
+        controller: SettingsViewController,
+        defaults: UserDefaults
+    ) {
+        print("\n设置页 · 语音")
+
+        guard let keyField = view(named: "settings.speech-api-key", in: controller.view) else {
+            check("设置页有语音密钥输入框", false, "找不到 settings.speech-api-key")
+            return
+        }
+        check("语音密钥输入框存在", true, "settings.speech-api-key")
+
+        check("密钥输入框是安全输入框，不是明文",
+              keyField is NSSecureTextField,
+              "\(type(of: keyField))")
+
+        guard let channel = view(named: "settings.speech-channel", in: controller.view) as? NSTextField else {
+            check("设置页显示支持渠道", false, "找不到 settings.speech-channel")
+            return
+        }
+        // ADR 0007 keeps the provider a read-only statement: SenseAudio is the
+        // first, not a choice among verified channels. A pop-up here would
+        // imply options the app has never exercised.
+        check("支持渠道是只读声明而非可选列表",
+              !controller.view.subviews.contains(where: { subview in
+                  guard let popup = subview as? NSPopUpButton else { return false }
+                  return popup.identifier?.rawValue == "settings.speech-channel"
+              }),
+              channel.stringValue)
+
+        check("支持渠道只声明已测试的那个",
+              channel.stringValue.contains("SenseAudio")
+                  && !channel.stringValue.contains("、"),
+              channel.stringValue)
+
+        guard view(named: "settings.speech-verify", in: controller.view) != nil else {
+            check("设置页有凭据验证按钮", false, "找不到 settings.speech-verify")
+            return
+        }
+        check("凭据验证按钮存在", true, "settings.speech-verify")
+
+        guard view(named: "settings.speech-status", in: controller.view) != nil,
+              view(named: "settings.speech-note", in: controller.view) != nil else {
+            check("设置页有语音状态与说明", false, "缺少 settings.speech-status 或 settings.speech-note")
+            return
+        }
+        check("语音状态与说明存在", true, "status + note")
+
+        // Behavioural, and it has to actually drive the store. Comparing the
+        // key set before and after *doing nothing* would pass forever, which
+        // is the same failure mode as a guard that cannot fail.
+        let defaultsBefore = Set(defaults.dictionaryRepresentation().keys)
+        let keychain = InMemoryKeychainStore()
+        let profileJSON = """
+        {"schema_version":1,"receipt":{"operation":"profile_show","profile":\
+        {"provider":"senseaudio","model":"sensenova-tts-2.0","voice_id":"male_0004_a",\
+        "emotion_label":null,"style_label":null,"speed":1.0,"volume":1.0,"pitch":0,\
+        "verification_status":"unverified","verified_at":null,\
+        "audio":{"format":"mp3","sample_rate":32000,"bitrate":128000,"channel":2}},\
+        "api_key_env":"SENSEAUDIO_API_KEY","config_path":null,"warnings":[]}}
+        """
+        let client = RustCLIClient(
+            executableURL: URL(fileURLWithPath: "/tmp/apple-books-exporter"),
+            runner: { _, _, _ in .success(profileJSON) }
+        )
+        let resolver = SpeechCredentialResolver(client: client, keychain: keychain)
+        // A reference box rather than a captured `var`: the Swift 5.10 toolchain
+        // on the CI runner diagnoses a captured mutable variable inside `Task`
+        // as an error, while 6.3 locally accepts it. Writing the result through
+        // a final Sendable box satisfies both, so this check is not the thing
+        // that decides whether the probe compiles.
+        let outcome = ProbeOutcome()
+        let stored = DispatchSemaphore(value: 0)
+        Task {
+            await outcome.record { try await resolver.store("probe-secret-value") }
+            stored.signal()
+        }
+        _ = stored.wait(timeout: .now() + 10)
+
+        check("写入密钥成功", outcome.errorDescription == nil, outcome.errorDescription ?? "无错误")
+        check("密钥存进钥匙串并可取回",
+              (try? keychain.secret(forKey: "SENSEAUDIO_API_KEY")) == "probe-secret-value",
+              "InMemoryKeychainStore round-trip")
+
+        let defaultsAfter = Set(defaults.dictionaryRepresentation().keys)
+        let leaked = defaultsAfter.subtracting(defaultsBefore)
+        check("保存密钥不会新增任何 UserDefaults 键",
+              leaked.isEmpty,
+              "\(leaked.sorted())")
+
+        let field = keyField as? NSSecureTextField
+        check("密钥输入框没有预填内容",
+              (field?.stringValue ?? "").isEmpty,
+              field?.stringValue ?? "")
     }
 
     private static func checkSplitView() {

@@ -184,7 +184,7 @@ final class RustCLIServiceTests: XCTestCase {
     ) -> RustCLIClient {
         RustCLIClient(
             executableURL: URL(fileURLWithPath: "/tmp/apple-books-exporter"),
-            runner: { _, arguments in
+            runner: { _, arguments, _ in
                 capture.record(arguments)
                 return result(arguments)
             }
