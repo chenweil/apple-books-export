@@ -614,12 +614,89 @@ enum VerifyLayout {
                             "speech.characters", "speech.voice-group",
                             "speech.voice-variant", "speech.speed", "speech.volume",
                             "speech.pitch", "speech.cost-notice", "speech.status",
-                            "speech.generate", "speech.play", "speech.regenerate"])
+                            "speech.generate", "speech.play", "speech.regenerate",
+                            "speech.recheck", "speech.close"])
         let unexpected = Set(actionIdentifiers).subtracting(expected)
         check("面板没有多余的动作控件（无第二次确认）", unexpected.isEmpty,
               "unexpected=\(unexpected.sorted())")
         check("面板动作控件齐全", expected.subtracting(Set(actionIdentifiers)).isEmpty,
               "missing=\(expected.subtracting(Set(actionIdentifiers)).sorted())")
+
+        // The panel must be able to get out of its own way. A sheet presented
+        // with `presentAsSheet` gets no title bar, so no close box and no menu
+        // item reaches it; without an explicit control the window is a trap.
+        let close = view(named: "speech.close", in: panel.view) as? NSButton
+        let recheck = view(named: "speech.recheck", in: panel.view) as? NSButton
+        check("面板有关闭入口", close != nil, "speech.close")
+        check("面板有重新检查入口", recheck != nil, "speech.recheck")
+        // Gating these on the same state as generate would disable the very
+        // controls that repair a broken state, so they must survive a panel
+        // that failed to load anything.
+        check("关闭入口不被状态门控", close?.isEnabled == true,
+              "enabled=\(close?.isEnabled.description ?? "nil")")
+        check("重新检查不被状态门控", recheck?.isEnabled == true,
+              "enabled=\(recheck?.isEnabled.description ?? "nil")")
+
+        checkPanelFitsTheScreen(book: book)
+    }
+
+    /// The panel is a sheet, so its size comes from the view controller. Sized
+    /// from content instead, it grows with the text: every wrapping label
+    /// reports its full single-line width as its intrinsic width, so one long
+    /// highlight opened a sheet wider than the display, with the voice pickers
+    /// and the generate button off screen.
+    ///
+    /// The fixture above is nine characters and can never reproduce that, which
+    /// is why this check builds its own annotation from text long enough to
+    /// matter rather than reusing the one the rest of the probe runs on.
+    private static func checkPanelFitsTheScreen(book: Book) {
+        print("\n语音面板尺寸有界")
+        let longText = String(
+            repeating: "幻觉是指模型输出的数据看似准确，但实际上不正确或不以训练模型的输入数据为基础的情况。",
+            count: 6
+        )
+        let panel = makePanel(book: book, annotation: Annotation(
+            id: "h-long", type: .highlight, chapterTitle: "第一章", locationInfo: "",
+            contentText: longText, noteText: nil,
+            createdAt: Date(timeIntervalSinceReferenceDate: 0)
+        ))
+        panel.loadView()
+
+        let size = panel.preferredContentSize
+        check("面板声明了尺寸而非由内容撑开", size.width > 0 && size.height > 0,
+              "preferredContentSize=\(size)")
+
+        // The bound is the display, not a number someone likes.
+        guard let screen = NSScreen.main else {
+            check("面板不超出屏幕", false, "没有可测量的屏幕，探针无法验证该主张")
+            return
+        }
+        let visible = screen.visibleFrame
+        check("面板不超出屏幕",
+              size.width <= visible.width && size.height <= visible.height,
+              "panel=\(size) screen=\(visible.size)")
+
+        // ... and wide enough for the widest row, so "fix it" cannot mean
+        // "shrink it until the pickers fall off the other side".
+        panel.view.frame = NSRect(origin: .zero, size: size)
+        panel.view.layoutSubtreeIfNeeded()
+        let bounds = panel.view.bounds
+        func inside(_ view: NSView) -> Bool {
+            let frame = view.convert(view.bounds, to: panel.view)
+            return frame.minX >= -0.5 && frame.minY >= -0.5
+                && frame.maxX <= bounds.maxX + 0.5 && frame.maxY <= bounds.maxY + 0.5
+                && frame.width > 0 && frame.height > 0
+        }
+        for name in ["speech.voice-group", "speech.voice-variant",
+                     "speech.generate", "speech.close", "speech.recheck"] {
+            guard let control = view(named: name, in: panel.view) else {
+                check("控件在面板内：\(name)", false, "找不到控件")
+                continue
+            }
+            let frame = control.convert(control.bounds, to: panel.view)
+            check("控件在面板内：\(name)", inside(control),
+                  "frame=\(frame) panel=\(bounds.size)")
+        }
     }
 
     private static func makePanel(book: Book, annotation: Annotation) -> SpeechPanelViewController {
