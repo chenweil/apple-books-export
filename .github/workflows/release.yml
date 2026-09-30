@@ -179,6 +179,35 @@ jobs:
             ls -la dist/ 2>/dev/null || true
             exit 1
           fi
+          # The update manifest travels with the DMG and the app reads it to
+          # decide whether a newer version exists. Two things about it are load
+          # bearing: it has to name this tag, and it must not offer a
+          # prerelease on the stable channel. UpdateChecker accepts only
+          # channel == "stable", so a manifest that hardcodes it would push
+          # every rc to every stable user -- the exact outcome ADR 0004 rules
+          # out. Checking the produced file, not the script's text, is what
+          # makes this an assertion rather than a lint.
+          MANIFEST="dist/latest.json"
+          if [ ! -f "$MANIFEST" ]; then
+            echo "::error::the update manifest was not produced: $MANIFEST"
+            exit 1
+          fi
+          manifest_channel="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["channel"])' "$MANIFEST")"
+          manifest_version="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' "$MANIFEST")"
+          echo "manifest version=$manifest_version channel=$manifest_channel"
+          if [ "$manifest_version" != "$APP_VERSION" ]; then
+            echo "::error::the manifest names $manifest_version, not the tag $APP_VERSION"
+            exit 1
+          fi
+          # SemVer: "-" introduces a prerelease, "+" only adds build metadata.
+          case "$APP_VERSION" in
+            *-*) expected_channel="prerelease" ;;
+            *)   expected_channel="stable" ;;
+          esac
+          if [ "$manifest_channel" != "$expected_channel" ]; then
+            echo "::error::a $APP_VERSION build must ship on the $expected_channel channel, not $manifest_channel"
+            exit 1
+          fi
           MOUNT_DIR="$(mktemp -d)"
           hdiutil attach "$DMG" -mountpoint "$MOUNT_DIR" -nobrowse -quiet
           trap 'hdiutil detach "$MOUNT_DIR" -quiet' EXIT

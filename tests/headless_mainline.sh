@@ -128,6 +128,23 @@ if grep -Fq -- '.dmg' "$RELEASE_WORKFLOW"; then
   fi
 fi
 
+# The manifest's channel must be derived from the version, not fixed to
+# "stable". UpdateChecker accepts only channel == "stable", so a fixed value
+# makes a prerelease release look like a stable one and get offered to every
+# stable user -- which ADR 0004 rules out. The release workflow asserts the
+# correct behaviour against the produced file; this is the cheap CI-time lint
+# that catches the wrong form coming back, on every push rather than only at
+# release time. It is a text check and does not pretend to be more than one.
+PACKAGE_DMG="$ROOT_DIR/appkit/Scripts/package-dmg.sh"
+if grep -Fq -- 'channel -string "stable"' "$PACKAGE_DMG"; then
+  printf 'package-dmg.sh pins the manifest channel to "stable"; a prerelease release would be advertised to stable users\n' >&2
+  exit 1
+fi
+if ! grep -Eq 'CHANNEL="(stable|prerelease)"' "$PACKAGE_DMG"; then
+  printf 'package-dmg.sh no longer derives a manifest channel from the version\n' >&2
+  exit 1
+fi
+
 # Claiming to sign is worse than not signing: there is no Developer ID identity
 # in this repository, so such a step is a false statement about the artifact.
 # Matched on the actual command forms rather than one literal, because
