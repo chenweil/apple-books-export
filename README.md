@@ -111,7 +111,7 @@ binary，也不调用 AI。
 见 [Releases](https://github.com/chenweil/apple-books-export/releases)：
 
 ```bash
-VERSION=0.3.4   # 换成 Release 里的实际版本号
+VERSION=0.3.5   # 换成 Release 里的实际版本号
 DMG=~/Downloads/Books-Exporter-${VERSION}-unsigned.dmg
 
 # 1. 挂载并拷入 Applications
@@ -196,7 +196,7 @@ swift test                # 47 项 XCTest
 
 ```bash
 # tag 版本号必须与 Cargo.toml 的 version 完全一致
-git tag v0.3.4 && git push --tags
+git tag v0.3.5 && git push --tags
 ```
 
 流水线**在任何构建之前**先校验 tag 与 `Cargo.toml` 是否一致，不一致直接失败。

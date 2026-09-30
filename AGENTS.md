@@ -121,7 +121,7 @@ Apple CoreData 时间戳从 **2001-01-01 UTC** 开始(`APPLE_EPOCH`),转换时�
 
 ```bash
 # tag 版本号必须等于 Cargo.toml 的 version
-git tag v0.3.4 && git push --tags
+git tag v0.3.5 && git push --tags
 ```
 
 校验逻辑在 `scripts/check-release-tag.sh`,发布流水线与 `tests/headless_mainline.sh`
