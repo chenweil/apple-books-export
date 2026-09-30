@@ -272,23 +272,15 @@ if ! command -v python3 >/dev/null 2>&1; then
   exit 1
 fi
 
-# Read the crate version through a pipe rather than command substitution with
-# an inline heredoc: the nested heredoc form breaks the parser here, and
-# mktemp would add a new failure mode (a full disk) that the guard did not have.
-CRATE_VERSION="$(
-  python3 -c '
-import re, sys
-with open(sys.argv[1], encoding="utf-8") as handle:
-    for line in handle:
-        # Only the [package] version, never a dependency\x27s.
-        match = re.match(r"^version\s*=\s*\"([^\"]+)\"", line)
-        if match:
-            print(match.group(1))
-            break
-    else:
-        raise SystemExit("no [package] version in Cargo.toml")
-' "$ROOT_DIR/Cargo.toml"
-)"
+# Read the crate version through the shared script, not through a parser of its
+# own. This used to be an inline regex taking the first `version = "..."` in the
+# file, with a comment claiming it read only [package] and never a dependency's
+# -- which it could not do. Putting a [workspace.package] block above [package]
+# made it return 9.9.9 while the shared script returned the right answer, so the
+# guard would have been the one component reading a different field than
+# everything it is supposed to check. A guard that re-derives the value it is
+# checking is a second implementation wearing a checker's clothes.
+CRATE_VERSION="$(bash "$ROOT_DIR/scripts/crate-version.sh")"
 
 # The workflow has to *invoke* the check, not merely mention it: a comment
 # saying "see scripts/check-release-tag.sh" satisfies a bare grep. The literal
@@ -322,6 +314,343 @@ fi
 
 if bash "$ROOT_DIR/scripts/check-release-tag.sh" 'v99.99.99' >/dev/null 2>&1; then
   printf 'check-release-tag.sh accepts a mismatched tag\n' >&2
+  exit 1
+fi
+
+# Three things read Cargo.toml's [package] version, and two of them deciding
+# differently is the failure the crate has already had once. They share
+# scripts/crate-version.sh. This checks what that script actually returns,
+# against synthetic manifests, because a guard that re-derives the answer the
+# same way the script does proves nothing.
+CRATE_VERSION_SCRIPT="$ROOT_DIR/scripts/crate-version.sh"
+if [[ ! -f "$CRATE_VERSION_SCRIPT" ]]; then
+  printf 'missing %s; the crate version must have one implementation\n' \
+    "$CRATE_VERSION_SCRIPT" >&2
+  exit 1
+fi
+
+# ...including this file. The guard's own CRATE_VERSION read is pinned the same
+# way: reverting it to a private reader is invisible whenever the two happen to
+# agree today, which is the exact condition the shared script was introduced to
+# eliminate.
+#
+# The assignment is extracted first and the pattern is the path, never the whole
+# line. An earlier version grepped this file for the entire assignment text --
+# a string that therefore also appeared inside the grep's own arguments, so the
+# assertion matched itself and could not fail. Matching against the extracted
+# line removes the file from the search space entirely, and requiring exactly
+# one assignment stops a second plain assignment from being added underneath.
+# "A second plain assignment" is the whole claim: `eval "CRATE_VERSION=..."` on
+# the next line overrides the value, adds no second '^CRATE_VERSION=', and
+# passes both assertions below. Measured, not assumed. Pinning a value in shell
+# against a determined override would need execution rather than pattern
+# matching, which is why the extraction checks the read and this one checks the
+# spelling -- each within what its own mechanism can actually enforce.
+guard_assignments="$(grep -c '^CRATE_VERSION=' "$ROOT_DIR/tests/headless_mainline.sh" || true)"
+if [[ "$guard_assignments" -ne 1 ]]; then
+  printf 'headless_mainline.sh should assign CRATE_VERSION exactly once, found %s\n' \
+    "$guard_assignments" >&2
+  exit 1
+fi
+# Matched on the invocation, not on the path appearing anywhere in the line: a
+# private reader with "# crate-version.sh" in a trailing comment passes a bare
+# substring search. The whole point is that a decoupled reader must not slip
+# through, and this is the last assertion standing in its way.
+crate_version_read="$(grep -m1 '^CRATE_VERSION=' "$ROOT_DIR/tests/headless_mainline.sh")"
+if ! grep -Eq '^CRATE_VERSION="\$\(bash .*crate-version\.sh"\)"[[:space:]]*$' \
+     <<<"$crate_version_read"; then
+  printf 'headless_mainline.sh does not read CRATE_VERSION through crate-version.sh\n' >&2
+  exit 1
+fi
+
+# The tag check has to read the manifest through that same script. Its own
+# accept/reject tests above cannot tell the difference: a version hardcoded
+# into it still accepts the current tag and still rejects v99.99.99, and passes
+# both. The call site is what has to be pinned -- though as a substring check
+# like the one below, so it too is defeated by leaving the call in place beside
+# a hardcoded value.
+if ! grep -v '^[[:space:]]*#' "$ROOT_DIR/scripts/check-release-tag.sh" \
+     | grep -Fq -- 'bash "$CRATE_VERSION_SCRIPT"'; then
+  printf 'check-release-tag.sh does not read the manifest through crate-version.sh\n' >&2
+  exit 1
+fi
+
+manifest_fixtures="$(mktemp -d)"
+trap 'rm -rf "$manifest_fixtures"' EXIT
+
+# A plain manifest returns what it declares.
+cat >"$manifest_fixtures/plain.toml" <<'FIXTURE'
+[package]
+name = "example"
+version = "1.2.3"
+edition = "2021"
+FIXTURE
+
+# The case a positional regex gets wrong: a version-looking line above
+# [package] must not be read as the crate's own version, in either direction.
+cat >"$manifest_fixtures/workspace.toml" <<'FIXTURE'
+[workspace.package]
+version = "9.9.9"
+
+[dependencies]
+serde = { version = "8.0.1" }
+
+[package]
+name = "example"
+version = "1.2.3"
+edition = "2021"
+FIXTURE
+
+# TOML allows a trailing comment and both quote styles. A parser that strips
+# '"' naively turns these into the literal 1.2.3" # bump, which then gets
+# stamped into a public artifact and offered to users as an update.
+cat >"$manifest_fixtures/comment.toml" <<'FIXTURE'
+[package]
+version = "1.2.3" # bump me
+FIXTURE
+cat >"$manifest_fixtures/single.toml" <<'FIXTURE'
+[package]
+version = '1.2.3'
+FIXTURE
+
+# Malformed input has to fail rather than answer.
+# Cargo accepts every one of these, so the fallback has to read them the way
+# tomllib does. If it does not, a manifest that builds fine fails only on a
+# machine with an older system python -- the local-versus-CI split this script
+# exists to remove, just moved inside the unifier.
+#
+# This is an enumeration of cases checked to agree, not a claim that the two
+# branches accept the same set of documents. They do not: a quoted table header
+# like ["package"] and spacing around the dot in package . version are still
+# refused by the fallback where tomllib accepts them. The fallback is a line
+# scanner and closing that gap means writing a TOML parser.
+#
+# It is also not the case that the fallback never answers a different value.
+# It does not decode TOML escape sequences, so on a manifest cargo builds
+# happily the two can disagree:
+#
+#   version = "1.0.0\u002Drc1"   cargo 1.0.0-rc1   tomllib 1.0.0-rc1
+#                                        fallback 1.0.0\u002Drc1
+#
+# What does hold, on every such case tried, is that the fallback's answer
+# contains a backslash. A backslash cannot occur in a legal semver, so the
+# answer is not a version at all: check-release-tag.sh compares it to the tag,
+# mismatches, and exits 1 with the difference printed. The release path fails
+# closed and never publishes the wrong number -- checked by running it, not by
+# reading it. The residue is narrower and worth naming: release-channel.sh fed
+# such a value returns "stable", so a prerelease could be labelled stable by a
+# developer running package-dmg.sh by hand on a machine with a pre-3.11 python.
+# That is a local packaging path, not the release workflow, and the DMG it
+# produces carries the backslash in its filename where it is visible.
+cat >"$manifest_fixtures/dotted.toml" <<'FIXTURE'
+package.version = "1.2.3"
+FIXTURE
+cat >"$manifest_fixtures/space-header.toml" <<'FIXTURE'
+[ package ]
+version = "1.2.3"
+FIXTURE
+cat >"$manifest_fixtures/header-comment.toml" <<'FIXTURE'
+[package] # the crate
+version = "1.2.3"
+FIXTURE
+cat >"$manifest_fixtures/multiline.toml" <<'FIXTURE'
+[package]
+version = """1.2.3"""
+FIXTURE
+# A `version = "..."` inside a multi-line string is a value, not a key. Reading
+# it as a key made the fallback answer 9.9.9 for a manifest cargo reads as
+# 0.0.0 -- a wrong version stamped into a public artifact. The multi-line can
+# be any key's, so the fixture uses `description`, not `version`.
+cat >"$manifest_fixtures/multiline-decoy.toml" <<'FIXTURE'
+[package]
+version = "0.0.0"
+description = """
+version = "9.9.9"
+"""
+FIXTURE
+cat >"$manifest_fixtures/multiline-spanning.toml" <<'FIXTURE'
+[package]
+version = """
+1.2.3
+"""
+FIXTURE
+# The single-quoted triple is here because it was once written as a four
+# apostrophe literal, so ''' never opened a multi-line string and every decoy below
+# passed by default. A fixture for a delimiter only discriminates if the
+# delimiter is the one the code actually compares against.
+cat >"$manifest_fixtures/single-quoted-decoy.toml" <<'FIXTURE'
+[package]
+version = "1.2.3"
+description = '''
+version = "9.9.9"
+'''
+FIXTURE
+# A fake table header inside the string would otherwise flip in_package off and
+# make the real version invisible.
+cat >"$manifest_fixtures/single-quoted-fake-header.toml" <<'FIXTURE'
+[package]
+version = "1.2.3"
+description = '''
+[dependencies]
+'''
+FIXTURE
+# A quoted key is a key.
+cat >"$manifest_fixtures/quoted-key.toml" <<'FIXTURE'
+[package]
+"version" = "1.2.3"
+FIXTURE
+# cargo normalises surrounding whitespace out of a version, so both branches
+# must strip or they disagree quietly on this.
+cat >"$manifest_fixtures/padded-multiline.toml" <<'FIXTURE'
+[package]
+version = """
+   1.2.3   """
+FIXTURE
+# Two multi-line versions goes through the collector, not the one-liner path.
+cat >"$manifest_fixtures/duplicate-multiline.toml" <<'FIXTURE'
+[package]
+version = """
+1.2.2
+"""
+version = """
+1.2.3
+"""
+FIXTURE
+
+# A dotted key after any table header is a different key, not [package].
+cat >"$manifest_fixtures/dotted-after-table.toml" <<'FIXTURE'
+[workspace]
+members = []
+
+package.version = "9.9.9"
+
+[package]
+version = "1.2.3"
+FIXTURE
+
+# A dependency table above [package] is the other direction of the same trap.
+cat >"$manifest_fixtures/deps-first.toml" <<'FIXTURE'
+[dependencies]
+serde = { version = "8.0.1" }
+
+[package]
+version = "1.2.3"
+FIXTURE
+# Defining the version twice is something cargo rejects; the fallback must not
+# answer from the first hit.
+cat >"$manifest_fixtures/duplicate.toml" <<'FIXTURE'
+package.version = "9.9.9"
+
+[package]
+version = "1.2.3"
+FIXTURE
+
+# An empty version is accepted by the TOML parser and would otherwise become a
+# blank APP_VERSION and a disk image called Books-Exporter--unsigned.dmg.
+cat >"$manifest_fixtures/empty.toml" <<'FIXTURE'
+[package]
+version = ""
+FIXTURE
+cat >"$manifest_fixtures/unquoted.toml" <<'FIXTURE'
+[package]
+version = 1.2.3.1
+FIXTURE
+cat >"$manifest_fixtures/garbage.toml" <<'FIXTURE'
+[package]
+version = "1.2.3" junk
+FIXTURE
+cat >"$manifest_fixtures/brace.toml" <<'FIXTURE'
+[package]
+version = { workspace = true }
+FIXTURE
+cat >"$manifest_fixtures/absent.toml" <<'FIXTURE'
+[workspace]
+members = []
+FIXTURE
+
+# The fallback parser, for interpreters without tomllib, runs twice over the
+# same fixtures. It is not a corner case: /usr/bin/python3 on macOS is 3.9 and
+# has no tomllib, so anyone packaging locally takes that branch, and it was
+# previously covered by nothing at all.
+no_tomllib="$manifest_fixtures/no-tomllib"
+mkdir -p "$no_tomllib"
+printf 'raise ModuleNotFoundError("blocked for testing")\n' >"$no_tomllib/tomllib.py"
+
+for parser_mode in tomllib fallback; do
+  if [[ "$parser_mode" == fallback ]]; then
+    export PYTHONPATH="$no_tomllib"
+    if python3 -c 'import tomllib' 2>/dev/null; then
+      printf 'the tomllib shim is not working; the fallback round is not testing the fallback\n' >&2
+      exit 1
+    fi
+  else
+    unset PYTHONPATH
+    # Without this the round named "tomllib" would silently run the fallback
+    # again on a runner whose python3 has no tomllib, and the tomllib path
+    # would go uncovered while the log still said it had been tested.
+    if ! python3 -c 'import tomllib' 2>/dev/null; then
+      # Skipped, not failed. A python3 without tomllib is the reason the
+      # fallback exists -- /usr/bin/python3 on macOS is 3.9 -- so refusing to
+      # run the guard there would invert its purpose. The fallback round below
+      # is the one that matters on such a machine; it is reported as skipped
+      # rather than silently passing.
+      printf 'SKIP: this python3 has no tomllib, so the tomllib parser branch is not exercised here\n' >&2
+      continue
+    fi
+  fi
+
+  # fixture:expected, because one fixture is a manifest whose correct answer
+  # is deliberately not 1.2.3.
+  for spec in \
+    'plain:1.2.3' \
+    'workspace:1.2.3' \
+    'comment:1.2.3' \
+    'single:1.2.3' \
+    'dotted:1.2.3' \
+    'space-header:1.2.3' \
+    'header-comment:1.2.3' \
+    'multiline:1.2.3' \
+    'multiline-spanning:1.2.3' \
+    'deps-first:1.2.3' \
+    'dotted-after-table:1.2.3' \
+    'multiline-decoy:0.0.0' \
+    'single-quoted-decoy:1.2.3' \
+    'single-quoted-fake-header:1.2.3' \
+    'quoted-key:1.2.3' \
+    'padded-multiline:1.2.3'; do
+    fixture="${spec%%:*}"
+    expected="${spec##*:}"
+    got="$(bash "$CRATE_VERSION_SCRIPT" "$manifest_fixtures/$fixture.toml" 2>/dev/null || printf '<error>')"
+    if [[ "$got" != "$expected" ]]; then
+      printf 'crate-version.sh (%s) read %s from the %s fixture, expected %s\n' \
+        "$parser_mode" "$got" "$fixture" "$expected" >&2
+      exit 1
+    fi
+  done
+
+  for fixture in garbage brace absent unquoted duplicate empty duplicate-multiline; do
+    if bash "$CRATE_VERSION_SCRIPT" "$manifest_fixtures/$fixture.toml" >/dev/null 2>&1; then
+      printf 'crate-version.sh (%s) accepts the malformed %s fixture\n' \
+        "$parser_mode" "$fixture" >&2
+      exit 1
+    fi
+  done
+done
+unset PYTHONPATH
+
+# The packaging script's default has to come from that script, not from a
+# literal that can go stale again. This is a substring check, not a wiring
+# check: it is satisfied by the path appearing anywhere in the file, so a
+# version restored to a literal while a dead line elsewhere still mentions the
+# script would pass. Nothing downstream catches that on this path: the workflow
+# always passes APP_VERSION explicitly, so this default branch never runs in CI
+# and the produced-manifest assertion never observes it. This check catches the
+# common case and nothing more.
+# Comment lines are stripped first so the explanation above the assignment
+# cannot satisfy it on its own.
+if ! grep -v '^[[:space:]]*#' "$ROOT_DIR/appkit/Scripts/package-dmg.sh" \
+     | grep -Fq -- 'scripts/crate-version.sh'; then
+  printf 'package-dmg.sh does not take its default version from crate-version.sh\n' >&2
   exit 1
 fi
 
