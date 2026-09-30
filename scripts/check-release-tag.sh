@@ -19,52 +19,18 @@ if ! command -v python3 >/dev/null 2>&1; then
   exit 1
 fi
 
-# Read the [package] version with a real TOML parser rather than a positional
-# regex. A regex for the first `version = "..."` inverts silently the moment the
-# manifest is restructured -- a [workspace.package] block or a table placed
-# above [package] would be read as the crate's own version, and the check would
-# pass against the wrong field. tomllib is stdlib from 3.11; older
-# interpreters fall back to a section-aware line scan rather than failing, so
-# the release does not become uncuttable on an older runner.
-crate_version() {
-  python3 - "$REPO_DIR/Cargo.toml" <<'PY'
-import sys
-
-try:
-    import tomllib
-except ModuleNotFoundError:
-    tomllib = None
-
-if tomllib is not None:
-    with open(sys.argv[1], "rb") as handle:
-        data = tomllib.load(handle)
-    version = data.get("package", {}).get("version")
-    if not isinstance(version, str):
-        raise SystemExit("Cargo.toml has no [package] version")
-    print(version)
-    raise SystemExit(0)
-
-# Fallback for Python < 3.11: track which section each line belongs to, so a
-# dependency table above [package] cannot be mistaken for it.
-in_package = False
-with open(sys.argv[1], encoding="utf-8") as handle:
-    for line in handle:
-        stripped = line.strip()
-        if stripped.startswith("[") and stripped.endswith("]"):
-            in_package = stripped == "[package]"
-            continue
-        if not in_package:
-            continue
-        key, _, value = stripped.partition("=")
-        if key.strip() == "version":
-            value = value.strip().strip('"')
-            if not value or value.startswith("{"):
-                raise SystemExit("Cargo.toml [package] version is not a literal")
-            print(value)
-            raise SystemExit(0)
-raise SystemExit("Cargo.toml has no [package] version")
-PY
-}
+# The manifest is read by scripts/crate-version.sh, which the AppKit packaging
+# script and tests/headless_mainline.sh also call, so a restructured Cargo.toml
+# cannot make this check and the packaging step read different fields.
+CRATE_VERSION_SCRIPT="$REPO_DIR/scripts/crate-version.sh"
+# Existence, not executability: the script is invoked through bash, so a lost
+# exec bit is not a problem, and reporting it as "missing" is actively
+# misleading when the real failure is something else further down.
+if [[ ! -f "$CRATE_VERSION_SCRIPT" ]]; then
+  printf 'missing %s; the crate version must have one implementation\n' \
+    "$CRATE_VERSION_SCRIPT" >&2
+  exit 1
+fi
 
 if [[ $# -lt 1 ]]; then
   printf 'usage: %s <tag>\n' "$(basename "$0")" >&2
@@ -73,7 +39,7 @@ fi
 
 tag="$1"
 tag_version="${tag#v}"
-declared="$(crate_version)"
+declared="$(bash "$CRATE_VERSION_SCRIPT")"
 
 if [[ "$tag_version" != "$declared" ]]; then
   printf 'tag must match Cargo.toml version: tag is v%s, Cargo.toml is %s\n' \

@@ -69,7 +69,7 @@ RUST_CLI_BIN=/path/to/rust-mainline/target/release/apple-books-exporter \
   ./Scripts/package-dmg.sh
 ```
 
-可以覆盖版本号与发布说明（默认 `0.1.8` / build `9`）：
+可以覆盖版本号与发布说明（`APP_VERSION` 默认取 `Cargo.toml` 的 `[package] version`，`BUILD_VERSION` 默认 `9`）：
 
 ```bash
 APP_VERSION=0.3.4 BUILD_VERSION=14 RELEASE_NOTES='修复版本检查' ./Scripts/package-dmg.sh

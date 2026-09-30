@@ -11,7 +11,34 @@ REPO_DIR="$(cd "$APPKIT_DIR/.." && pwd)"
 cd "$APPKIT_DIR"
 
 CONFIG="${CONFIG:-release}"
-APP_VERSION="${APP_VERSION:-0.1.8}"
+# The default used to be the literal 0.1.8, left over from when the AppKit app
+# carried its own hand-maintained version. Running this script with no
+# arguments therefore produced a disk image named 0.1.8 around a Rust CLI whose
+# --version reported 0.3.3 -- the exact split the release pipeline was changed
+# to eliminate, still reachable by hand. Reading the crate manifest makes the
+# local path agree with the tagged one. The pipeline passes APP_VERSION
+# explicitly anyway, and this only supplies the fallback.
+#
+# That makes scripts/crate-version.sh a runtime dependency: it is resolved
+# through $REPO_DIR, so the appkit/ tree has to sit inside the repository. It
+# always has -- this script already reads $APPKIT_DIR/Resources/Info.plist and
+# $REPO_DIR/target -- and it is the same kind of dependency as
+# Scripts/release-channel.sh below.
+APP_VERSION="${APP_VERSION:-$(bash "$REPO_DIR/scripts/crate-version.sh")}"
+# CFBundleVersion is a build number, not a version, and the release pipeline
+# passes the CI run number. Leaving it at a literal looks like an oversight, so:
+# a commit count would satisfy "must rise on every build" but a commit count is
+# not a build number, and stamping one into a public artifact would be a false
+# statement about how it was made -- the same class of claim this repository
+# keeps having to undo. ADR 0004 treats CFBundleVersion as diagnostic only, so
+# there is nothing to keep consistent with, and the checked-in Info.plist
+# template carries the same 9. The literal is a placeholder, not a claim.
+#
+# Note the template's *short* version is a different story: it still says 0.1.8
+# while the default here is now whatever Cargo.toml says. Nothing ships that
+# number -- the plist is copied and then overwritten below -- but the two are no
+# longer coincidentally aligned, so a reader comparing them will see a mismatch
+# that is expected rather than a bug.
 BUILD_VERSION="${BUILD_VERSION:-9}"
 MINIMUM_MACOS_VERSION="${MINIMUM_MACOS_VERSION:-14.0}"
 ARCHITECTURE="${ARCHITECTURE:-$(uname -m)}"
