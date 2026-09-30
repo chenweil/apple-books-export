@@ -29,8 +29,11 @@ AppKit 现在有了语音入口。它是语音的**第二个用户入口，不�
 
 ### 未覆盖的范围
 
-- **AppKit 语音路径目前只有 mock 覆盖，端到端真实验收尚未执行**。真实供应商验收按
-  ADR 0007 属显式 opt-in smoke，不在普通 CI 中运行，也不读取真实 Apple Books 内容；
+- **AppKit 语音路径目前只有 mock 覆盖，从未对真实供应商跑过**。CLI 路径曾在 2026-09-29
+  成功调用过供应商（见上文 v0.3.4），但那是 CLI 入口，**不能推断 GUI 路径可用** ——
+  真实供应商验收按 ADR 0007 属显式 opt-in smoke，不在普通 CI 中运行，也不读取真实
+  Apple Books 内容。AppKit 这一段还多一层：GUI 只在 build 树里被测过，从未在打包后的
+  app 里被打开过；
 - `speech export`（写进书籍导出目录并更新导出清单）**尚未接入图形界面**，只能用 CLI；
 - Read-only TUI 与 Agent Data Skill **仍无**语音入口。
 
@@ -121,11 +124,17 @@ speech history clear
 
 ### 未覆盖的范围
 
-- **从 CLI 入口到真实供应商的端到端验收从未执行过**。SenseAudio 的供应商**合同**本身
-  已于 2026-09-11 用固定文本 tracer 对真实 API 验证过（含 live 技术证据与人工试听，
-  见 [`docs/evidence/2026-09-11-senseaudio-contract-smoke.md`](docs/evidence/2026-09-11-senseaudio-contract-smoke.md)），
-  但真实供应商验收按 ADR 0007 属显式 opt-in，不在普通 CI 中运行，需要使用者自备 API
-  Key 才会发生。与本版本开头的 Share Card 崩溃无关；
+- **CLI 路径曾成功调用过真实供应商，但从未做过正式验收**。本机 2026-09-29 留下两条
+  `status: "succeeded"` 的 Speech Attempt：含供应商 `trace_id`、供应商回传的实际用量
+  （`provider_usage_characters`），产物是符合声明规格的真实 MP3（32 kHz / 128 kbps /
+  双声道），并已通过 `speech export` 写进《100 Go Mistakes and How to Avoid Them》的
+  导出目录。**那次生成用的文本只有 2 个 unicode 字符**（`annotation-688` 的一条高亮），
+  是最小可用性探针，不是真实长标注的验收。记录未保存请求端点，因此无法从记录本身
+  断定当时用的是默认端点而非 `SENSEAUDIO_API_BASE_URL` 覆盖。SenseAudio 的供应商
+  **合同**另于 2026-09-11 用固定文本 tracer 验证过（含 live 技术证据与人工试听，见
+  [`docs/evidence/2026-09-11-senseaudio-contract-smoke.md`](docs/evidence/2026-09-11-senseaudio-contract-smoke.md)）。
+  真实供应商验收按 ADR 0007 属显式 opt-in，不在普通 CI 中运行，需要使用者自备 API
+  Key。与本版本开头的 Share Card 崩溃无关；
 - 这一版的语音能力**只有 CLI 入口**，AppKit 图形界面尚无语音（见下方 Unreleased）；
 - Agent Data Skill 的 `contract.sh` 当时**未覆盖** speech 子命令，语音命令的契约回归
   当时不在 CI 门禁内；

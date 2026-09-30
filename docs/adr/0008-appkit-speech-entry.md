@@ -101,9 +101,11 @@ SenseAudio 是「首个供应商」而非「已验证的唯一供应商」；给
 - Read-only TUI 和 Agent Data Skill **仍然没有**语音入口，与 `ADR 0007` 一致；
 - AppKit 只覆盖「生成 + 播放 + 音色选择」。`speech export`（导出到书籍导出目录并
   更新 Speech Export Manifest）尚未接入 AppKit，参数已确认跟随 CLI 契约；
-- AppKit 的语音验证全部是 mock 的。`ADR 0007` 规定真实 provider 验收是显式 opt-in
-  smoke，不在普通 CI 中运行，也不读取真实 Apple Books 内容。**端到端真实验收尚未
-  执行**；
+- AppKit 的语音验证全部是 mock 的。CLI 路径曾于 2026-09-29 成功调用过真实供应商
+  （本机留下 `status: "succeeded"` 的 Speech Attempt，含供应商 `trace_id` 与回传用量），
+  但那是 2 个 unicode 字符的最小探针，**不构成 GUI 路径的验收**。`ADR 0007` 规定真实
+  provider 验收是显式 opt-in smoke，不在普通 CI 中运行，也不读取真实 Apple Books 内容。
+  **AppKit 的端到端真实验收尚未执行**；
 - Swift 侧的新增协议测试只能覆盖请求构造与回执解释，无法证明供应商会接受某个请求。
   那一条只能由 opt-in smoke 覆盖。
 
