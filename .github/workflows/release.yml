@@ -22,6 +22,13 @@ jobs:
   build:
     name: Build (${{ matrix.label }})
     runs-on: ${{ matrix.os }}
+    # A leg whose runner label no longer exists is not rejected by Actions --
+    # it is accepted and then sits queued with no runner assigned, forever,
+    # and because the release job declares `needs: build` that stall is a
+    # silent total outage. The job timeout turns that hang into a red run
+    # that somebody can see. It is a backstop, not a fix: the label itself
+    # still has to be a live one.
+    timeout-minutes: 45
     strategy:
       fail-fast: false  # 一个平台失败不影响其他平台
       matrix:
@@ -32,8 +39,12 @@ jobs:
             label: macos-arm64
             binary_name: apple-books-exporter-aarch64-apple-darwin
           # macOS Intel
+          # macos-13 was retired. A job requesting it is not rejected, it is
+          # accepted and then sits in the queue with no runner assigned; a
+          # rehearsal tag on 2026-09-30 queued this leg for 80 minutes on that
+          # label alone. macos-15-intel is the current Intel label.
           - target: x86_64-apple-darwin
-            os: macos-13
+            os: macos-15-intel
             label: macos-x86_64
             binary_name: apple-books-exporter-x86_64-apple-darwin
 
