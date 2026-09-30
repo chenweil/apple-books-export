@@ -5,6 +5,32 @@ import AppKit
 
 private var failures: [String] = []
 
+/// Collects the result of an async step from inside a `Task`.
+///
+/// A captured `var` would be an error under the Swift 5.10 toolchain on CI and
+/// a non-issue under 6.3 locally, which is precisely the kind of difference
+/// that only shows up in one place.
+private final class ProbeOutcome: @unchecked Sendable {
+    private let lock = NSLock()
+    private var error: String?
+
+    func record(_ work: @escaping @Sendable () async throws -> Void) async {
+        do {
+            try await work()
+        } catch {
+            lock.lock()
+            self.error = "\(error)"
+            lock.unlock()
+        }
+    }
+
+    var errorDescription: String? {
+        lock.lock()
+        defer { lock.unlock() }
+        return error
+    }
+}
+
 private func check(_ name: String, _ condition: Bool, _ detail: String) {
     print("\(condition ? "  ok  " : " FAIL ") \(name) — \(detail)")
     if !condition { failures.append(name) }
@@ -174,16 +200,20 @@ enum VerifyLayout {
             runner: { _, _, _ in .success(profileJSON) }
         )
         let resolver = SpeechCredentialResolver(client: client, keychain: keychain)
+        // A reference box rather than a captured `var`: the Swift 5.10 toolchain
+        // on the CI runner diagnoses a captured mutable variable inside `Task`
+        // as an error, while 6.3 locally accepts it. Writing the result through
+        // a final Sendable box satisfies both, so this check is not the thing
+        // that decides whether the probe compiles.
+        let outcome = ProbeOutcome()
         let stored = DispatchSemaphore(value: 0)
-        var storeError: String?
         Task {
-            do { try await resolver.store("probe-secret-value") }
-            catch { storeError = "\(error)" }
+            await outcome.record { try await resolver.store("probe-secret-value") }
             stored.signal()
         }
         _ = stored.wait(timeout: .now() + 10)
 
-        check("写入密钥成功", storeError == nil, storeError ?? "无错误")
+        check("写入密钥成功", outcome.errorDescription == nil, outcome.errorDescription ?? "无错误")
         check("密钥存进钥匙串并可取回",
               (try? keychain.secret(forKey: "SENSEAUDIO_API_KEY")) == "probe-secret-value",
               "InMemoryKeychainStore round-trip")
