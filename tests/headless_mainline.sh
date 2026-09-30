@@ -30,11 +30,15 @@ for text in "${required_release_text[@]}"; do
   fi
 done
 
-# These forbid the Tauri release path coming back. `.dmg` is in the list
-# because nothing in the current release workflow produces a disk image; if an
-# AppKit DMG is added later, this entry has to be revisited deliberately rather
-# than relaxed in passing. A bare `tauri` is deliberately absent: it would also
-# match a comment explaining the rollback, which this file contains.
+# These forbid the Tauri release path coming back.
+#
+# `.dmg` used to be in this list on its own, because the only disk image the
+# workflow ever produced was Tauri's. AppKit now ships a DMG too, so the bare
+# extension no longer distinguishes anything and would fail on a legitimate
+# artifact. The Tauri path is caught by its own markers instead. A bare `tauri`
+# is deliberately absent, because it also matches the comments explaining the
+# rollback that this file contains -- the specific invocations and artifact
+# names are what matter, and they are listed individually.
 for forbidden in \
   'cargo tauri' \
   'npm ci' \
@@ -43,13 +47,72 @@ for forbidden in \
   'locate-gui' \
   'gui-app-' \
   'gui-dmg-' \
+  'tauri.conf.json' \
+  'tauri-apps/tauri-action' \
+  'tauri-action@' \
   '.app.zip' \
-  '.dmg'; do
+  'src-tauri/target'; do
   if grep -Fq -- "$forbidden" "$RELEASE_WORKFLOW"; then
     printf 'legacy GUI release path remains: %s\n' "$forbidden" >&2
     exit 1
   fi
 done
+
+# An AppKit DMG in the workflow must be the one package-dmg.sh produces, and it
+# must be unsigned. This checks the *invocation*, not a mention: a comment
+# naming the script satisfies a bare grep, and so does the legitimate AppKit
+# step being cited as if it vouched for an unrelated disk image.
+if grep -Fq -- '.dmg' "$RELEASE_WORKFLOW"; then
+  if ! grep -Eq '^[[:space:]]*(\./)?appkit/Scripts/package-dmg\.sh' "$RELEASE_WORKFLOW"; then
+    printf 'a DMG is released but never built by running appkit/Scripts/package-dmg.sh\n' >&2
+    exit 1
+  fi
+  # ADR 0004 requires every stable Release to carry a valid latest.json
+  # alongside the DMG; dropping it leaves the app's version discovery broken.
+  # Matched on a non-comment line, since the explanatory comment above the
+  # upload names the file too.
+  if ! grep -v '^[[:space:]]*#' "$RELEASE_WORKFLOW" | grep -Fq -- 'dist/latest.json'; then
+    printf 'the AppKit DMG ships without the latest.json ADR 0004 requires\n' >&2
+    exit 1
+  fi
+fi
+
+# Claiming to sign is worse than not signing: there is no Developer ID identity
+# in this repository, so such a step is a false statement about the artifact.
+# Matched on the actual command forms rather than one literal, because
+# `codesign --force --deep --sign` and the short `-s` flag are the same step
+# written differently. Comments are stripped first so that a line documenting
+# why the repo does *not* notarize does not trip the guard.
+if ! command -v python3 >/dev/null 2>&1; then
+  printf 'python3 is required to inspect release.yml\n' >&2
+  exit 1
+fi
+
+if ! python3 - "$RELEASE_WORKFLOW" <<'PY'
+import re
+import sys
+
+SIGNING = re.compile(
+    r'\b(codesign|notarytool|stapler|spctl)\b'
+    r'|\bDeveloper\s+ID\b'
+    r'|--sign\b'
+    r'|(?<![\w-])-s(?![\w-])'
+)
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    for number, line in enumerate(handle, 1):
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            continue
+        if SIGNING.search(line):
+            print(f"release.yml:{number}: claims a signing step this repository "
+                  f"cannot perform: {stripped}")
+            sys.exit(1)
+sys.exit(0)
+PY
+then
+  exit 1
+fi
 
 # ---------------------------------------------------------------------------
 # One tag, one product version.

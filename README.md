@@ -172,9 +172,23 @@ git tag v0.3.3 && git push --tags
 产物，且全流程无任何报错。校验逻辑在 `scripts/check-release-tag.sh`，由发布流水线和
 `tests/headless_mainline.sh` 共用，避免两处实现漂移。
 
-**当前发布产物只有 Rust CLI**（arm64 与 Intel 两个二进制 + `SHA256SUMS`）。
-AppKit 的 DMG 尚未进入发布流水线，且没有 Developer ID 签名或 notarization——
-`xattr -d com.apple.quarantine` 之类的用户侧绕过手段不算发布证据。跟踪 issue #44。
+### 发布产物
+
+| 产物 | 架构 | 说明 |
+|---|---|---|
+| `apple-books-exporter-<arch>` | arm64 / x86_64 | Rust CLI，驱动 TUI、Skill 和 AppKit |
+| `Books-Exporter-<version>-unsigned.dmg` | arm64 | AppKit GUI，内含对应架构的 Rust CLI |
+
+AppKit 的 `CFBundleShortVersionString` 从同一个 tag 注入，`CFBundleVersion` 取
+CI run number（bundle build 号需要随每次构建递增，不再手工维护）。流水线会挂载产出的
+DMG，回读 `Info.plist` 确认版本与 tag 一致后才继续——不信任打包脚本的退出码。
+
+**AppKit DMG 未签名、未 notarization。** 本仓库没有 Developer ID 身份，
+`xattr -d com.apple.quarantine` 之类的用户侧绕过手段不构成发布证据。`tests/headless_mainline.sh`
+会拒绝任何声称已签名但实际无凭据的步骤。跟踪 issue #44。
+
+**x86_64 的 AppKit DMG 尚未产出**——目前只有 CLI 的 x86_64 版本。AppKit 需要 Intel
+runner 或交叉编译，且产物未经运行验证，归入 issue #45。
 
 ## Headless 能力矩阵
 
