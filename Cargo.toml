@@ -1,6 +1,6 @@
 [package]
 name = "apple-books-exporter"
-version = "0.3.4"
+version = "0.3.5"
 edition = "2021"
 description = "Export Apple Books notes and highlights to Markdown"
 authors = ["Wei-Long Chen"]

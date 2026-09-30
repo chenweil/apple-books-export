@@ -230,6 +230,22 @@ jobs:
             echo "::error::the bundle carries no CFBundleVersion"
             exit 1
           fi
+          # The app root, not Contents/. SwiftPM's generated Bundle.module
+          # accessor looks in exactly two places: Bundle.main.bundleURL (the
+          # .app root) and an absolute path inside the build tree. A bundle in
+          # Contents/ matches neither, so every Share Card render hits
+          # fatalError -- EXC_BREAKPOINT, not a memory fault. v0.3.4 shipped it
+          # in Contents/ and crashed on the first card click, while 47 XCTest
+          # and 106 UI assertions were all green: inside the build tree the
+          # second candidate always resolves, so Bundle.module works in tests
+          # and only fails once the app is copied somewhere else.
+          #
+          # Checked on the mounted image rather than on the packaging script's
+          # text, because the wrong and right destinations differ only in one
+          # path fragment of the same `cp -R` line -- a grep cannot tell them
+          # apart, and grepping for the buggy string is the check that passes.
+          bash appkit/Scripts/verify-resource-bundle-layout.sh \
+            "$MOUNT_DIR/Books Exporter.app"
           # `file` alone only prints the architecture, so a wrong-arch binary
           # inside the bundle would ship green. This leg is the arm64 one, so
           # both executables have to be arm64.

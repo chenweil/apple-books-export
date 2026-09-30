@@ -4,7 +4,47 @@
 自 `v0.3.4` 起，Rust CLI 与 AppKit GUI 在同一个 Release 中发布，共用
 `Cargo.toml` 的版本号。
 
+## v0.3.5 - 2026-09-30
+
+### 修复：点击「生成卡片」必崩
+
+`v0.3.4` 的 AppKit 应用在**第一次渲染 Share Card 时必然崩溃**，用户点「生成卡片」即
+触发。崩溃是 `EXC_BREAKPOINT (SIGTRAP)`，不是内存错误——栈底落在
+`_assertionFailure`，位于 `static NSBundle.module` 的一次性初始化里，也就是
+SwiftPM 生成的访问器中的 `fatalError`。
+
+原因是资源 bundle 的位置。SwiftPM 为 `Bundle.module` 生成的访问器只试两个路径：
+
+```
+Bundle.main.bundleURL + "BooksExporter_BooksExporterCore.bundle"   ← .app 根目录
+/Users/<构建者>/.../.build/.../BooksExporter_BooksExporterCore.bundle
+```
+
+`package-dmg.sh` 把它复制到了 `$APP_DIR/Contents/`，**两个都不是**。在构建机上第二个
+候选总是命中，所以 app 在自己的 build 树里能跑；换到任何没有那份 `.build` 的机器上，
+两个候选全部落空，于是第一张卡片就 trap。第二个路径是编译期写死的绝对路径，在任何
+已发布的副本里都是死代码。
+
+47 个 XCTest 和 106 条 UI 断言全程为绿：它们都在 build 树里跑，而 `Bundle.module`
+在那里总能解析。**没有任何检查见过一个被真正打包过的 app。**
+
+### 新的检查
+
+- `appkit/Scripts/verify-resource-bundle-layout.sh` 检查一个真实的 `.app`。正确与错误
+  的目的地只差同一条 `cp -R` 行里的一个路径片段，grep 分不开它们；而「grep 不到那个
+  出错的字符串」恰好就是会通过的检查。
+- `package-dmg.sh` 在 hdiutil 之前对暂存的 app 跑这个检查；`STAGE_ONLY=1` 可以在
+  校验后停下，让 AppKit CI job 在每个 PR 上以秒级跑一遍真实的打包脚本。
+- `release.yml` 对**挂载后的 DMG** 跑同一个检查，也就是检查真正会被下载的字节。
+- CI 另外断言生成的访问器仍然从 `Bundle.main.bundleURL` 解析。app 根目录这条规则是
+  对工具链行为的假设；万一 SwiftPM 变了，这个检查会报出来，而不是继续对着一个没人
+  读的布局默默通过。
+
 ## v0.3.4 - 2026-09-30
+
+> **这一版的 Share Card 不可用**：点「生成卡片」必然崩溃（`EXC_BREAKPOINT`），
+> 资源 bundle 的位置错了。用 `v0.3.5` 或任何更高版本。其余部分（CLI、更新检查、
+> 版本统一）不受影响。
 
 ### 首个 CLI 与 GUI 合并发布的版本
 

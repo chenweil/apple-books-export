@@ -106,3 +106,46 @@ jobs:
       - name: Run AppKit UI probe
         working-directory: appkit
         run: ./Scripts/verify-ui.sh
+
+      # v0.3.4 shipped an app that crashed on the first Share Card render, and
+      # everything above was green when it did. The cause: the resource bundle
+      # was in Contents/, while SwiftPM's generated Bundle.module accessor only
+      # looks at the .app root and at an absolute path inside the build tree.
+      # Neither the XCTest suite nor the UI probe can see it, because inside
+      # the build tree the second candidate always resolves -- Bundle.module
+      # works in tests and fails only once the app is copied somewhere else.
+      #
+      # So this runs the real packaging script and inspects the app it stages.
+      # A stub stands in for the Rust CLI: package-dmg.sh only requires an
+      # executable there, and building one would add a Rust toolchain to a job
+      # whose whole point is that it needs none. STAGE_ONLY skips hdiutil and
+      # the update manifest, which is what keeps this to seconds.
+      - name: Stage the app and check the packaged layout
+        working-directory: appkit
+        run: |
+          set -euo pipefail
+          STUB="$(mktemp -d)/apple-books-exporter"
+          printf '#!/bin/sh\nexit 0\n' > "$STUB"
+          chmod +x "$STUB"
+          STAGE_ONLY=1 RUST_CLI_BIN="$STUB" bash Scripts/package-dmg.sh
+
+      # The layout rule above is an assumption about what the toolchain
+      # generates, so assert the assumption instead of trusting it: if a future
+      # SwiftPM stops looking at Bundle.main.bundleURL, the fix is wrong and
+      # this has to say so rather than let the check keep passing.
+      - name: Check the resource bundle contract this layout relies on
+        working-directory: appkit
+        run: |
+          set -euo pipefail
+          ACCESSOR="$(find .build -name resource_bundle_accessor.swift | sort | head -1)"
+          if [ -z "$ACCESSOR" ]; then
+            echo "::error::could not find the generated resource_bundle_accessor.swift"
+            exit 1
+          fi
+          echo "accessor: $ACCESSOR"
+          sed -n '1,20p' "$ACCESSOR"
+          if ! grep -Fq 'let mainPath = Bundle.main.bundleURL' "$ACCESSOR"; then
+            echo "::error::the generated accessor no longer resolves from Bundle.main.bundleURL;"
+            echo "the app-root layout in package-dmg.sh is no longer the reachable one"
+            exit 1
+          fi
