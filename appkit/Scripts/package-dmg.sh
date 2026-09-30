@@ -85,7 +85,16 @@ trap 'rm -rf "$STAGING_DIR"' EXIT
 APP_DIR="$STAGING_DIR/$APP_NAME"
 mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
 cp "$BIN_PATH" "$APP_DIR/Contents/MacOS/BooksExporter"
-cp -R "$RESOURCE_BUNDLE" "$APP_DIR/Contents/"
+# The app root, NOT Contents/. SwiftPM's generated Bundle.module accessor looks in
+# exactly two places: Bundle.main.bundleURL (the .app root) and an absolute path
+# inside the build tree. Contents/ is neither. A bundle there makes every Share
+# Card render hit fatalError -- EXC_BREAKPOINT, not a memory fault -- on any
+# machine that lacks this repo's .build directory, which is every machine a
+# release reaches. v0.3.4 shipped it in Contents/ and crashed on the first card
+# click. Nothing in CI caught it: inside the build tree the accessor's second
+# candidate always resolves, so Bundle.module works in tests and only fails once
+# the app is copied somewhere else.
+cp -R "$RESOURCE_BUNDLE" "$APP_DIR/"
 cp "$RUST_CLI_BIN" "$APP_DIR/Contents/Resources/apple-books-exporter"
 cp "$APPKIT_DIR/Resources/Info.plist" "$APP_DIR/Contents/Info.plist"
 cp "$APPKIT_DIR/Resources/AppIcon.icns" "$APP_DIR/Contents/Resources/AppIcon.icns"
@@ -97,6 +106,22 @@ chmod +x "$APP_DIR/Contents/Resources/apple-books-exporter"
 
 # Intentionally unsigned: no Developer ID signing or notarization is performed.
 ln -s /Applications "$STAGING_DIR/Applications"
+
+# Check the staged app before spending minutes on hdiutil. This inspects the
+# real directory that is about to become the DMG, not this script's own text.
+bash "$APPKIT_DIR/Scripts/verify-resource-bundle-layout.sh" \
+  "$APP_DIR" "$(basename "$RESOURCE_BUNDLE")"
+
+# STAGE_ONLY stops here, with the staged app verified but no image built. CI
+# uses it to exercise this script on every PR: the layout contract is the
+# difference between a working app and an EXC_BREAKPOINT on first use, and no
+# other check in the suite sees a packaged app at all. Skipping only hdiutil
+# and the manifest keeps that check to seconds.
+if [[ "${STAGE_ONLY:-0}" == "1" ]]; then
+  plutil -lint "$APP_DIR/Contents/Info.plist" >/dev/null
+  printf 'Staged and verified (STAGE_ONLY=1, no DMG written): %s\n' "$APP_DIR"
+  exit 0
+fi
 
 mkdir -p "$DIST_DIR"
 DMG_PATH="$DIST_DIR/$DMG_NAME"
