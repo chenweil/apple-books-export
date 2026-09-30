@@ -654,6 +654,44 @@ if ! grep -v '^[[:space:]]*#' "$ROOT_DIR/appkit/Scripts/package-dmg.sh" \
   exit 1
 fi
 
+# The Share Card resource bundle has to be copied to the .app ROOT, because that
+# is one of the two places SwiftPM's generated Bundle.module accessor looks
+# (the other is an absolute path into the build tree, which is dead weight in a
+# shipped copy). v0.3.4 put it in Contents/, which is neither, and the app died
+# with EXC_BREAKPOINT the first time a card was rendered. 47 XCTest and 106 UI
+# assertions were green throughout: inside the build tree the second candidate
+# always resolves, so Bundle.module works in tests and only fails once the app
+# is copied somewhere else.
+#
+# The behavioural guard is verify-resource-bundle-layout.sh, which inspects a
+# real .app rather than this script's text -- the wrong and right destinations
+# differ by one path fragment of the same `cp -R` line, so no grep can separate
+# them. This assertion is only about the guard still being WIRED UP. Without it,
+# deleting the call would leave packaging green and the defect would ship again,
+# which is the one failure a self-contained guard cannot catch by itself.
+#
+# The destination is deliberately NOT asserted here. Restating it as a text
+# check would put the rule in two places, and the copy is free to keep
+# producing the same layout for reasons the packager owns.
+if ! grep -v '^[[:space:]]*#' "$ROOT_DIR/appkit/Scripts/package-dmg.sh" \
+     | grep -Fq -- 'verify-resource-bundle-layout.sh'; then
+  printf 'package-dmg.sh no longer checks the packaged resource bundle layout\n' >&2
+  exit 1
+fi
+
+# The guard has to exist as an executable script, and the release workflow has
+# to run it against the mounted image. Checking the packager alone would let the
+# last check on the shipped bytes go missing while every PR stayed green.
+if [[ ! -f "$ROOT_DIR/appkit/Scripts/verify-resource-bundle-layout.sh" ]]; then
+  printf 'missing appkit/Scripts/verify-resource-bundle-layout.sh\n' >&2
+  exit 1
+fi
+if ! grep -v '^[[:space:]]*#' "$RELEASE_WORKFLOW" \
+     | grep -Fq -- 'verify-resource-bundle-layout.sh'; then
+  printf 'release.yml does not check the resource bundle on the mounted image\n' >&2
+  exit 1
+fi
+
 # The AppKit bundle version has to be stamped from the same tag rather than
 # kept as a hand-edited literal, otherwise the GUI and the CLI drift apart
 # again after this change.
