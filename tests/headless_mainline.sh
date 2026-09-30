@@ -339,7 +339,13 @@ fi
 # a string that therefore also appeared inside the grep's own arguments, so the
 # assertion matched itself and could not fail. Matching against the extracted
 # line removes the file from the search space entirely, and requiring exactly
-# one assignment stops an override being added underneath.
+# one assignment stops a second plain assignment from being added underneath.
+# "A second plain assignment" is the whole claim: `eval "CRATE_VERSION=..."` on
+# the next line overrides the value, adds no second '^CRATE_VERSION=', and
+# passes both assertions below. Measured, not assumed. Pinning a value in shell
+# against a determined override would need execution rather than pattern
+# matching, which is why the extraction checks the read and this one checks the
+# spelling -- each within what its own mechanism can actually enforce.
 guard_assignments="$(grep -c '^CRATE_VERSION=' "$ROOT_DIR/tests/headless_mainline.sh" || true)"
 if [[ "$guard_assignments" -ne 1 ]]; then
   printf 'headless_mainline.sh should assign CRATE_VERSION exactly once, found %s\n' \
@@ -417,10 +423,25 @@ FIXTURE
 # branches accept the same set of documents. They do not: a quoted table header
 # like ["package"] and spacing around the dot in package . version are still
 # refused by the fallback where tomllib accepts them. The fallback is a line
-# scanner and closing that gap means writing a TOML parser. The direction that
-# is enforced is the one that matters -- on every document tried, the fallback
-# either agrees with tomllib or refuses, and never answers with a different
-# value.
+# scanner and closing that gap means writing a TOML parser.
+#
+# It is also not the case that the fallback never answers a different value.
+# It does not decode TOML escape sequences, so on a manifest cargo builds
+# happily the two can disagree:
+#
+#   version = "1.0.0\u002Drc1"   cargo 1.0.0-rc1   tomllib 1.0.0-rc1
+#                                        fallback 1.0.0\u002Drc1
+#
+# What does hold, on every such case tried, is that the fallback's answer
+# contains a backslash. A backslash cannot occur in a legal semver, so the
+# answer is not a version at all: check-release-tag.sh compares it to the tag,
+# mismatches, and exits 1 with the difference printed. The release path fails
+# closed and never publishes the wrong number -- checked by running it, not by
+# reading it. The residue is narrower and worth naming: release-channel.sh fed
+# such a value returns "stable", so a prerelease could be labelled stable by a
+# developer running package-dmg.sh by hand on a machine with a pre-3.11 python.
+# That is a local packaging path, not the release workflow, and the DMG it
+# produces carries the backslash in its filename where it is visible.
 cat >"$manifest_fixtures/dotted.toml" <<'FIXTURE'
 package.version = "1.2.3"
 FIXTURE
