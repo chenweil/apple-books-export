@@ -1,6 +1,30 @@
 # Changelog
 
-本文件记录 AppKit 版本的可见变更。
+本文件记录可见变更。`v0.1.8` 及之前只发布 AppKit，且 AppKit 有自己的版本线；
+自 `v0.3.4` 起，Rust CLI 与 AppKit GUI 在同一个 Release 中发布，共用
+`Cargo.toml` 的版本号。
+
+## v0.3.4 - 2026-09-30
+
+### 首个 CLI 与 GUI 合并发布的版本
+
+- 同一个 Release 同时提供 Rust CLI（arm64 / x86_64）和 arm64 AppKit GUI
+  `Books-Exporter-0.3.4-unsigned.dmg`，`CFBundleShortVersionString` 与 CLI `--version`
+  由同一个 tag 决定。
+- 图形界面只剩 AppKit 一个：Tauri 源码已删除，仓库不再需要 Node.js。回滚锚点
+  `legacy/tauri-gui-mainline` 仍保留 Tauri 时代完整状态。
+- 流水线在任何构建之前校验 tag 与 `Cargo.toml` 的 `version` 一致，不一致直接失败。
+  此前 tag 只用于命名 Release，不一致时能发布出「页面写着一个号、二进制自报另一个号」
+  的产物且全流程无报错。
+- AppKit 打包的默认版本改为读 `Cargo.toml`，此前硬编码为一个早已停更的旧号。
+- 更新清单 `latest.json` 的 `channel` 由版本号推导，不再硬编码 `stable`，预发布版本
+  不会出现在 stable 通道用户的更新列表里。
+
+### 未覆盖的范围
+
+- DMG 未做 Developer ID 签名与 notarization，文件名带 `-unsigned`；首次安装需手动
+  移除 quarantine 属性。
+- 只有 arm64 的 AppKit DMG。x86_64 的 GUI 产物仍未产出，见 [#45](https://github.com/chenweil/apple-books-export/issues/45)。
 
 ## v0.1.8 - 2026-08-05
 

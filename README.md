@@ -105,6 +105,39 @@ Skill 会刷新 `list --json`，通过 `asset_id` 读取标注或导出 Markdown
 验证生成的非空文件。它不解析人类表格、不修改 Apple Books、不自动下载
 binary，也不调用 AI。
 
+### 方式四：AppKit GUI（从 Release 安装）
+
+正式图形界面只发布 **arm64** 的 DMG，文件名为 `Books-Exporter-<version>-unsigned.dmg`，
+见 [Releases](https://github.com/chenweil/apple-books-export/releases)：
+
+```bash
+VERSION=0.3.4   # 换成 Release 里的实际版本号
+DMG=~/Downloads/Books-Exporter-${VERSION}-unsigned.dmg
+
+# 1. 挂载并拷入 Applications
+hdiutil attach "$DMG"
+cp -R "/Volumes/Books Exporter/Books Exporter.app" /Applications/
+hdiutil detach "/Volumes/Books Exporter"
+
+# 2. 未签名，Gatekeeper 会拦：手动移除 quarantine
+xattr -dr com.apple.quarantine "/Applications/Books Exporter.app"
+
+# 3. 授予 Full Disk Access
+#    系统设置 → 隐私与安全性 → Full Disk Access → 加入 Books Exporter.app
+#    之后完全退出并重开应用
+```
+
+第 2 步是**既定代价，不是变通方案**。本仓库没有 Apple Developer Program 身份，
+拿不到 Developer ID 证书也没有 notary team，因此不签名；相应地，本仓库也不把
+移除 quarantine 当作「已签名」的发布证据——`tests/headless_mainline.sh` 会拒绝任何
+声称已签名但实际无凭据的步骤。跟踪 issue [#44](https://github.com/chenweil/apple-books-export/issues/44)。
+
+App 内置的 Rust CLI 随包分发在 `Contents/Resources`，不需要另外编译；排查问题时
+可以用 `APPLE_BOOKS_EXPORTER_BIN` 指向别的二进制。
+
+Intel Mac 目前没有可安装的 GUI 产物，只有 CLI 的 x86_64 版本，见
+[#45](https://github.com/chenweil/apple-books-export/issues/45)。
+
 ## Tauri Legacy GUI（已移除）
 
 Tauri GUI 的源码（`src-tauri/`、Svelte 前端、root `package.json` 及其构建配置）已从
@@ -163,14 +196,15 @@ swift test                # 47 项 XCTest
 
 ```bash
 # tag 版本号必须与 Cargo.toml 的 version 完全一致
-git tag v0.3.3 && git push --tags
+git tag v0.3.4 && git push --tags
 ```
 
 流水线**在任何构建之前**先校验 tag 与 `Cargo.toml` 是否一致，不一致直接失败。
 这条检查是补上的：此前 tag 只用于命名 GitHub Release，从不与 `Cargo.toml` 比对，
-因此 `git tag v0.4.0` 会发布出一个页面写着 v0.4.0、而二进制 `--version` 报 0.3.3 的
-产物，且全流程无任何报错。校验逻辑在 `scripts/check-release-tag.sh`，由发布流水线和
-`tests/headless_mainline.sh` 共用，避免两处实现漂移。
+因此 `git tag v0.4.0` 会发布出一个页面写着 v0.4.0、而二进制 `--version` 报
+`Cargo.toml` 里那个旧版本号的产物，且全流程无任何报错。校验逻辑在
+`scripts/check-release-tag.sh`，由发布流水线和 `tests/headless_mainline.sh`
+共用，避免两处实现漂移。
 
 ### 发布产物
 
