@@ -24,6 +24,9 @@ final class BookDetailViewController: NSViewController {
         detailView.onCardRequested = { [weak self] annotation in
             self?.openShareCardEditor(for: annotation)
         }
+        detailView.onSpeechRequested = { [weak self] annotation in
+            self?.openSpeechPanel(for: annotation)
+        }
         view = detailView
     }
 
@@ -124,6 +127,31 @@ final class BookDetailViewController: NSViewController {
         guard let book = selectedBook else { return }
         let editor = ShareCardEditorViewController(book: book, annotation: annotation)
         presentAsSheet(editor)
+    }
+
+    /// One credential resolver and one player per controller, so a second sheet
+    /// reuses the keychain lookup instead of asking the CLI for the variable
+    /// name again, and a clip started in one sheet is not left playing under a
+    /// newly opened one.
+    private lazy var rustClient = RustCLIClient.makeForCurrentApp()
+    private lazy var credentialResolver = SpeechCredentialResolver(
+        client: rustClient,
+        keychain: KeychainStore()
+    )
+    private let speechPlayer = SpeechAudioPlayer()
+
+    private func openSpeechPanel(for annotation: Annotation) {
+        guard let book = selectedBook else { return }
+        let panel = SpeechPanelViewController(
+            book: book,
+            annotation: annotation,
+            speech: SpeechService(client: rustClient, credentialResolver: credentialResolver),
+            player: speechPlayer,
+            hasCredential: { [credentialResolver] in
+                await credentialResolver.hasStoredSecret()
+            }
+        )
+        presentAsSheet(panel)
     }
 
     private func showAlert(message: String, details: String) {

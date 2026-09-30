@@ -14,8 +14,10 @@ final class AnnotationCellView: NSTableCellView {
     private let stack = NSStackView()
     private let rowStack = NSStackView()
     private let cardButton = NSButton(title: "生成卡片", target: nil, action: nil)
+    private let speechButton = NSButton(title: "生成语音", target: nil, action: nil)
     private var layoutWidth: CGFloat = 0
     private var onCardRequested: (() -> Void)?
+    private var onSpeechRequested: (() -> Void)?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -59,12 +61,25 @@ final class AnnotationCellView: NSTableCellView {
         cardButton.setContentHuggingPriority(.required, for: .horizontal)
         cardButton.setContentCompressionResistancePriority(.required, for: .horizontal)
 
+        speechButton.image = NSImage(
+            systemSymbolName: "waveform",
+            accessibilityDescription: "生成语音"
+        )
+        speechButton.imagePosition = .imageLeading
+        speechButton.target = self
+        speechButton.action = #selector(speechRequested)
+        speechButton.isHidden = true
+        speechButton.identifier = NSUserInterfaceItemIdentifier("speech-entry")
+        speechButton.setContentHuggingPriority(.required, for: .horizontal)
+        speechButton.setContentCompressionResistancePriority(.required, for: .horizontal)
+
         rowStack.orientation = .horizontal
         rowStack.alignment = .centerY
         rowStack.distribution = .fill
         rowStack.spacing = 12
         rowStack.translatesAutoresizingMaskIntoConstraints = false
         rowStack.addArrangedSubview(stack)
+        rowStack.addArrangedSubview(speechButton)
         rowStack.addArrangedSubview(cardButton)
         addSubview(rowStack)
 
@@ -104,8 +119,21 @@ final class AnnotationCellView: NSTableCellView {
         updateTextWidth()
     }
 
+    /// Shown under the same condition as the card entry: both are actions on a
+    /// selected annotation, and revealing one for a row the other hides would
+    /// make the row's affordances look inconsistent.
+    func setSpeechEntryVisible(_ visible: Bool, onRequested: (() -> Void)? = nil) {
+        speechButton.isHidden = !visible
+        onSpeechRequested = visible ? onRequested : nil
+        updateTextWidth()
+    }
+
     private func updateTextWidth() {
-        let buttonWidth = cardButton.isHidden ? 0 : cardButton.fittingSize.width + rowStack.spacing
+        // Both trailing buttons shrink the wrapping labels, so the reserved
+        // width has to add up whichever combination is currently visible.
+        let buttonWidth = [cardButton, speechButton]
+            .filter { !$0.isHidden }
+            .reduce(0) { $0 + $1.fittingSize.width + rowStack.spacing }
         let available = layoutWidth - AnnotationCellView.horizontalInset * 2 - buttonWidth
         guard available > 0 else { return }
         contentLabel.preferredMaxLayoutWidth = available
@@ -114,5 +142,9 @@ final class AnnotationCellView: NSTableCellView {
 
     @objc private func cardRequested() {
         onCardRequested?()
+    }
+
+    @objc private func speechRequested() {
+        onSpeechRequested?()
     }
 }

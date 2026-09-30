@@ -18,6 +18,7 @@ final class BookDetailView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     var onExportRequested: (([Annotation]) -> Void)?
     var onCopyRequested: (([Annotation]) -> Void)?
     var onCardRequested: ((Annotation) -> Void)?
+    var onSpeechRequested: ((Annotation) -> Void)?
 
     private var book: Book?
     private var allAnnotations: [Annotation] = []
@@ -378,6 +379,9 @@ final class BookDetailView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         let annotation = annotations[row]
         cell.setCardEntryVisible(isSelected) { [weak self] in
             self?.onCardRequested?(annotation)
+        }
+        cell.setSpeechEntryVisible(isSelected) { [weak self] in
+            self?.onSpeechRequested?(annotation)
         }
     }
 }

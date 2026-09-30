@@ -56,6 +56,7 @@ enum VerifyLayout {
 
         checkMainMenu()
         checkSettings()
+        checkSpeechEntry()
         checkSplitView()
         checkDetailLayout()
         checkAnnotationRowHeight()
@@ -530,6 +531,111 @@ enum VerifyLayout {
         delivered = nil
         invoke(exportButton)
         check("未筛选点按钮送出全部 5 条", delivered?.count == 5, "\(delivered?.count ?? -1) 条")
+    }
+
+    /// The speech entry and its panel.
+    ///
+    /// Two properties are asserted because they are the ones a user is harmed
+    /// by: the note segment is disabled when there is no note, and the cost
+    /// notice never states an amount. The contract has no currency, no unit
+    /// price and no total, so any figure shown would be invented.
+    private static func checkSpeechEntry() {
+        print("\n生成语音入口与参数面板")
+        let book = Book(id: "b1", title: "测试书", author: "某人",
+                        totalAnnotations: 2, highlightsCount: 1, notesCount: 1)
+        let highlightOnly = Annotation(
+            id: "h0", type: .highlight, chapterTitle: "第一章", locationInfo: "",
+            contentText: "只有高亮，没有笔记。",
+            noteText: nil, createdAt: Date(timeIntervalSinceReferenceDate: 0)
+        )
+        let annotations = [highlightOnly, sample("n0", .note)]
+
+        let detail = BookDetailView()
+        hosted(detail, width: 779, height: 700)
+        detail.show(book: book)
+        detail.setAnnotations(annotations)
+
+        guard let table = firstTableView(in: detail) else {
+            check("标注表格可定位", false, "找不到 NSTableView")
+            return
+        }
+        table.layoutSubtreeIfNeeded()
+
+        guard let firstCell = table.view(atColumn: 0, row: 0, makeIfNecessary: true),
+              let speechButton = view(named: "speech-entry", in: firstCell) as? NSButton else {
+            check("标注行含生成语音入口", false, "找不到入口按钮")
+            return
+        }
+        check("标注行含生成语音入口", true, "speech-entry")
+        check("未选中行的语音入口隐藏", speechButton.isHidden, "\(speechButton.isHidden)")
+
+        // Panel behaviour that does not need a provider: an annotation with no
+        // note must not offer the note segment, and the notice must not invent
+        // a price.
+        let panel = makePanel(book: book, annotation: highlightOnly)
+        panel.loadView()
+        guard let kind = view(named: "speech.content-kind", in: panel.view) as? NSSegmentedControl,
+              let cost = view(named: "speech.cost-notice", in: panel.view) as? NSTextField,
+              let preview = view(named: "speech.content-preview", in: panel.view) as? NSTextField,
+              let generate = view(named: "speech.generate", in: panel.view) as? NSButton else {
+            check("语音面板控件齐备", false, "缺少 content-kind / cost-notice / preview / generate")
+            return
+        }
+        check("语音面板控件齐备", true, "content-kind + cost + preview + generate")
+
+        check("没有笔记时禁用笔记分段", !kind.isEnabled(forSegment: 1),
+              "note segment enabled=\(kind.isEnabled(forSegment: 1))")
+        check("高亮分段仍可用", kind.isEnabled(forSegment: 0), "highlight segment")
+
+        // Without a selected voice the billable action stays disabled: the
+        // catalog has not loaded in the probe, so nothing is resolved.
+        check("未选定音色时不能生成", !generate.isEnabled, "\(generate.isEnabled)")
+        check("预览显示将要发送的正文", preview.stringValue == highlightOnly.contentText,
+              preview.stringValue)
+
+        let notice = cost.stringValue
+        check("费用提示说明会调用供应商", notice.contains("计费"), notice)
+        check("费用提示不显示金额",
+              !notice.contains("¥") && !notice.contains("元") && !notice.contains("$"),
+              notice)
+        check("费用提示指向供应商账单", notice.contains("供应商账单"), notice)
+
+        // A second confirmation would contradict ADR 0007: the panel is the
+        // confirmation, and the generate command is the authorisation.
+        //
+        // Matched by identifier *prefix* rather than by one exact name, so
+        // adding `speech.confirm-dialog` is caught as readily as adding
+        // `speech.confirm`. Naming a single identifier would leave the guard
+        // green for every other name a second dialog could take.
+        let actionIdentifiers = allViews(in: panel.view)
+            .compactMap { $0.identifier?.rawValue }
+            .filter { $0.hasPrefix("speech.") }
+        let expected = Set(["speech.content-kind", "speech.content-preview",
+                            "speech.characters", "speech.voice-group",
+                            "speech.voice-variant", "speech.speed", "speech.volume",
+                            "speech.pitch", "speech.cost-notice", "speech.status",
+                            "speech.generate", "speech.play", "speech.regenerate"])
+        let unexpected = Set(actionIdentifiers).subtracting(expected)
+        check("面板没有多余的动作控件（无第二次确认）", unexpected.isEmpty,
+              "unexpected=\(unexpected.sorted())")
+        check("面板动作控件齐全", expected.subtracting(Set(actionIdentifiers)).isEmpty,
+              "missing=\(expected.subtracting(Set(actionIdentifiers)).sorted())")
+    }
+
+    private static func makePanel(book: Book, annotation: Annotation) -> SpeechPanelViewController {
+        let client = RustCLIClient(
+            executableURL: URL(fileURLWithPath: "/tmp/apple-books-exporter"),
+            runner: { _, _, _ in
+                RustCLICommandResult(terminationStatus: 1)
+            }
+        )
+        return SpeechPanelViewController(
+            book: book,
+            annotation: annotation,
+            speech: SpeechService(client: client),
+            player: SpeechAudioPlayer(),
+            hasCredential: { false }
+        )
     }
 
     private static func checkCardEntry() {
@@ -1083,6 +1189,10 @@ enum VerifyLayout {
     private static func invoke(_ control: NSControl) {
         guard let action = control.action else { return }
         NSApp.sendAction(action, to: control.target, from: control)
+    }
+
+    private static func allViews(in view: NSView) -> [NSView] {
+        [view] + view.subviews.flatMap { self.allViews(in: $0) }
     }
 
     private static func view(named identifier: String, in view: NSView) -> NSView? {
