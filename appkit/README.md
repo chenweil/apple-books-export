@@ -188,8 +188,21 @@ Alternative Cards，以及 Apple Books WAL 中最新标注的读取、共享数�
 
 `Scripts/verify-ui.sh` 把探针和真实源码一起编译（排除 executable 入口），断言分栏
 约束、内容列宽度、按钮排布、行高、排序可访问性、类型筛选、选中标注后才显示 Card
-Entry，以及真实 `BookDetailViewController` 入口打开编辑器后的默认预览。它是 UI
-回归探针，不是 XCTest。
+Entry 与语音 Entry、语音面板在缺少笔记时禁用笔记分段、费用提示不显示金额且不提供
+第二次确认，以及真实 `BookDetailViewController` 入口打开编辑器后的默认预览。它是 UI
+回归探针，不是 XCTest。探针以 `-swift-version 5` 编译，避免继承本机工具链的语言
+模式默认值 —— 6.3 与 CI runner 上的 5.10 对同一段代码的诊断并不一致。
+
+`SpeechServiceTests` 覆盖语音机器协议：凭证只经子进程环境而不进 argv、需要与不
+需要凭证的命令各自拿到什么、`details.outcome` 决定重试是否安全、数值参数不按本地
+化格式化，以及 `speech play --json` 声称已播放时被拒绝。`SpeechVoiceCatalogTests`
+覆盖两级音色分组与「不可用即不可用、不静默替换」。
+
+### 语音
+
+AppKit 是语音的**第二个用户入口**，不是第二个实现：所有语音语义由 Rust 核心通过
+machine JSON 拥有，面板只消费 receipt 与稳定错误码。凭证存本机钥匙串，只注入子进程
+环境。详细边界见 [ADR 0008](../docs/adr/0008-appkit-speech-entry.md)。
 
 仓库级的入口说明、Headless 能力矩阵与 Tauri 回滚方式见根
 [`README.md`](../README.md)；可见变更记录见根 [`CHANGELOG.md`](../CHANGELOG.md)。

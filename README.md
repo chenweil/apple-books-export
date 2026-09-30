@@ -176,18 +176,44 @@ Rust CLI 的 machine JSON 协议读取 Apple Books 数据，不实现自己的�
 ```bash
 cd appkit
 swift build               # 编译
-swift test                # 47 项 XCTest
-./Scripts/verify-ui.sh    # 106 条 UI 断言回归探针
+swift test                # 82 项 XCTest
+./Scripts/verify-ui.sh    # 128 条 UI 断言回归探针
 ```
 
 `appkit` CI job（`macos-14`）在每次 push 到 `main` 以及每个 PR 上执行上面三条命令。
 该 job 不固定 Swift 版本，而是打印 runner 自带的 `swift --version`；源码须同时兼容
-`appkit/Package.swift` 声明的 5.9 与 runner 当时提供的工具链。
+`appkit/Package.swift` 声明的 5.9 与 runner 当时提供的工具链。`verify-ui.sh` 额外以
+`-swift-version 5` 编译探针，避免它继承本机工具链的语言模式默认值。
 
 运行需要先构建 canonical Rust CLI，并用 `APPLE_BOOKS_EXPORTER_BIN` 指向它
 （解析优先级：`APPLE_BOOKS_EXPORTER_BIN` 环境变量 → App 包内
 `Contents/Resources` → 可执行文件同级 → `PATH`）。二进制解析、能力边界和已知
 限制详见 [`appkit/README.md`](appkit/README.md)。
+
+### 语音生成
+
+选中一条标注后，行尾会出现「生成语音」入口。面板先展示将要发送的内容、音色、
+语速、音量、声调和估算的计费字符数，**按「生成」即为授权**，没有第二个确认弹窗。
+生成后可直接播放。
+
+几个需要先知道的事：
+
+- **API Key 在「设置 › 语音」里填写**，存在本机钥匙串，不会写入配置文件，也不会
+  出现在命令行参数里。「验证」按钮会跑一次音色目录（免费）确认凭据可用；
+- **「生成语音」是唯一联网且产生费用的操作**。界面只显示本地估算的计费字符数，
+  **不显示金额** —— 契约里没有货币也没有单价，最终以供应商账单为准；
+- **改动音色、语速、音量或声调中的任何一个，都会生成新的音频并单独计费**。音频的
+  身份（`clip_id`）是内容加 Voice Profile 的指纹，所以改参数不是「重新调音」，而是
+  另一次生成。参数与已缓存音频一致时才会命中缓存、不产生费用；
+- **只朗读一个内容部分**：高亮或个人笔记，二者分别生成。没有笔记的标注不会提供笔记
+  选项；
+- 目前只呈现 **SenseAudio** 这一个已测试的渠道。边界与取舍见
+  [ADR 0008](docs/adr/0008-appkit-speech-entry.md)，供应商侧规则见
+  [ADR 0007](docs/adr/0007-annotation-speech-generation-boundary.md)；
+- `speech export`（把音频写进书籍导出目录并更新导出清单）尚未接入 GUI，只能用 CLI。
+
+> AppKit 的语音路径目前只有 mock 覆盖。真实供应商验收是显式的本地 opt-in smoke，
+> 不在普通 CI 中运行，也不读取真实 Apple Books 内容 —— 详见 ADR 0007「验证边界」。
 
 ## 发布
 
