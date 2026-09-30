@@ -638,6 +638,7 @@ enum VerifyLayout {
               "enabled=\(recheck?.isEnabled.description ?? "nil")")
 
         checkPanelFitsTheScreen(book: book)
+        checkVoiceMenusAreFilled(book: book)
     }
 
     /// The panel is a sheet, so its size comes from the view controller. Sized
@@ -699,20 +700,106 @@ enum VerifyLayout {
         }
     }
 
-    private static func makePanel(book: Book, annotation: Annotation) -> SpeechPanelViewController {
+    private static func makePanel(
+        book: Book,
+        annotation: Annotation,
+        runner: RustCLIClient.Runner? = nil,
+        hasCredential: Bool = false
+    ) -> SpeechPanelViewController {
         let client = RustCLIClient(
             executableURL: URL(fileURLWithPath: "/tmp/apple-books-exporter"),
-            runner: { _, _, _ in
-                RustCLICommandResult(terminationStatus: 1)
-            }
+            runner: runner ?? { _, _, _ in RustCLICommandResult(terminationStatus: 1) }
         )
         return SpeechPanelViewController(
             book: book,
             annotation: annotation,
             speech: SpeechService(client: client),
             player: SpeechAudioPlayer(),
-            hasCredential: { false }
+            hasCredential: { hasCredential }
         )
+    }
+
+    /// The catalog must actually reach the pickers.
+    ///
+    /// `rebuildVoiceMenus` opens with `guard let catalog else { return }`, so a
+    /// panel whose `catalog` was never assigned leaves both pickers empty and
+    /// reports nothing: the guard returns silently. That is exactly how the
+    /// shipped build behaved -- the receipt was decoded, checked for `stale`
+    /// and emptiness, and then discarded, while nine unit tests exercised the
+    /// builder that no production code called.
+    ///
+    /// So this drives the real path: a panel whose runner returns a real
+    /// catalog, `hasCredential` true, and then `.view` is touched -- which is
+    /// what fires `viewDidLoad` and the load task. The other checks call
+    /// `loadView()` directly and therefore never reach it.
+    private static func checkVoiceMenusAreFilled(book: Book) {
+        print("\n音色目录接进面板")
+        let profileJSON = """
+        {"schema_version":1,"receipt":{"operation":"profile_show","profile":\
+        {"provider":"senseaudio","model":"sensenova-tts-2.0","voice_id":"male_0004_a",\
+        "emotion_label":null,"style_label":null,"speed":1.0,"volume":1.0,"pitch":0,\
+        "verification_status":"unverified","verified_at":null,\
+        "audio":{"format":"mp3","sample_rate":32000,"bitrate":128000,"channel":2}},\
+        "api_key_env":"SENSEAUDIO_API_KEY","config_path":null,"warnings":[]}}
+        """
+        let catalogJSON = """
+        {"schema_version":1,"receipt":{"operation":"voices","provider":"senseaudio",\
+        "fetched_at":"2026-09-30T09:38:03Z","stale":false,"warnings":[],"voices":[\
+        {"provider":"senseaudio","source_type":"system","voice_id":"female_0006_a",\
+        "voice_name":"温柔御姐","emotion_label":null,"style_label":null,\
+        "description":["成熟女声"],"created_time":"2025-09-26"},\
+        {"provider":"senseaudio","source_type":"system","voice_id":"female_0033_a",\
+        "voice_name":"女声 0033","emotion_label":"平静","style_label":null,\
+        "description":[],"created_time":"2025-09-26"},\
+        {"provider":"someone-else","source_type":"system","voice_id":"other_1",\
+        "voice_name":"别家音色","emotion_label":null,"style_label":null,\
+        "description":[],"created_time":"2025-09-26"}]}}
+        """
+        let panel = makePanel(
+            book: book,
+            annotation: Annotation(
+                id: "h-wired", type: .highlight, chapterTitle: "第一章", locationInfo: "",
+                contentText: "接线检查用的正文。", noteText: nil,
+                createdAt: Date(timeIntervalSinceReferenceDate: 0)
+            ),
+            runner: { _, arguments, _ in
+                arguments.contains("voices") ? .success(catalogJSON) : .success(profileJSON)
+            },
+            hasCredential: true
+        )
+
+        // Touching .view is what runs viewDidLoad; the load task is async, so
+        // the run loop is turned until the menus settle or the budget runs out.
+        _ = panel.view
+        let group = view(named: "speech.voice-group", in: panel.view) as? NSPopUpButton
+        let variant = view(named: "speech.voice-variant", in: panel.view) as? NSPopUpButton
+        guard let group, let variant else {
+            check("目录接进面板：找得到两个音色下拉", false, "缺少 speech.voice-* 控件")
+            return
+        }
+        let deadline = Date().addingTimeInterval(5)
+        while group.numberOfItems == 0 && Date() < deadline {
+            RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.02))
+        }
+        panel.view.layoutSubtreeIfNeeded()
+
+        check("目录接进面板：一级音色下拉已填充", group.numberOfItems > 0,
+              "items=\(group.numberOfItems)")
+        check("目录接进面板：二级音色下拉已填充", variant.numberOfItems > 0,
+              "items=\(variant.numberOfItems)")
+        // Two SenseAudio voices under two names; the third is another provider
+        // and must not be offered at all (ADR 0007, and the builder's contract).
+        check("目录接进面板：按音色名分组且丢弃未测试供应商",
+              group.numberOfItems == 2
+                  && group.itemTitles.contains("温柔御姐")
+                  && group.itemTitles.contains("女声 0033")
+                  && !group.itemTitles.contains("别家音色"),
+              "titles=\(group.itemTitles)")
+        // A picked voice is what makes generate available; without it the panel
+        // looks populated but nothing can be produced.
+        let generate = view(named: "speech.generate", in: panel.view) as? NSButton
+        check("目录接进面板：选定音色后可生成", generate?.isEnabled == true,
+              "enabled=\(generate?.isEnabled.description ?? "nil") status=\(view(named: "speech.status", in: panel.view).map { ($0 as? NSTextField)?.stringValue ?? "" } ?? "")")
     }
 
     private static func checkCardEntry() {
