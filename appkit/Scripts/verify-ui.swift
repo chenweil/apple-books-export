@@ -613,7 +613,9 @@ enum VerifyLayout {
         let expected = Set(["speech.content-kind", "speech.content-preview",
                             "speech.characters", "speech.voice-group",
                             "speech.voice-variant", "speech.speed", "speech.volume",
-                            "speech.pitch", "speech.cost-notice", "speech.status",
+                            "speech.pitch", "speech.cost-notice",
+                            "speech.setup-result", "speech.generation-result",
+                            "speech.playback-result", "speech.export-result",
                             "speech.export-target",
                             "speech.generate", "speech.play", "speech.regenerate",
                             "speech.recheck", "speech.close", "speech.export"])
@@ -643,6 +645,208 @@ enum VerifyLayout {
         checkLongMessageDoesNotWidenThePanel(book: book)
         checkExportFollowsTheClipRule(book: book)
         checkExportTargetGuidance(book: book)
+        checkResultsDoNotOverwriteEachOther(book: book)
+        checkGenerationSurvivesAPathFailure(book: book)
+    }
+
+    /// The four result areas must not eat each other's text.
+    ///
+    /// They were one `statusLabel`, so each action overwrote the last: pressing
+    /// 播放 replaced "已生成（clip …）" with "正在播放。", and an export replaced
+    /// both. The user could not see whether the panel had generated anything,
+    /// was playing, or had written a file -- only what happened most recently.
+    ///
+    /// The assertion is therefore about **simultaneity**, not about any one
+    /// label's text: after all three actions, every result has to still be on
+    /// screen. Asserting each label separately in isolation would pass against
+    /// the old single label too, one at a time -- which is exactly why the
+    /// defect survived the assertions that were already there.
+    private static func checkResultsDoNotOverwriteEachOther(book: Book) {
+        print("\n生成 / 播放 / 导出结果互不覆盖")
+
+        let scratch = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("books-exporter-verify-areas-\(UUID().uuidString)")
+        let bookRoot = scratch.appendingPathComponent("100 Go Mistakes and How to Avoid Them")
+        try? FileManager.default.createDirectory(at: bookRoot, withIntermediateDirectories: true)
+        try? Data("# 100 Go Mistakes\n".utf8).write(
+            to: bookRoot.appendingPathComponent("100 Go Mistakes.md")
+        )
+        defer { try? FileManager.default.removeItem(at: scratch) }
+
+        let suiteName = "books-exporter-verify-areas-roots"
+        UserDefaults.standard.removePersistentDomain(forName: suiteName)
+        defer { UserDefaults.standard.removePersistentDomain(forName: suiteName) }
+        guard let defaults = UserDefaults(suiteName: suiteName) else {
+            check("结果分区：可用的 UserDefaults suite", false, "无法创建 suite")
+            return
+        }
+        let store = BookExportRootStore(defaults: defaults)
+        store.record(assetID: book.id, exportRoot: bookRoot)
+
+        let fixtures = SpeechPanelFixtures()
+        final class Calls: @unchecked Sendable {
+            private let lock = NSLock()
+            private var recorded: [[String]] = []
+            var all: [[String]] {
+                lock.lock(); defer { lock.unlock() }
+                return recorded
+            }
+            func record(_ arguments: [String]) {
+                lock.lock(); recorded.append(arguments); lock.unlock()
+            }
+        }
+        let calls = Calls()
+        let panel = makePanel(
+            book: book,
+            annotation: Annotation(
+                id: "h-areas", type: .highlight, chapterTitle: "第一章", locationInfo: "",
+                contentText: "结果分区检查用的正文。", noteText: nil,
+                createdAt: Date(timeIntervalSinceReferenceDate: 0)
+            ),
+            runner: { _, arguments, _ in
+                calls.record(arguments)
+                return fixtures.reply(to: arguments)
+            },
+            hasCredential: true,
+            exportRoots: store
+        )
+        _ = panel.view
+
+        func text(_ name: String) -> String {
+            (view(named: name, in: panel.view) as? NSTextField)?.stringValue ?? ""
+        }
+
+        guard let group = view(named: "speech.voice-group", in: panel.view) as? NSPopUpButton,
+              let generate = view(named: "speech.generate", in: panel.view) as? NSButton,
+              let play = view(named: "speech.play", in: panel.view) as? NSButton,
+              let export = view(named: "speech.export", in: panel.view) as? NSButton else {
+            check("结果分区：控件齐全", false, "缺少必要控件")
+            return
+        }
+        settle(group, until: { group.numberOfItems > 0 })
+        guard generate.isEnabled else {
+            check("结果分区：已选定音色后可生成（前提）", false, "generate 仍禁用")
+            return
+        }
+
+        // 1. Generate.
+        generate.performClick(nil)
+        settle(panel.view, until: {
+            text("speech.generation-result").contains("已生成")
+        })
+        check("生成结果落在生成区", text("speech.generation-result").contains("已生成"),
+              text("speech.generation-result"))
+        settle(panel.view, until: { play.isEnabled })
+
+        // 2. Play. `SpeechAudioPlayer` cannot play the fixture's path, so the
+        //    playback area reports a failure -- which is the stronger case: the
+        //    generation result must survive a *failed* playback message, which
+        //    is the one that used to hide it.
+        guard play.isEnabled else {
+            check("结果分区：生成后播放可用（前提）", false, "播放按钮仍禁用")
+            return
+        }
+        play.performClick(nil)
+        settle(panel.view, until: { text("speech.playback-result").contains("播放") })
+        check("播放结果落在播放区", text("speech.playback-result").contains("播放"),
+              text("speech.playback-result"))
+        check("播放不覆盖生成结果",
+              text("speech.generation-result").contains("已生成"),
+              "生成区=\(text("speech.generation-result"))")
+
+        // 3. Export.
+        guard export.isEnabled else {
+            check("结果分区：生成后导出可用（前提）", false, "导出按钮仍禁用")
+            return
+        }
+        export.performClick(nil)
+        settle(panel.view, until: {
+            calls.all.contains { $0.contains("export") && $0.contains(bookRoot.path) }
+        })
+        check("导出结果落在导出区", text("speech.export-result").contains("导出"),
+              text("speech.export-result"))
+        check("导出不覆盖生成结果",
+              text("speech.generation-result").contains("已生成"),
+              "生成区=\(text("speech.generation-result"))")
+        check("导出不覆盖播放结果",
+              text("speech.playback-result").contains("播放"),
+              "播放区=\(text("speech.playback-result"))")
+
+        // 4. A new generation does clear the other two -- they described the
+        //    previous clip, so that is staleness rather than overwriting. If
+        //    this ever goes green, the clearing was dropped and the areas
+        //    accumulate claims about clips that no longer exist.
+        generate.performClick(nil)
+        settle(panel.view, until: {
+            text("speech.generation-result").contains("正在生成")
+                || text("speech.generation-result").contains("已生成")
+        })
+        check("重新生成清掉上一条音频的播放与导出结果",
+              text("speech.playback-result").isEmpty && text("speech.export-result").isEmpty,
+              "播放区=\(text("speech.playback-result")) 导出区=\(text("speech.export-result"))")
+    }
+
+    /// When the path cannot be resolved, "已生成" has to stay on screen.
+    ///
+    /// This is the specific form the overwrite took: the panel generated
+    /// successfully, then resolved the playback path and reported the failure
+    /// into the same label -- so the one thing the user had just paid for
+    /// disappeared exactly when something went wrong. The first run of this
+    /// check drove playback through the 播放 button, where `SpeechAudioPlayer`
+    /// always throws for a fixture path; that covers `play()`'s catch branch
+    /// but not `resolvePlaybackPath`'s, and the mutation of the latter came
+    /// back green. So this case fails the `speech play` *command* instead.
+    private static func checkGenerationSurvivesAPathFailure(book: Book) {
+        print("\n路径解析失败不抹掉生成结果")
+
+        let fixtures = SpeechPanelFixtures()
+        let playFails = """
+        {"schema_version":1,"error":{"code":"SPEECH_CLIP_NOT_FOUND",\
+        "message":"the Cached Speech Clip is gone","remediation":"generate it again"}}
+        """
+        let panel = makePanel(
+            book: book,
+            annotation: Annotation(
+                id: "h-path-fail", type: .highlight, chapterTitle: "第一章", locationInfo: "",
+                contentText: "路径失败检查用的正文。", noteText: nil,
+                createdAt: Date(timeIntervalSinceReferenceDate: 0)
+            ),
+            runner: { _, arguments, _ in
+                if arguments.contains("play") {
+                    return RustCLICommandResult(
+                        stderr: Data(playFails.utf8), terminationStatus: 1
+                    )
+                }
+                return fixtures.reply(to: arguments)
+            },
+            hasCredential: true
+        )
+        _ = panel.view
+
+        func text(_ name: String) -> String {
+            (view(named: name, in: panel.view) as? NSTextField)?.stringValue ?? ""
+        }
+        guard let group = view(named: "speech.voice-group", in: panel.view) as? NSPopUpButton,
+              let generate = view(named: "speech.generate", in: panel.view) as? NSButton else {
+            check("路径失败：控件齐全", false, "缺少控件")
+            return
+        }
+        settle(group, until: { group.numberOfItems > 0 })
+        guard generate.isEnabled else {
+            check("路径失败：已选定音色后可生成（前提）", false, "generate 仍禁用")
+            return
+        }
+        generate.performClick(nil)
+        settle(panel.view, until: {
+            text("speech.playback-result").contains("无法播放")
+        })
+
+        check("路径解析失败落在播放区",
+              text("speech.playback-result").contains("无法播放"),
+              text("speech.playback-result"))
+        check("路径解析失败仍保留生成结果",
+              text("speech.generation-result").contains("已生成"),
+              "生成区=\(text("speech.generation-result"))")
     }
 
     /// The export target has to be the *book's* directory, and the panel has to
@@ -797,7 +1001,7 @@ enum VerifyLayout {
             // for one. So the precondition is asserted, not assumed.
             check("生成后导出可用（导出目标检查的前提）", export.isEnabled,
                   "enabled=\(export.isEnabled)")
-            let generatedStatus = (view(named: "speech.status", in: panel.view) as? NSTextField)?
+            let generatedStatus = (view(named: "speech.generation-result", in: panel.view) as? NSTextField)?
                 .stringValue ?? ""
             check("生成已成功（导出目标检查的前提）", generatedStatus.contains("已生成"),
                   "status=\(generatedStatus) calls=\(recorder.calls)")
@@ -979,8 +1183,9 @@ enum VerifyLayout {
         settle(export, until: { export.isEnabled })
 
         check("生成后可导出", export.isEnabled, "enabled=\(export.isEnabled)")
-        let status = (view(named: "speech.status", in: panel.view) as? NSTextField)?.stringValue ?? ""
-        check("生成后状态显示已生成", status.contains("已生成"), status)
+        let status = (view(named: "speech.generation-result", in: panel.view) as? NSTextField)?
+            .stringValue ?? ""
+        check("生成后生成结果显示已生成", status.contains("已生成"), status)
     }
 
     /// Turn the run loop until `condition` holds or the budget runs out. The
@@ -1046,16 +1251,16 @@ enum VerifyLayout {
         )
 
         _ = panel.view
-        let status = view(named: "speech.status", in: panel.view) as? NSTextField
+        let status = view(named: "speech.setup-result", in: panel.view) as? NSTextField
         guard let status else {
-            check("超长文案检查：找得到状态标签", false, "缺少 speech.status")
+            check("超长文案检查：找得到准备标签", false, "缺少 speech.setup-result")
             return
         }
         let deadline = Date().addingTimeInterval(5)
         while status.stringValue.isEmpty && Date() < deadline {
             RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.02))
         }
-        check("超长文案已进入状态标签", status.stringValue.contains("manifest belongs to"),
+        check("超长文案已进入准备标签", status.stringValue.contains("manifest belongs to"),
               "len=\(status.stringValue.count)")
 
         // What the sheet consults. Unbounded here is the shipped defect.
@@ -1348,7 +1553,7 @@ enum VerifyLayout {
         // looks populated but nothing can be produced.
         let generate = view(named: "speech.generate", in: panel.view) as? NSButton
         check("目录接进面板：选定音色后可生成", generate?.isEnabled == true,
-              "enabled=\(generate?.isEnabled.description ?? "nil") status=\(view(named: "speech.status", in: panel.view).map { ($0 as? NSTextField)?.stringValue ?? "" } ?? "")")
+              "enabled=\(generate?.isEnabled.description ?? "nil") status=\(view(named: "speech.generation-result", in: panel.view).map { ($0 as? NSTextField)?.stringValue ?? "" } ?? "")")
     }
 
     private static func checkCardEntry() {
