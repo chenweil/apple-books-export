@@ -40,7 +40,30 @@ final class SpeechPanelViewController: NSViewController {
     private let volumeValue = NSTextField(labelWithString: "")
     private let pitchValue = NSTextField(labelWithString: "")
     private let costLabel = NSTextField(labelWithString: "")
-    private let statusLabel = NSTextField(labelWithString: "")
+    /// One place per outcome, and **one writer each**.
+    ///
+    /// These were a single `statusLabel`, which meant every later action
+    /// overwrote every earlier one: pressing 播放 replaced "已生成（clip …）"
+    /// with "正在播放。", and an export replaced both. The user could not tell
+    /// whether the panel had generated anything, was playing, or had written a
+    /// file -- only what happened last.
+    ///
+    /// Splitting is only worth anything if the split is enforced, so the rule
+    /// is that a label is written by exactly one code path: `setupLabel` by the
+    /// load, `generationLabel` by generation, `playbackLabel` by playback,
+    /// `exportLabel` by export. Nothing reaches across. A new generation clears
+    /// the two that described the previous clip, because they *are* stale then
+    /// -- but it never writes into the others.
+    ///
+    /// `setupLabel` is separate rather than folded into `generationLabel` on
+    /// purpose: a missing key or an empty catalog is a precondition, and
+    /// `load()` clears its area on success. Sharing a label with the
+    /// generation result would mean pressing 重新检查 wiped a generation the
+    /// user had just paid for.
+    private let setupLabel = NSTextField(labelWithString: "")
+    private let generationLabel = NSTextField(labelWithString: "")
+    private let playbackLabel = NSTextField(labelWithString: "")
+    private let exportLabel = NSTextField(labelWithString: "")
     private let generateButton = NSButton(frame: .zero)
     private let playButton = NSButton(frame: .zero)
     private let regenerateButton = NSButton(frame: .zero)
@@ -226,14 +249,19 @@ final class SpeechPanelViewController: NSViewController {
         costLabel.lineBreakMode = .byWordWrapping
         costLabel.identifier = NSUserInterfaceItemIdentifier("speech.cost-notice")
 
-        statusLabel.textColor = .secondaryLabelColor
-        statusLabel.maximumNumberOfLines = 0
-        statusLabel.lineBreakMode = .byWordWrapping
-        statusLabel.identifier = NSUserInterfaceItemIdentifier("speech.status")
-
         // Same treatment as the other wrapping labels, for the same reason: a
-        // single-line intrinsic width here would stretch the sheet, and this
-        // label holds a filesystem path.
+        // single-line intrinsic width here would stretch the sheet, and these
+        // hold filesystem paths and provider messages.
+        for (label, name) in [(setupLabel, "speech.setup-result"),
+                              (generationLabel, "speech.generation-result"),
+                              (playbackLabel, "speech.playback-result"),
+                              (exportLabel, "speech.export-result")] {
+            label.textColor = .secondaryLabelColor
+            label.maximumNumberOfLines = 0
+            label.lineBreakMode = .byWordWrapping
+            label.identifier = NSUserInterfaceItemIdentifier(name)
+        }
+
         exportTargetLabel.textColor = .secondaryLabelColor
         exportTargetLabel.maximumNumberOfLines = 0
         exportTargetLabel.lineBreakMode = .byWordWrapping
@@ -287,8 +315,11 @@ final class SpeechPanelViewController: NSViewController {
             voiceRow,
             toneStack,
             costLabel,
+            setupLabel,
+            generationLabel,
+            playbackLabel,
             exportTargetLabel,
-            statusLabel,
+            exportLabel,
             buttonsStack,
         ])
         stack.orientation = NSUserInterfaceLayoutOrientation.vertical
@@ -333,8 +364,11 @@ final class SpeechPanelViewController: NSViewController {
             contentPreview.widthAnchor.constraint(equalTo: stack.widthAnchor),
             characterLabel.widthAnchor.constraint(equalTo: stack.widthAnchor),
             costLabel.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            setupLabel.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            generationLabel.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            playbackLabel.widthAnchor.constraint(equalTo: stack.widthAnchor),
             exportTargetLabel.widthAnchor.constraint(equalTo: stack.widthAnchor),
-            statusLabel.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            exportLabel.widthAnchor.constraint(equalTo: stack.widthAnchor),
             voiceRow.widthAnchor.constraint(equalTo: stack.widthAnchor),
             // The document's width is an absolute constant, not a chain of
             // relative constraints. A relative chain bounds the *layout* but
@@ -410,7 +444,7 @@ final class SpeechPanelViewController: NSViewController {
         // The catalog is a network call, so an absent key is reported here
         // rather than being discovered as an opaque auth failure later.
         guard await hasCredential() else {
-            statusLabel.stringValue = "尚未配置语音 API Key，请先在「设置 › 语音」中填写。"
+            setupLabel.stringValue = "准备：尚未配置语音 API Key，请先在「设置 › 语音」中填写。"
             return
         }
 
@@ -427,16 +461,19 @@ final class SpeechPanelViewController: NSViewController {
             // screen. That matters once the panel can be re-checked: without
             // this, configuring the key and pressing 重新检查 would repopulate
             // the pickers while still claiming no key is configured.
-            statusLabel.stringValue = ""
+            //
+            // Only this label. A generation the user already paid for is not
+            // invalidated by the catalog being re-read.
+            setupLabel.stringValue = ""
 
             // A stale catalog is usable but says so, because ADR 0007 warns it
             // is not a guarantee of what the account may use.
             if receipt.stale {
-                statusLabel.stringValue =
-                    "音色目录已过期（取自 \(receipt.fetchedAt ?? "未知时间")），生成前会自动刷新。"
+                setupLabel.stringValue =
+                    "准备：音色目录已过期（取自 \(receipt.fetchedAt ?? "未知时间")），生成前会自动刷新。"
             }
             if receipt.voices.isEmpty {
-                statusLabel.stringValue = "音色目录为空，供应商没有返回可用音色。"
+                setupLabel.stringValue = "准备：音色目录为空，供应商没有返回可用音色。"
             }
 
             // The receipt is decoded and checked and then, until this line, it
@@ -459,9 +496,9 @@ final class SpeechPanelViewController: NSViewController {
             rebuildVoiceMenus()
             reloadPreview()
         } catch let SpeechServiceError.commandFailed(error) {
-            statusLabel.stringValue = error.userFacingDescription
+            setupLabel.stringValue = "准备：\(error.userFacingDescription)"
         } catch {
-            statusLabel.stringValue = error.localizedDescription
+            setupLabel.stringValue = "准备：\(error.localizedDescription)"
         }
     }
 
@@ -474,7 +511,7 @@ final class SpeechPanelViewController: NSViewController {
     @objc private func recheck() {
         catalog = nil
         profile = nil
-        statusLabel.stringValue = "正在重新检查…"
+        setupLabel.stringValue = "准备：正在重新检查…"
         Task { await load() }
     }
 
@@ -662,7 +699,14 @@ final class SpeechPanelViewController: NSViewController {
         let kind = selectedContentKind
 
         setBusy(true)
-        statusLabel.stringValue = "正在生成…"
+        generationLabel.stringValue = "生成：正在生成…"
+        // The other two described the previous clip, which this run replaces.
+        // Clearing them is not the overwrite the split is about -- it is the
+        // one case where the old text is genuinely untrue rather than merely
+        // in the way. A generation the user has already paid for is untouched
+        // by 重新检查, which only ever writes the setup label.
+        playbackLabel.stringValue = ""
+        exportLabel.stringValue = ""
 
         Task {
             defer { setBusy(false) }
@@ -684,12 +728,12 @@ final class SpeechPanelViewController: NSViewController {
                 regenerateButton.isHidden = true
 
                 if receipt.wasBilled {
-                    statusLabel.stringValue = "已生成（clip \(String(receipt.clipID.prefix(12)))…）。"
+                    generationLabel.stringValue = "生成：已生成（clip \(String(receipt.clipID.prefix(12)))…）。"
                 } else {
-                    statusLabel.stringValue = "已复用缓存音频，没有产生费用。"
+                    generationLabel.stringValue = "生成：已复用缓存音频，没有产生费用。"
                 }
                 if let warnings = receipt.warnings, !warnings.isEmpty {
-                    statusLabel.stringValue += "\n" + warnings
+                    generationLabel.stringValue += "\n" + warnings
                         .map { "\($0.code)：\($0.message ?? $0.reason ?? "")" }
                         .joined(separator: "\n")
                 }
@@ -697,7 +741,7 @@ final class SpeechPanelViewController: NSViewController {
                 // panel reports an unreadable clip before the user presses it.
                 await resolvePlaybackPath(for: receipt.clipID)
             } catch let SpeechServiceError.commandFailed(error) {
-                statusLabel.stringValue = error.userFacingDescription
+                generationLabel.stringValue = "生成：\(error.userFacingDescription)"
                 if error.mayHaveBeenBilled {
                     // The provider may already have charged for this attempt, so
                     // the retry is offered as a distinct, separately-labelled
@@ -705,7 +749,7 @@ final class SpeechPanelViewController: NSViewController {
                     regenerateButton.isHidden = !(error.code == "SPEECH_RESULT_UNKNOWN")
                 }
             } catch {
-                statusLabel.stringValue = error.localizedDescription
+                generationLabel.stringValue = "生成：\(error.localizedDescription)"
             }
         }
     }
@@ -716,9 +760,9 @@ final class SpeechPanelViewController: NSViewController {
             generatedPath = receipt.path
             playButton.isEnabled = true
         } catch let SpeechServiceError.commandFailed(error) {
-            statusLabel.stringValue += "\n音频暂时无法播放：\(error.message)"
+            playbackLabel.stringValue = "播放：音频暂时无法播放（\(error.message)）。"
         } catch {
-            statusLabel.stringValue += "\n音频暂时无法播放：\(error.localizedDescription)"
+            playbackLabel.stringValue = "播放：音频暂时无法播放（\(error.localizedDescription)）。"
         }
     }
 
@@ -726,9 +770,9 @@ final class SpeechPanelViewController: NSViewController {
         guard let clipID = generatedClipID, let path = generatedPath else { return }
         do {
             try player.play(clipID: clipID, url: URL(fileURLWithPath: path))
-            statusLabel.stringValue = "正在播放。"
+            playbackLabel.stringValue = "播放：正在播放。"
         } catch {
-            statusLabel.stringValue = error.localizedDescription
+            playbackLabel.stringValue = "播放：\(error.localizedDescription)"
         }
     }
 
@@ -878,11 +922,11 @@ final class SpeechPanelViewController: NSViewController {
                 // audio, so it is the root to offer from now on.
                 exportRoots.record(assetID: book.id, exportRoot: directoryURL)
                 let where_ = receipt.reused ? "已存在相同文件，未重复写入" : "已导出"
-                statusLabel.stringValue = "\(where_)：\(receipt.relativePath)"
+                exportLabel.stringValue = "导出：\(where_)，写入 \(receipt.relativePath)"
             } catch let SpeechServiceError.commandFailed(error) {
-                statusLabel.stringValue = error.userFacingDescription
+                exportLabel.stringValue = "导出：\(error.userFacingDescription)"
             } catch {
-                statusLabel.stringValue = error.localizedDescription
+                exportLabel.stringValue = "导出：\(error.localizedDescription)"
             }
             refreshExportTarget()
             refreshActionStates()
