@@ -36,18 +36,30 @@ class BookService {
         }
     }
     
-    func exportToMarkdown(book: Book, annotations: [Annotation], outputURL: URL) async throws {
+    /// Exports the book and returns the directory its Markdown landed in.
+    ///
+    /// The two paths put the book in **different** directories, which is why the
+    /// answer comes from here rather than from the chosen `outputURL`: the Rust
+    /// exporter creates `outputURL/<safe title>/`, while the filtered fallback
+    /// writes `outputURL/<title>.md` directly. Returning the parent of the file
+    /// the CLI receipt names, or of the file this method wrote, is exact for
+    /// both -- the speech panel records it as the book's export root.
+    @discardableResult
+    func exportToMarkdown(book: Book, annotations: [Annotation], outputURL: URL) async throws -> URL? {
         isBusy = true
         defer { isBusy = false }
 
         if annotations.count == book.totalAnnotations {
-            _ = try await rustCLIClient.export(
+            let receipt = try await rustCLIClient.export(
                 assetID: book.id,
                 outputDirectory: outputURL,
                 format: "obsidian",
                 overwrite: false
             )
-            return
+            // The receipt's first entry is the book's main note; its parent is
+            // the book directory the Rust exporter created.
+            guard let first = receipt.generatedFiles.first else { return nil }
+            return URL(fileURLWithPath: first).deletingLastPathComponent()
         }
 
         // The machine export contract currently exports a whole asset and
@@ -58,6 +70,7 @@ class BookService {
         let content = markdownContent(for: book, annotations: annotations)
         let fileURL = outputURL.appendingPathComponent("\(sanitizedTitle(book.title)).md")
         try content.write(to: fileURL, atomically: true, encoding: .utf8)
+        return fileURL.deletingLastPathComponent()
     }
 
     func markdownContent(for book: Book, annotations: [Annotation]) -> String {

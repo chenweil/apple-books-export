@@ -3,6 +3,7 @@
 - 状态：已接受
 - 日期：2026-09-30
 - 关联：[`ADR 0006`](0006-appkit-initial-capability-boundary.md)、[`ADR 0007`](0007-annotation-speech-generation-boundary.md)
+- 后续：[`ADR 0009`](0009-speech-export-target.md)（语音导出的目标目录）
 
 ## 背景
 
@@ -99,15 +100,20 @@ SenseAudio 是「首个供应商」而非「已验证的唯一供应商」；给
 - `ADR 0006` 的能力清单不含语音。本 ADR 填补该缺口：语音是 AppKit 的**第二个用户
   入口**，不是首期能力，也不是被保留在 CLI 的能力；
 - Read-only TUI 和 Agent Data Skill **仍然没有**语音入口，与 `ADR 0007` 一致；
-- AppKit 只覆盖「生成 + 播放 + 音色选择」。`speech export`（导出到书籍导出目录并
-  更新 Speech Export Manifest）尚未接入 AppKit，参数已确认跟随 CLI 契约；
-- AppKit 的语音验证全部是 mock 的。CLI 路径曾于 2026-09-29 成功调用过真实供应商
-  （本机留下 `status: "succeeded"` 的 Speech Attempt，含供应商 `trace_id` 与回传用量），
-  但那是 2 个 unicode 字符的最小探针，**不构成 GUI 路径的验收**。`ADR 0007` 规定真实
-  provider 验收是显式 opt-in smoke，不在普通 CI 中运行，也不读取真实 Apple Books 内容。
-  **AppKit 的端到端真实验收尚未执行**；
-- Swift 侧的新增协议测试只能覆盖请求构造与回执解释，无法证明供应商会接受某个请求。
-  那一条只能由 opt-in smoke 覆盖。
+- AppKit 现已覆盖「生成 + 播放 + 音色选择 + 导出」。`speech export` 于 2026-10-01
+  （PR #63）接入，参数跟随 CLI 契约；导出目标**不是任意目录** —— 面板显示该书的导出根，
+  没有记录时先引导用户导出本书 Markdown，规则见
+  [`ADR 0009`](0009-speech-export-target.md)；
+- **（2026-10-01 更正）** 本 ADR 初版写的是「AppKit 的语音验证全部是 mock 的」
+  「**AppKit 的端到端真实验收尚未执行**」。这两句已过期：同日用户在**打包后的 app**
+  里对本机真实供应商跑通三次，本机
+  `~/Library/Application Support/books-exporter/speech/attempts/` 留下三条
+  `status: "succeeded"` 的 Speech Attempt，均带供应商 `trace_id` 与回传字符数
+  （73 / 34 / 34），对应三条不同 clip。初版依据的 CLI 最小探针（2 个 unicode 字符）
+  仍在，但那已不是唯一的真实调用证据。`ADR 0007` 关于「真实 provider 验收是显式
+  opt-in smoke、不进普通 CI」的**约束不变**，变的只是这条验收已经人工执行过；
+- Swift 侧的新增协议测试仍然只能覆盖请求构造与回执解释，无法证明供应商会接受某个请求。
+  那一条只能由 opt-in smoke 覆盖 —— 上面那次人工验收正是这样做的，不在 CI 里。
 
 ## 非目标
 

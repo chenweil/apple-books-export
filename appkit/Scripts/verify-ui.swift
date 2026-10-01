@@ -614,6 +614,7 @@ enum VerifyLayout {
                             "speech.characters", "speech.voice-group",
                             "speech.voice-variant", "speech.speed", "speech.volume",
                             "speech.pitch", "speech.cost-notice", "speech.status",
+                            "speech.export-target",
                             "speech.generate", "speech.play", "speech.regenerate",
                             "speech.recheck", "speech.close", "speech.export"])
         let unexpected = Set(actionIdentifiers).subtracting(expected)
@@ -641,6 +642,269 @@ enum VerifyLayout {
         checkVoiceMenusAreFilled(book: book)
         checkLongMessageDoesNotWidenThePanel(book: book)
         checkExportFollowsTheClipRule(book: book)
+        checkExportTargetGuidance(book: book)
+    }
+
+    /// The export target has to be the *book's* directory, and the panel has to
+    /// say so when there is not one.
+    ///
+    /// This is the fix for a defect no assertion covered: `speech export` takes
+    /// any writable directory, creates `assets/audio/` there, and reports
+    /// success. Choosing `~/Downloads` produced a manifest and an mp3 that no
+    /// exported note will ever link to, because `resolve_export_links` only
+    /// looks in `book_dir` -- and the panel's only guidance was the string
+    /// "choose a folder", which cannot express which folder.
+    ///
+    /// So the assertions are about the *decision*, not the wording. The panel
+    /// must (a) name a recorded directory, (b) treat a recorded-but-missing
+    /// directory as no directory, and (c) hand the recorded path to the CLI
+    /// itself rather than opening a picker first. (c) is the load-bearing one:
+    /// it is the difference between "exports to the right place" and "offers to
+    /// choose", and it is observable in the arguments the runner receives.
+    private static func checkExportTargetGuidance(book: Book) {
+        print("\n导出目标引导")
+
+        let scratch = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("books-exporter-verify-export-\(UUID().uuidString)")
+        let bookRoot = scratch.appendingPathComponent("100 Go Mistakes and How to Avoid Them")
+        let emptyDir = scratch.appendingPathComponent("empty")
+        let goneDir = scratch.appendingPathComponent("gone")
+        for directory in [bookRoot, emptyDir] {
+            try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        }
+        try? Data("# 100 Go Mistakes\n".utf8).write(
+            to: bookRoot.appendingPathComponent("100 Go Mistakes.md")
+        )
+        defer { try? FileManager.default.removeItem(at: scratch) }
+
+        let suiteName = "books-exporter-verify-export-roots"
+        UserDefaults.standard.removePersistentDomain(forName: suiteName)
+        defer { UserDefaults.standard.removePersistentDomain(forName: suiteName) }
+        guard let defaults = UserDefaults(suiteName: suiteName) else {
+            check("导出目标引导：可用的 UserDefaults suite", false, "无法创建 suite")
+            return
+        }
+        let store = BookExportRootStore(defaults: defaults)
+
+        let fixtures = SpeechPanelFixtures()
+        let brokenFixtures = SpeechPanelFixtures.validate()
+        check("语音面板的 canned 回执都能解成真实响应类型", brokenFixtures.isEmpty,
+              brokenFixtures.joined(separator: " | "))
+        let annotation = Annotation(
+            id: "h-export-target", type: .highlight, chapterTitle: "第一章", locationInfo: "",
+            contentText: "导出目标检查用的正文。", noteText: nil,
+            createdAt: Date(timeIntervalSinceReferenceDate: 0)
+        )
+
+        // A recorder rather than a captured `var`: the runner is `@Sendable` and
+        // runs off the main thread, so writing into a captured variable is an
+        // error under the Swift 6 language mode even though the probe is pinned
+        // to 5. This is the same shape `ProbeOutcome` uses.
+        final class CallRecorder: @unchecked Sendable {
+            private let lock = NSLock()
+            private var recorded: [[String]] = []
+
+            var calls: [[String]] {
+                lock.lock()
+                defer { lock.unlock() }
+                return recorded
+            }
+
+            func reset() {
+                lock.lock()
+                recorded = []
+                lock.unlock()
+            }
+
+            func record(_ arguments: [String]) {
+                lock.lock()
+                recorded.append(arguments)
+                lock.unlock()
+            }
+        }
+
+        func panelCapturing(_ recorder: CallRecorder) -> SpeechPanelViewController {
+            makePanel(
+                book: book,
+                annotation: annotation,
+                runner: { _, arguments, _ in
+                    recorder.record(arguments)
+                    return fixtures.reply(to: arguments)
+                },
+                hasCredential: true,
+                exportRoots: store
+            )
+        }
+
+        // 1. No record yet: the panel must say there is no export root rather
+        //    than offer a location, and must not export anywhere.
+        do {
+            let recorder = CallRecorder()
+            let panel = panelCapturing(recorder)
+            _ = panel.view
+            let label = (view(named: "speech.export-target", in: panel.view) as? NSTextField)?
+                .stringValue ?? ""
+
+            check("无记录时说明还不知道导出目录", label.contains("还不知道这本书的导出目录"), label)
+            check("无记录时不给出任何路径", !label.contains("/"), label)
+            if case .known = panel.exportTarget {
+                check("无记录时导出目标为缺失", false, "exportTarget 报为 known")
+            } else {
+                check("无记录时导出目标为缺失", true, "")
+            }
+            check("无记录时不自行发起导出",
+                  !recorder.calls.contains { $0.contains("export") },
+                  "calls=\(recorder.calls)")
+        }
+
+        // 2. Recorded and still a directory: the panel names it, and pressing
+        //    export writes there through the CLI with no picker in between.
+        do {
+            store.record(assetID: book.id, exportRoot: bookRoot)
+            let recorder = CallRecorder()
+            let panel = panelCapturing(recorder)
+            _ = panel.view
+
+            let label = (view(named: "speech.export-target", in: panel.view) as? NSTextField)?
+                .stringValue ?? ""
+            check("有记录时显示该书导出目录", label.contains(bookRoot.path), label)
+
+            guard case .known(let resolved) = panel.exportTarget else {
+                check("有记录时导出目标为已知目录", false, "exportTarget 报为 missing")
+                return
+            }
+            check("有记录时导出目标为已知目录", resolved.path == bookRoot.path,
+                  "resolved=\(resolved.path)")
+
+            // Generate so there is a clip, then press the real export control.
+            guard let group = view(named: "speech.voice-group", in: panel.view) as? NSPopUpButton,
+                  let generate = view(named: "speech.generate", in: panel.view) as? NSButton,
+                  let export = view(named: "speech.export", in: panel.view) as? NSButton else {
+                check("生成并导出（导出目标检查的前提）", false, "缺少控件")
+                return
+            }
+            settle(group, until: { group.numberOfItems > 0 })
+            guard generate.isEnabled else {
+                check("已选定音色后可生成（导出目标检查的前提）", false, "generate 仍禁用")
+                return
+            }
+            generate.performClick(nil)
+            settle(export, until: { export.isEnabled })
+
+            // `settle` gives up silently when its condition never holds, and a
+            // disabled export button turns `performClick` into a no-op -- which
+            // would make the assertion below fail for the wrong reason, or pass
+            // for one. So the precondition is asserted, not assumed.
+            check("生成后导出可用（导出目标检查的前提）", export.isEnabled,
+                  "enabled=\(export.isEnabled)")
+            let generatedStatus = (view(named: "speech.status", in: panel.view) as? NSTextField)?
+                .stringValue ?? ""
+            check("生成已成功（导出目标检查的前提）", generatedStatus.contains("已生成"),
+                  "status=\(generatedStatus) calls=\(recorder.calls)")
+
+            recorder.reset()
+            export.performClick(nil)
+            settle(panel.view, until: {
+                recorder.calls.contains { $0.contains("export") }
+            })
+
+            let exportCall = recorder.calls.first { $0.contains("export") }
+            check("导出直接交给 CLI，不弹目录选择", exportCall != nil,
+                  "calls=\(recorder.calls)")
+            if let exportCall {
+                // The recorded directory has to be the one that reaches
+                // `--output`. This is the assertion that would fail if the
+                // panel passed the parent, or an arbitrary picker result.
+                check("导出使用该书的导出目录", exportCall.contains(bookRoot.path),
+                      "arguments=\(exportCall)")
+            }
+        }
+
+        // 3. Recorded but the directory is gone: offering a dead path would
+        //    send the export somewhere the book's notes are not.
+        do {
+            store.record(assetID: book.id, exportRoot: goneDir)
+            let panel = panelCapturing(CallRecorder())
+            _ = panel.view
+            let label = (view(named: "speech.export-target", in: panel.view) as? NSTextField)?
+                .stringValue ?? ""
+            if case .known = panel.exportTarget {
+                check("目录已不存在时不作为导出目标", false, "exportTarget 报为 known")
+            } else {
+                check("目录已不存在时不作为导出目标", true, "")
+            }
+            check("目录已不存在时回到「还不知道导出目录」",
+                  label.contains("还不知道这本书的导出目录"), label)
+        }
+
+        // 4. The pre-write check itself, against real directories.
+        do {
+            store.record(assetID: book.id, exportRoot: bookRoot)
+            let panel = panelCapturing(CallRecorder())
+            _ = panel.view
+            check("含 Markdown 的目录通过导出前检查",
+                  panel.containsExportedMarkdown(bookRoot), bookRoot.path)
+            check("空目录不通过导出前检查",
+                  !panel.containsExportedMarkdown(emptyDir), emptyDir.path)
+            check("不存在的目录不通过导出前检查",
+                  !panel.containsExportedMarkdown(goneDir), goneDir.path)
+            check("文件不是导出目录",
+                  !panel.containsExportedMarkdown(
+                    bookRoot.appendingPathComponent("100 Go Mistakes.md")),
+                  "a .md file, not a directory")
+        }
+
+        // 5. A directory the user picked becomes the one offered next time.
+        //
+        //    Driven through `performExport` because `NSOpenPanel` cannot be
+        //    driven headlessly -- without this the "remember the choice" line is
+        //    the one behaviour in this change that no check can reach, and a
+        //    mutation that deletes it is invisible. The directory holds a `.md`
+        //    so the pre-write confirmation is not what is under test here.
+        do {
+            let chosen = scratch.appendingPathComponent("chosen")
+            try? FileManager.default.createDirectory(
+                at: chosen, withIntermediateDirectories: true)
+            try? Data("# chosen\n".utf8).write(to: chosen.appendingPathComponent("book.md"))
+            store.record(assetID: book.id, exportRoot: bookRoot)
+
+            let recorder = CallRecorder()
+            let panel = panelCapturing(recorder)
+            _ = panel.view
+            guard let generate = view(named: "speech.generate", in: panel.view) as? NSButton,
+                  let group = view(named: "speech.voice-group", in: panel.view) as? NSPopUpButton
+            else {
+                check("手动选目录后可导出（记忆检查的前提）", false, "缺少控件")
+                return
+            }
+            settle(group, until: { group.numberOfItems > 0 })
+            guard generate.isEnabled else {
+                check("已选定音色后可生成（记忆检查的前提）", false, "generate 仍禁用")
+                return
+            }
+            generate.performClick(nil)
+            settle(panel.view, until: {
+                (view(named: "speech.export", in: panel.view) as? NSButton)?.isEnabled == true
+            })
+
+            recorder.reset()
+            panel.performExport(clipID: SpeechPanelFixtures.clipID, to: chosen)
+            settle(panel.view, until: {
+                recorder.calls.contains {
+                    $0.contains("export") && $0.contains(chosen.path)
+                }
+            })
+            check("手动选的目录确实被导出",
+                  recorder.calls.contains { $0.contains(chosen.path) },
+                  "calls=\(recorder.calls)")
+            settle(panel.view, until: {
+                store.exportRoot(forAssetID: book.id)?.path == chosen.path
+            })
+            check("手动选的目录成为之后的导出目标",
+                  store.exportRoot(forAssetID: book.id)?.path == chosen.path,
+                  "stored=\(store.exportRoot(forAssetID: book.id)?.path ?? "nil") "
+                      + "expected=\(chosen.path)")
+        }
     }
 
     /// The export control appears only once there is something to export, and
@@ -874,7 +1138,10 @@ enum VerifyLayout {
         book: Book,
         annotation: Annotation,
         runner: RustCLIClient.Runner? = nil,
-        hasCredential: Bool = false
+        hasCredential: Bool = false,
+        exportRoots: BookExportRootStore = BookExportRootStore(
+            defaults: UserDefaults(suiteName: "books-exporter-verify-default-export-roots")!
+        )
     ) -> SpeechPanelViewController {
         let client = RustCLIClient(
             executableURL: URL(fileURLWithPath: "/tmp/apple-books-exporter"),
@@ -885,8 +1152,120 @@ enum VerifyLayout {
             annotation: annotation,
             speech: SpeechService(client: client),
             player: SpeechAudioPlayer(),
-            hasCredential: { hasCredential }
+            hasCredential: { hasCredential },
+            exportRoots: exportRoots
         )
+    }
+
+    /// Canned machine JSON for the four speech calls a panel makes, so one
+    /// runner can drive a whole panel lifecycle.
+    ///
+    /// Shared because the export-target check needs a *generated clip* before it
+    /// can press the export control, and hand-copying the generate receipt into a
+    /// second check is how the two copies drift.
+    private struct SpeechPanelFixtures {
+        static let clipID =
+            "14004204099a0116e9e43ca3d02ed7c5e035373e646ae5dc9feb7a23aaee9742"
+
+        private let profileJSON = """
+        {"schema_version":1,"receipt":{"operation":"profile_show","profile":\
+        {"provider":"senseaudio","model":"sensenova-tts-2.0","voice_id":"male_0004_a",\
+        "emotion_label":null,"style_label":null,"speed":1.0,"volume":1.0,"pitch":0,\
+        "verification_status":"unverified","verified_at":null,\
+        "audio":{"format":"mp3","sample_rate":32000,"bitrate":128000,"channel":2}},\
+        "api_key_env":"SENSEAUDIO_API_KEY","config_path":null,"warnings":[]}}
+        """
+        private let catalogJSON = """
+        {"schema_version":1,"receipt":{"operation":"voices","provider":"senseaudio",\
+        "fetched_at":"2026-09-30T09:38:03Z","stale":false,"warnings":[],"voices":[\
+        {"provider":"senseaudio","source_type":"system","voice_id":"female_0006_a",\
+        "voice_name":"温柔御姐","emotion_label":null,"style_label":null,\
+        "description":[],"created_time":"2025-09-26"}]}}
+        """
+        private func generateJSON(annotationID: String) -> String {
+            """
+            {"schema_version":1,"receipt":{"operation":"generate","clip_id":"\(Self.clipID)",\
+            "attempt_id":"attempt-probe","source":"provider","provider_called":true,\
+            "asset_id":"b1","annotation_id":"\(annotationID)","content_kind":"highlight",\
+            "text_sha256":"01805727314e4def395b368a7f71768e6129a55de56a68a5d7de97736145e9c9",\
+            "unicode_characters":10,"estimated_billing_characters":20,\
+            "billing_estimator_version":"senseaudio-docs-2026-09-10",\
+            "audio":{"format":"mp3","sample_rate":32000,"bitrate":128000,"channel":2,\
+            "duration_ms":11412,"size_bytes":182272},\
+            "provider":{"trace_id":"probe","usage_characters":10},"warnings":[]}}
+            """
+        }
+        private func exportJSON(annotationID: String) -> String {
+            """
+            {"schema_version":1,"receipt":{"operation":"export","clip_id":"\(Self.clipID)",\
+            "asset_id":"b1","annotation_id":"\(annotationID)","content_kind":"highlight",\
+            "relative_path":"assets/audio/highlight-\(Self.clipID.prefix(12)).mp3",\
+            "path":"/tmp/books/assets/audio/highlight-\(Self.clipID.prefix(12)).mp3",\
+            "sha256":"01805727314e4def395b368a7f71768e6129a55de56a68a5d7de97736145e9c9",\
+            "size_bytes":182272,"format":"mp3","exported_at":"2026-10-01T00:00:00Z",\
+            "reused":false,"replaced":false,"provider_called":false,"warnings":[]}}
+            """
+        }
+
+        func reply(to arguments: [String]) -> RustCLICommandResult {
+            let annotationID = value(after: "--annotation-id", in: arguments) ?? "h-probe"
+            if arguments.contains("voices") { return .success(catalogJSON) }
+            if arguments.contains("generate") { return .success(generateJSON(annotationID: annotationID)) }
+            if arguments.contains("export") { return .success(exportJSON(annotationID: annotationID)) }
+            if arguments.contains("play") { return .success(playJSON(annotationID: annotationID)) }
+            return .success(profileJSON)
+        }
+
+        private func playJSON(annotationID: String) -> String {
+            """
+            {"schema_version":1,"receipt":{"operation":"play","clip_id":"\(Self.clipID)",\
+            "source":"cache","played":false,"provider_called":false,"asset_id":"b1",\
+            "annotation_id":"\(annotationID)","content_kind":"highlight",\
+            "path":"/tmp/clips/\(Self.clipID).mp3",\
+            "audio":{"format":"mp3","sample_rate":32000,"bitrate":128000,"channel":2,\
+            "duration_ms":11412,"size_bytes":182272},"export_origin":null,"warnings":[]}}
+            """
+        }
+
+        /// Decodes every canned receipt into the type the client will decode it
+        /// into, and returns the ones that do not survive.
+        ///
+        /// A malformed fixture is invisible from the outside: it makes the panel
+        /// take its *error* path, so an assertion fails for a reason that has
+        /// nothing to do with what it is checking, and a neighbouring check can
+        /// stay green on a path nobody intended. A hand-typed extra `}` in the
+        /// generate receipt did exactly that; it was only found because the
+        /// export-target section also asserts its preconditions. Decoding each
+        /// fixture into its real response type turns "the fixture is valid" from
+        /// an assumption into a check.
+        static func validate() -> [String] {
+            let fixtures = SpeechPanelFixtures()
+            var broken: [String] = []
+
+            func verify<T: Decodable>(_ name: String, _ json: String, as type: T.Type) {
+                do {
+                    _ = try JSONDecoder().decode(T.self, from: Data(json.utf8))
+                } catch {
+                    broken.append("\(name): \(error)")
+                }
+            }
+
+            verify("profile", fixtures.profileJSON, as: SpeechProfileResponse.self)
+            verify("voices", fixtures.catalogJSON, as: VoiceCatalogResponse.self)
+            verify("generate", fixtures.generateJSON(annotationID: "a-1"),
+                   as: SpeechGenerateResponse.self)
+            verify("export", fixtures.exportJSON(annotationID: "a-1"),
+                   as: SpeechExportResponse.self)
+            verify("play", fixtures.playJSON(annotationID: "a-1"),
+                   as: SpeechPlayResponse.self)
+            return broken
+        }
+
+        private func value(after flag: String, in arguments: [String]) -> String? {
+            guard let index = arguments.firstIndex(of: flag),
+                  arguments.indices.contains(index + 1) else { return nil }
+            return arguments[index + 1]
+        }
     }
 
     /// The catalog must actually reach the pickers.

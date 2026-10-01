@@ -14,6 +14,7 @@ final class SpeechPanelViewController: NSViewController {
     private let speech: SpeechService
     private let player: SpeechAudioPlaying
     private let hasCredential: () async -> Bool
+    private let exportRoots: BookExportRootStore
 
     // Controls
     private let contentKindControl = NSSegmentedControl(
@@ -60,6 +61,16 @@ final class SpeechPanelViewController: NSViewController {
     /// one self-consistent bundle, so the target is the book's export root and
     /// the Speech Export Manifest is refreshed with it.
     private let exportButton = NSButton(frame: .zero)
+    /// Where the audio would go, and what to do about it when there is nowhere
+    /// yet.
+    ///
+    /// `speech export` accepts any writable directory, so a panel that only said
+    /// "choose a folder" invited the one choice that silently produces an
+    /// orphan: a directory that is not this book's export root, where the audio
+    /// lands but no exported note will ever link to it. Naming the directory up
+    /// front -- and saying plainly when there is not one yet -- is what turns
+    /// that from a silent mistake into a visible state.
+    private let exportTargetLabel = NSTextField(labelWithString: "")
 
     // State
     private var catalog: SpeechVoiceCatalog?
@@ -103,13 +114,15 @@ final class SpeechPanelViewController: NSViewController {
         annotation: Annotation,
         speech: SpeechService,
         player: SpeechAudioPlaying,
-        hasCredential: @escaping () async -> Bool
+        hasCredential: @escaping () async -> Bool,
+        exportRoots: BookExportRootStore = .shared
     ) {
         self.book = book
         self.annotation = annotation
         self.speech = speech
         self.player = player
         self.hasCredential = hasCredential
+        self.exportRoots = exportRoots
         super.init(nibName: nil, bundle: nil)
         preferredContentSize = Self.panelSize()
     }
@@ -218,6 +231,15 @@ final class SpeechPanelViewController: NSViewController {
         statusLabel.lineBreakMode = .byWordWrapping
         statusLabel.identifier = NSUserInterfaceItemIdentifier("speech.status")
 
+        // Same treatment as the other wrapping labels, for the same reason: a
+        // single-line intrinsic width here would stretch the sheet, and this
+        // label holds a filesystem path.
+        exportTargetLabel.textColor = .secondaryLabelColor
+        exportTargetLabel.maximumNumberOfLines = 0
+        exportTargetLabel.lineBreakMode = .byWordWrapping
+        exportTargetLabel.identifier = NSUserInterfaceItemIdentifier("speech.export-target")
+        refreshExportTarget()
+
         configureButton(generateButton, title: "生成", action: #selector(generate),
                         identifier: "speech.generate")
         configureButton(playButton, title: "播放", action: #selector(play),
@@ -265,6 +287,7 @@ final class SpeechPanelViewController: NSViewController {
             voiceRow,
             toneStack,
             costLabel,
+            exportTargetLabel,
             statusLabel,
             buttonsStack,
         ])
@@ -310,6 +333,7 @@ final class SpeechPanelViewController: NSViewController {
             contentPreview.widthAnchor.constraint(equalTo: stack.widthAnchor),
             characterLabel.widthAnchor.constraint(equalTo: stack.widthAnchor),
             costLabel.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            exportTargetLabel.widthAnchor.constraint(equalTo: stack.widthAnchor),
             statusLabel.widthAnchor.constraint(equalTo: stack.widthAnchor),
             voiceRow.widthAnchor.constraint(equalTo: stack.widthAnchor),
             // The document's width is an absolute constant, not a chain of
@@ -708,14 +732,70 @@ final class SpeechPanelViewController: NSViewController {
         }
     }
 
+    /// Where this book's audio belongs, right now.
+    ///
+    /// Internal rather than private so the probe can assert the decision itself
+    /// for every state of the store, rather than only reading the label that
+    /// describes it. A label says what the panel claims; this says what it will
+    /// do.
+    enum ExportTarget {
+        /// A directory that exists and is the one a previous export used.
+        case known(URL)
+        /// Nothing recorded, or the recorded directory has since gone away.
+        case missing
+    }
+
+    var exportTarget: ExportTarget {
+        exportRoots.existingExportRoot(forAssetID: book.id).map(ExportTarget.known) ?? .missing
+    }
+
     /// Ask for the book's export directory, then hand the whole thing to the
     /// CLI. The panel does not copy the file itself: ADR 0007 makes the Rust
     /// core the only writer of the export bundle, because the audio and the
     /// Markdown that links to it have to stay one self-consistent artifact.
+    ///
+    /// With a recorded root this is one click and no dialog. Without one it is
+    /// two: there is nothing to offer, and saying "choose a folder" is what
+    /// produced the orphan in the first place.
     @objc private func exportAudio() {
-        guard let clipID = generatedClipID, let window = view.window else { return }
+        guard let clipID = generatedClipID else { return }
+
+        switch exportTarget {
+        case .known(let root):
+            // Deliberately not gated on a window. There is nothing to ask on
+            // this path, and requiring a window would make the only correct
+            // action unavailable anywhere the panel is not presented as a sheet.
+            runExport(clipID: clipID, to: root)
+        case .missing:
+            guard let window = view.window else { return }
+            let alert = NSAlert()
+            alert.alertStyle = .informational
+            alert.messageText = "还不知道这本书的导出目录"
+            alert.informativeText = """
+            语音音频要写进这本书的导出目录，也就是 Markdown 已经导出到的那一层；\
+            写进别处，Markdown 不会生成链接，这份音频就没人引用。
+
+            先回到书籍详情「导出」本书的 Markdown，之后回到这里再导出音频。
+            """
+            alert.addButton(withTitle: "选择导出目录…")
+            alert.addButton(withTitle: "取消")
+            alert.beginSheetModal(for: window) { [weak self] response in
+                guard response == .alertFirstButtonReturn else { return }
+                self?.chooseExportDirectory(clipID: clipID)
+            }
+        }
+    }
+
+    /// The directory picker, for the case where there is no record -- or where
+    /// the user wants to send this book somewhere else.
+    ///
+    /// The title says which layer to pick because the wrong one is not obvious
+    /// from the result: writing into `assets/audio/` itself, or into a parent
+    /// that holds no Markdown, both "work" and both are wrong.
+    private func chooseExportDirectory(clipID: String) {
+        guard let window = view.window else { return }
         let panel = NSOpenPanel()
-        panel.title = "选择这本书的导出目录"
+        panel.title = "选择这本书的导出目录（Markdown 所在的那一层，不要选 assets/audio）"
         panel.prompt = "导出"
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
@@ -727,7 +807,65 @@ final class SpeechPanelViewController: NSViewController {
         }
     }
 
-    private func performExport(clipID: String, to directoryURL: URL) {
+    /// Last gate before the CLI writes: does this directory look like a book
+    /// export root?
+    ///
+    /// The check is deliberately a warning rather than a refusal. Exporting the
+    /// audio *before* the Markdown is legitimate -- the manifest is read by the
+    /// next Markdown export, which then links it -- so a directory with no
+    /// `.md` yet is a legitimate thing to write into. What is never legitimate
+    /// is doing it without knowing, because the failure is invisible afterwards:
+    /// the export succeeds, the receipt is a success, and the audio is an orphan
+    /// that no note links to. So the panel states the consequence and lets the
+    /// user decide.
+    ///
+    /// Internal so the probe can drive it directly: `NSOpenPanel` cannot be
+    /// driven headlessly, so without this the "remember the directory the user
+    /// chose" behaviour -- the thing that makes a manual choice stick for next
+    /// time -- would be unreachable from any check.
+    func performExport(clipID: String, to directoryURL: URL) {
+        guard !containsExportedMarkdown(directoryURL) else {
+            runExport(clipID: clipID, to: directoryURL)
+            return
+        }
+        guard let window = view.window else { return }
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "这个目录里没有 Markdown"
+        alert.informativeText = """
+        音频会写进 \(directoryURL.path)/assets/audio/。
+
+        只有把本书的 Markdown 导出到同一层目录，之后的导出才会生成音频链接；\
+        否则这份音频不会被任何笔记引用。
+        """
+        alert.addButton(withTitle: "返回")
+        alert.addButton(withTitle: "仍要导出")
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard response == .alertSecondButtonReturn else { return }
+            self?.runExport(clipID: clipID, to: directoryURL)
+        }
+    }
+
+    /// Whether the directory already holds a book's Markdown. An unreadable or
+    /// missing directory answers false, which is the safe direction: it sends
+    /// the user through the confirmation rather than writing silently.
+    ///
+    /// Internal so the probe can exercise it against real directories. The
+    /// behaviour worth testing here is not "a label says the right thing" but
+    /// "a directory with no notes in it is recognised as having no notes in it",
+    /// including the two shapes that are easy to get wrong: a path that does
+    /// not exist, and a path that is a file.
+    func containsExportedMarkdown(_ directoryURL: URL) -> Bool {
+        guard let entries = try? FileManager.default.contentsOfDirectory(
+            at: directoryURL,
+            includingPropertiesForKeys: nil
+        ) else {
+            return false
+        }
+        return entries.contains { $0.pathExtension.lowercased() == "md" }
+    }
+
+    private func runExport(clipID: String, to directoryURL: URL) {
         setBusy(true)
         defer { setBusy(false) }
         Task {
@@ -736,6 +874,9 @@ final class SpeechPanelViewController: NSViewController {
                     clipID: clipID,
                     to: directoryURL.path
                 )
+                // A successful export proves this directory accepts this book's
+                // audio, so it is the root to offer from now on.
+                exportRoots.record(assetID: book.id, exportRoot: directoryURL)
                 let where_ = receipt.reused ? "已存在相同文件，未重复写入" : "已导出"
                 statusLabel.stringValue = "\(where_)：\(receipt.relativePath)"
             } catch let SpeechServiceError.commandFailed(error) {
@@ -743,7 +884,28 @@ final class SpeechPanelViewController: NSViewController {
             } catch {
                 statusLabel.stringValue = error.localizedDescription
             }
+            refreshExportTarget()
             refreshActionStates()
+        }
+    }
+
+    /// The export target, or the reason there is not one.
+    ///
+    /// Reads the same `exportTarget` the button acts on, so the sentence on
+    /// screen and the action cannot describe different things.
+    ///
+    /// The wording is 「还不知道」 rather than 「还没有」 on purpose: the panel
+    /// knows what *this app* has exported, and nothing else. A book exported
+    /// from the CLI, or before this version existed, does have an export root
+    /// the panel cannot see -- and telling the user it does not would be a
+    /// claim it has no way to make.
+    private func refreshExportTarget() {
+        switch exportTarget {
+        case .known(let root):
+            exportTargetLabel.stringValue = "导出目录：\(root.path)"
+        case .missing:
+            exportTargetLabel.stringValue = "还不知道这本书的导出目录。在书籍详情「导出」本书的 Markdown 之后，"
+                + "这里会直接写进那一层；也可以点「导出音频」自己选一个。"
         }
     }
 
