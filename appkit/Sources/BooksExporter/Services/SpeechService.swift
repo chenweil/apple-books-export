@@ -249,6 +249,22 @@ struct SpeechService {
         )
     }
 
+    /// The read-only cache view: every clip on this machine, with the identity
+    /// the panel needs to answer "has this annotation been generated before".
+    ///
+    /// Not credentialed, and the `cache status` command is not a network path
+    /// at all -- the contract states zero provider calls. That matters for the
+    /// panel: listing what already exists must work before a key is configured
+    /// and without spending anything.
+    func cacheStatus() async throws -> [SpeechCacheEntry] {
+        let result = try await receipt(
+            SpeechCacheStatusResponse.self,
+            arguments: ["speech", "cache", "status", "--json"],
+            credentialed: false
+        )
+        return result.receipt.entries
+    }
+
     /// Resolves a clip to a verified audio path. Does not play: the machine
     /// entry point is contractually silent and `played` is always false.
     func play(clipID: String, exportRoot: String? = nil) async throws -> SpeechPlayReceipt {

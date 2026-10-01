@@ -57,6 +57,8 @@ enum VerifyLayout {
         checkMainMenu()
         checkSettings()
         checkSpeechEntry()
+        checkExistingClipsAreListed()
+        checkNoSectionWithoutCachedClips()
         checkSplitView()
         checkDetailLayout()
         checkAnnotationRowHeight()
@@ -617,9 +619,20 @@ enum VerifyLayout {
                             "speech.setup-result", "speech.generation-result",
                             "speech.playback-result", "speech.export-result",
                             "speech.export-target",
+                            "speech.clips-section", "speech.clips-list",
+                            "speech.clips-error",
                             "speech.generate", "speech.play", "speech.regenerate",
                             "speech.recheck", "speech.close", "speech.export"])
-        let unexpected = Set(actionIdentifiers).subtracting(expected)
+        // One row per cached clip, and each row's identifiers carry that clip's
+        // ID, so they cannot be enumerated here. What this guard is for is a
+        // stray *control*, so the dynamic rows are allowed by prefix and every
+        // other `speech.` identifier still has to be on the list.
+        let dynamicPrefixes = ["speech.clip-row."]
+        let unexpected = Set(actionIdentifiers)
+            .subtracting(expected)
+            .filter { identifier in
+                !dynamicPrefixes.contains { identifier.hasPrefix($0) }
+            }
         check("面板没有多余的动作控件（无第二次确认）", unexpected.isEmpty,
               "unexpected=\(unexpected.sorted())")
         check("面板动作控件齐全", expected.subtracting(Set(actionIdentifiers)).isEmpty,
@@ -1371,6 +1384,12 @@ enum VerifyLayout {
     private struct SpeechPanelFixtures {
         static let clipID =
             "14004204099a0116e9e43ca3d02ed7c5e035373e646ae5dc9feb7a23aaee9742"
+        /// A second clip of the *same* annotation: the note half. A distinct
+        /// ID matters -- a check that reused `clipID` for both rows could not
+        /// tell "the row acted on its own clip" from "the row acted on the
+        /// selected one", which is the property under test.
+        static let noteClipID =
+            "3f9a2b1c0d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c"
 
         private let profileJSON = """
         {"schema_version":1,"receipt":{"operation":"profile_show","profile":\
@@ -1414,11 +1433,67 @@ enum VerifyLayout {
 
         func reply(to arguments: [String]) -> RustCLICommandResult {
             let annotationID = value(after: "--annotation-id", in: arguments) ?? "h-probe"
+            // Before the fall-through: `speech cache status` shares no
+            // subcommand with the other four, so without this it would be
+            // answered with the profile fixture and the panel's list would be
+            // decoded from a profile -- silently empty rather than an error.
+            if arguments.contains("cache") { return .success(cacheStatusJSON) }
             if arguments.contains("voices") { return .success(catalogJSON) }
             if arguments.contains("generate") { return .success(generateJSON(annotationID: annotationID)) }
             if arguments.contains("export") { return .success(exportJSON(annotationID: annotationID)) }
             if arguments.contains("play") { return .success(playJSON(annotationID: annotationID)) }
             return .success(profileJSON)
+        }
+
+        /// The whole-machine cache report, quoted from `src/speech/machine.rs`.
+        ///
+        /// Carries a deliberate mixture so the filter is exercised by the
+        /// default fixture rather than only by the checks that care: this
+        /// annotation's highlight, its note, a different annotation, a different
+        /// book, a `corrupt` entry with `null` identity, and an `absent` one.
+        private var cacheStatusJSON: String {
+            """
+            {"schema_version":1,"receipt":{"operation":"cache_status",\
+            "budget_bytes":1073741824,"safety_margin_bytes":10485760,\
+            "usable_budget_bytes":1063256064,"used_bytes":2048,\
+            "accepted_entries":2,"absent_entries":1,"blocked_entries":0,\
+            "corrupt_entries":1,"locked_entries":0,"reclaimable_versions":0,\
+            "entries":[
+            \(Self.cacheEntry(clipID: Self.clipID, assetID: "b1", annotationID: "h-clips", kind: "highlight", duration: "11412")),
+            \(Self.cacheEntry(clipID: Self.noteClipID, assetID: "b1", annotationID: "h-clips", kind: "note", duration: "8000")),
+            \(Self.cacheEntry(clipID: "aa-neighbour", assetID: "b1", annotationID: "h-other", kind: "highlight", duration: "5000")),
+            \(Self.cacheEntry(clipID: "bb-otherbook", assetID: "b2", annotationID: "h-clips", kind: "highlight", duration: "5000")),
+            \(Self.cacheEntry(clipID: "cc-corrupt", assetID: nil, annotationID: nil, kind: nil, duration: "null", status: "corrupt")),
+            \(Self.cacheEntry(clipID: "dd-absent", assetID: "b1", annotationID: "h-clips", kind: "highlight", duration: "null", status: "absent"))
+            ],"warnings":[]}}
+            """
+        }
+
+        /// One cache entry, as the contract writes it.
+        ///
+        /// The identity fields take `nil` and emit a real JSON `null` rather
+        /// than the four characters `"null"`. That distinction is the whole
+        /// point of the corrupt row: a `null` identity is what makes the entry
+        /// unattributable, and a quoted `"null"` would decode into a string that
+        /// matches no annotation -- so the row would still be rejected, but for
+        /// the wrong reason, and the check would no longer be testing the
+        /// contract's real shape.
+        private static func cacheEntry(
+            clipID: String,
+            assetID: String?,
+            annotationID: String?,
+            kind: String?,
+            duration: String,
+            status: String = "ready"
+        ) -> String {
+            func quoted(_ value: String?) -> String {
+                value.map { "\"\($0)\"" } ?? "null"
+            }
+            return """
+            {"clip_id":"\(clipID)","asset_id":\(quoted(assetID)),            "annotation_id":\(quoted(annotationID)),            "content_kind":\(quoted(kind)),"duration_ms":\(duration),"status":"\(status)",\
+            "accepted":\(status == "ready"),"generation_blocked":false,"in_use":null,\
+            "used_bytes":1024,"reclaimable_versions":0,"last_used_at":"2026-10-01T00:00:00Z"}
+            """
         }
 
         private func playJSON(annotationID: String) -> String {
@@ -1463,6 +1538,8 @@ enum VerifyLayout {
                    as: SpeechExportResponse.self)
             verify("play", fixtures.playJSON(annotationID: "a-1"),
                    as: SpeechPlayResponse.self)
+            verify("cache status", fixtures.cacheStatusJSON,
+                   as: SpeechCacheStatusResponse.self)
             return broken
         }
 
@@ -1471,6 +1548,282 @@ enum VerifyLayout {
                   arguments.indices.contains(index + 1) else { return nil }
             return arguments[index + 1]
         }
+    }
+
+    /// The clips this annotation already has, and what the panel does with them.
+    ///
+    /// Before this, the panel could only talk about the clip it had just made:
+    /// reopening it showed no audio at all, which read as 「这条标注没生成过」
+    /// even when the cache held two of them.
+    ///
+    /// The assertions are ordered so each one depends on the last having
+    /// succeeded -- an empty list would make "two rows" false for a reason that
+    /// has nothing to do with the row, and the kind-switch case below would pass
+    /// vacuously with nothing selected.
+    private static func checkExistingClipsAreListed() {
+        print("\n列出本标注已有的 clip")
+
+        let book = Book(id: "b1", title: "为什么长大", author: "某人",
+                        totalAnnotations: 3, highlightsCount: 1, notesCount: 1)
+        let annotation = Annotation(
+            id: "h-clips", type: .highlight, chapterTitle: "第一章", locationInfo: "",
+            contentText: "这是一段高亮正文，用于验证已有 clip 的列���。",
+            noteText: "这是一条笔记，用于验证两种内容类型可以并存。",
+            createdAt: Date(timeIntervalSinceReferenceDate: 0)
+        )
+
+        let fixtures = SpeechPanelFixtures()
+        final class Calls: @unchecked Sendable {
+            private let lock = NSLock()
+            private var recorded: [[String]] = []
+            var all: [[String]] {
+                lock.lock(); defer { lock.unlock() }
+                return recorded
+            }
+            func record(_ arguments: [String]) {
+                lock.lock(); recorded.append(arguments); lock.unlock()
+            }
+        }
+        let calls = Calls()
+
+        // A real export root, or 导出 opens the "还没有导出目录" sheet -- which
+        // needs a window this panel does not have, so the click would be a
+        // silent no-op and the assertion below would be reading an empty
+        // recording rather than a wrong clip.
+        let scratch = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("books-exporter-verify-clips-\(UUID().uuidString)")
+        let bookRoot = scratch.appendingPathComponent("为什么长大")
+        try? FileManager.default.createDirectory(at: bookRoot, withIntermediateDirectories: true)
+        try? Data("# 为什么长大\n".utf8).write(
+            to: bookRoot.appendingPathComponent("为什么长大.md")
+        )
+        defer { try? FileManager.default.removeItem(at: scratch) }
+        let suiteName = "books-exporter-verify-clips-roots"
+        UserDefaults.standard.removePersistentDomain(forName: suiteName)
+        defer { UserDefaults.standard.removePersistentDomain(forName: suiteName) }
+        guard let defaults = UserDefaults(suiteName: suiteName) else {
+            check("已有 clip：可用的 UserDefaults suite", false, "无法创建 suite")
+            return
+        }
+        let store = BookExportRootStore(defaults: defaults)
+        store.record(assetID: book.id, exportRoot: bookRoot)
+
+        let panel = makePanel(
+            book: book,
+            annotation: annotation,
+            runner: { _, arguments, _ in
+                calls.record(arguments)
+                return fixtures.reply(to: arguments)
+            },
+            hasCredential: true,
+            exportRoots: store
+        )
+        _ = panel.view
+
+        guard let toggle = view(named: "speech.clips-section", in: panel.view) as? NSButton,
+              let list = view(named: "speech.clips-list", in: panel.view),
+              let export = view(named: "speech.export", in: panel.view) as? NSButton,
+              let segmented = firstSegmentedControl(in: panel.view) else {
+            check("已有 clip：控件齐全", false, "缺少必要控件")
+            return
+        }
+
+        // Wait for the whole load, not for the section title. The title is
+        // written while `load()` is still `busy`, and every row control is
+        // disabled while busy, so settling on the title would read the panel
+        // mid-load and the row assertions below would fail for a reason that
+        // has nothing to do with the rows. The generate button is the signal
+        // that the load finished: it needs a resolved voice, which only the
+        // catalog step provides.
+        guard let generate = view(named: "speech.generate", in: panel.view) as? NSButton else {
+            check("已有 clip：控件齐全", false, "缺少生成按钮")
+            return
+        }
+        settle(panel.view, until: { generate.isEnabled && toggle.title.contains("2 条") })
+
+        // 1. The count, and it is a filter result rather than a raw entry count:
+        //    the fixture also carries a different annotation, a different book,
+        //    a corrupt entry and an absent one.
+        check("已有 clip：只列本标注本机的 ready 音频", toggle.title.contains("2 条"),
+              "section=\(toggle.title)")
+        check("已有 clip：非空时不隐藏 section", !toggle.isHidden,
+              "isHidden=\(toggle.isHidden)")
+
+        // 2. Collapsed by default. The cost notice already carries the count, so
+        //    an annotation with one clip should not open onto a list.
+        check("已有 clip：默认收起", list.isHidden, "isHidden=\(list.isHidden)")
+
+        // 3. Expanded, one row per clip, each naming its own content kind.
+        toggle.performClick(nil)
+        panel.view.layoutSubtreeIfNeeded()
+        check("已有 clip：展开后可见", !list.isHidden, "isHidden=\(list.isHidden)")
+
+        let highlightRow = view(
+            named: SpeechPanelViewController.clipRowIdentifier(SpeechPanelFixtures.clipID),
+            in: panel.view
+        )
+        let noteRow = view(
+            named: SpeechPanelViewController.clipRowIdentifier(SpeechPanelFixtures.noteClipID),
+            in: panel.view
+        )
+        check("已有 clip：高亮与笔记各成一行", highlightRow != nil && noteRow != nil,
+              "高亮=\(highlightRow != nil) 笔记=\(noteRow != nil)")
+
+        guard let highlightRow, let noteRow else { return }
+        check("已有 clip：每行标出自己的内容类型",
+              rowText(highlightRow).contains("高亮") && rowText(noteRow).contains("笔记"),
+              "高亮行=\(rowText(highlightRow)) 笔记行=\(rowText(noteRow))")
+        check("已有 clip：每行带出时长",
+              rowText(highlightRow).contains("11.4 秒") && rowText(noteRow).contains("8.0 秒"),
+              "高亮行=\(rowText(highlightRow)) 笔记行=\(rowText(noteRow))")
+
+        // 4. A row acts on **its own** clip. Playback is not observable through
+        //    the player (the fixture path cannot be played), so the chain is:
+        //    press the note row's play, then press the main 导出, and assert the
+        //    export carried the note's clip ID. A row that acted on the
+        //    selection instead of on itself would write the highlight's audio.
+        guard let notePlay = view(
+            named: SpeechPanelViewController.clipRowIdentifier(SpeechPanelFixtures.noteClipID) + ".play",
+            in: noteRow
+        ) as? NSButton else {
+            check("已有 clip：行内有播放按钮（前提）", false, "找不到笔记行的播放")
+            return
+        }
+        check("已有 clip：行内播放可用（前提）", notePlay.isEnabled, "isEnabled=\(notePlay.isEnabled)")
+
+        let beforeExports = calls.all.filter { $0.contains("export") }.count
+        notePlay.performClick(nil)
+        settle(panel.view, until: {
+            calls.all.filter { $0.contains("export") }.count > beforeExports
+        })
+
+        guard export.isEnabled else {
+            check("已有 clip：选过行之后主导出可用（前提）", false, "导出仍禁用")
+            return
+        }
+        export.performClick(nil)
+        settle(panel.view, until: {
+            calls.all.filter { $0.contains("export") }.count > beforeExports + 1
+        })
+        let exported = calls.all.filter { $0.contains("export") }.last
+        check("已有 clip：行内选择决定导出哪一条",
+              exported?.contains(SpeechPanelFixtures.noteClipID) == true,
+              "最后一条 export=\(exported ?? [])")
+
+        // 5. The bug this list made fixable.
+        //
+        // The note clip is selected and 导出 is live. Switching to 高亮 used to
+        // redraw the preview and nothing else, so 导出 went on writing the
+        // *note's* audio while the panel showed the highlight: the user pressed
+        // export on a highlight and got a note. The selection has to be dropped
+        // when the part on screen changes.
+        select(segment: 0, in: segmented)
+        panel.view.layoutSubtreeIfNeeded()
+        check("切回高亮后导出不指向笔记那条", !export.isEnabled,
+              "导出仍可用=\(export.isEnabled)")
+        check("切回高亮后播放也一并失效",
+              (view(named: "speech.play", in: panel.view) as? NSButton)?.isEnabled != true,
+              "播放仍可用")
+
+        // And with a selection dropped, the two results that described it are
+        // gone rather than left describing a clip the panel no longer offers.
+        func text(_ name: String) -> String {
+            (view(named: name, in: panel.view) as? NSTextField)?.stringValue ?? ""
+        }
+        check("切换内容类型后不残留上一条的播放与导出结果",
+              text("speech.playback-result").isEmpty && text("speech.export-result").isEmpty,
+              "播放区=\(text("speech.playback-result")) 导出区=\(text("speech.export-result"))")
+
+        // 6. The cost sentence counts this annotation's clips, and does not
+        //    promise a cache hit it cannot know about.
+        let cost = (view(named: "speech.cost-notice", in: panel.view) as? NSTextField)?
+            .stringValue ?? ""
+        check("成本提示点明已有音频的条数", cost.contains("已有 2 条音频"),
+              "cost=\(cost)")
+        check("成本提示不再拿音色参数冒充缓存命中",
+              !cost.contains("参数与已缓存音频一致") && !cost.contains("这是一次新的生成"),
+              "cost=\(cost)")
+
+        // Switching to 笔记 has a same-kind clip, so the reuse sentence is
+        // offered -- conditionally, because the panel cannot know which voice
+        // and tone produced the existing one.
+        select(segment: 1, in: segmented)
+        panel.view.layoutSubtreeIfNeeded()
+        let noteCost = (view(named: "speech.cost-notice", in: panel.view) as? NSTextField)?
+            .stringValue ?? ""
+        check("成本提示在有同类音频时说明可复用", noteCost.contains("若与其中一条完全相同"),
+              "cost=\(noteCost)")
+
+        // 7. A clip produced in this session joins the list, and joins it
+        //    *once*. The generate fixture hands back the same clip ID the
+        //    cache report already lists, which is the interesting case: an
+        //    append would show the user two rows of the same audio and a count
+        //    of 3 for two files.
+        select(segment: 0, in: segmented)
+        generate.performClick(nil)
+        settle(panel.view, until: {
+            (view(named: "speech.generation-result", in: panel.view) as? NSTextField)?
+                .stringValue.contains("已生成") == true
+        })
+        check("生成后新 clip 进列表且不重复",
+              toggle.title.contains("2 条") && allViews(in: panel.view)
+                .contains { $0.identifier?.rawValue.hasPrefix("speech.clip-row.") == true },
+              "section=\(toggle.title)")
+        check("生成后 cost 提示仍与条数一致",
+              ((view(named: "speech.cost-notice", in: panel.view) as? NSTextField)?
+                .stringValue.contains("已有 2 条音频") == true),
+              "cost=\((view(named: "speech.cost-notice", in: panel.view) as? NSTextField)?.stringValue ?? "")")
+    }
+
+    /// An annotation with nothing cached gets no disclosure at all.
+    ///
+    /// A 「已有的语音（0 条）」 that opens onto nothing is the shape the section
+    /// is trying not to be: on the common first visit it is a control that
+    /// exists only to say there is nothing, and it pushes the action row down
+    /// the panel for no reason.
+    private static func checkNoSectionWithoutCachedClips() {
+        print("\n没有缓存时不显示已有 clip 的 section")
+
+        let book = Book(id: "b-empty", title: "空书", author: "某人",
+                        totalAnnotations: 1, highlightsCount: 1, notesCount: 0)
+        let fixtures = SpeechPanelFixtures()
+        let panel = makePanel(
+            book: book,
+            annotation: Annotation(
+                id: "h-never-generated", type: .highlight, chapterTitle: "第一章",
+                locationInfo: "", contentText: "从未生成过的正文。", noteText: nil,
+                createdAt: Date(timeIntervalSinceReferenceDate: 0)
+            ),
+            runner: { _, arguments, _ in fixtures.reply(to: arguments) },
+            hasCredential: true
+        )
+        _ = panel.view
+
+        guard let toggle = view(named: "speech.clips-section", in: panel.view) as? NSButton,
+              let generate = view(named: "speech.generate", in: panel.view) as? NSButton else {
+            check("无缓存：控件齐全", false, "缺少必要控件")
+            return
+        }
+        settle(panel.view, until: { generate.isEnabled })
+
+        check("无缓存时 section 隐藏", toggle.isHidden, "isHidden=\(toggle.isHidden)")
+        check("无缓存时不渲染任何行",
+              !allViews(in: panel.view).contains {
+                  $0.identifier?.rawValue.hasPrefix("speech.clip-row.") == true
+              },
+              "仍存在 clip 行")
+        check("无缓存时 cost 提示说明这是第一条",
+              ((view(named: "speech.cost-notice", in: panel.view) as? NSTextField)?
+                .stringValue.contains("还没有音频") == true),
+              "cost=\((view(named: "speech.cost-notice", in: panel.view) as? NSTextField)?.stringValue ?? "")")
+    }
+
+    /// All the text in a clip row, in one string, so an assertion can talk
+    /// about "the row" rather than about which child holds the label.
+    private static func rowText(_ row: NSView) -> String {
+        var parts: [String] = []
+        for field in textFields(in: row) { parts.append(field.stringValue) }
+        return parts.joined(separator: " | ")
     }
 
     /// The catalog must actually reach the pickers.

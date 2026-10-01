@@ -293,23 +293,6 @@ struct SpeechProfile: Decodable, Equatable {
         case verifiedAt = "verified_at"
         case audio
     }
-
-    /// Whether the stored profile's tone matches the values a panel is about to
-    /// submit. `clip_id` is a fingerprint over these fields, so a difference
-    /// means a different clip and therefore a different paid generation -- not a
-    /// re-render of the same audio.
-    func toneDiffers(
-        voiceID: String?,
-        speed: Double,
-        volume: Double,
-        pitch: Int
-    ) -> Bool {
-        if let voiceID, self.voiceID != voiceID { return true }
-        if self.speed != speed { return true }
-        if self.volume != volume { return true }
-        if self.pitch != pitch { return true }
-        return false
-    }
 }
 
 /// The audio format contract. `path`, `sha256`, `sizeBytes` and `durationMS`
@@ -442,6 +425,108 @@ struct SpeechPlayReceipt: Decodable {
         case audio
         case warnings
         case exportOrigin = "export_origin"
+    }
+}
+
+/// `speech cache status --json` 的成功响应。
+///
+/// 只读的本地视图：零 provider 连接，零凭据。
+struct SpeechCacheStatusResponse: Decodable {
+    let schemaVersion: Int
+    let receipt: SpeechCacheStatusReceipt
+
+    enum CodingKeys: String, CodingKey {
+        case schemaVersion = "schema_version"
+        case receipt
+    }
+}
+
+/// 缓存状态收据。
+///
+/// 只解码面板真正用到的部分。收据里的预算与异常统计是给 `speech cache status`
+/// 的**人读**输出用的，面板一个都不显示；把 `budget_bytes`、`reclaimable_versions`
+/// 之类照抄进来只会让每次协议微调都要改这份 Swift，而面板一行都用不到。
+struct SpeechCacheStatusReceipt: Decodable {
+    let operation: String
+    let entries: [SpeechCacheEntry]
+
+    enum CodingKeys: String, CodingKey {
+        case operation
+        case entries
+    }
+}
+
+/// 一条 clip 的缓存状态明细。
+///
+/// 归属字段（`asset_id` / `annotation_id` / `content_kind`）在状态不可信时是
+/// `null`，这是**故意**的：Rust 侧不回退到 state，因为一条自相矛盾的归属比没有
+/// 归属更危险——它会让面板把别人的音频列到这个标注名下。这里保留 `null` 而不是
+/// 补一个默认值，过滤时它们自然落选，见
+/// ``[SpeechCacheEntry]/playable(forAssetID:annotationID:)``。
+struct SpeechCacheEntry: Decodable, Equatable {
+    let clipID: String
+    let assetID: String?
+    let annotationID: String?
+    let contentKind: String?
+    /// 当前版本的音频时长（毫秒）；没有已校验音频时为 `null`。
+    let durationMs: Int?
+    /// `ready` / `absent` / `corrupt`。
+    let status: String
+    let accepted: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case clipID = "clip_id"
+        case assetID = "asset_id"
+        case annotationID = "annotation_id"
+        case contentKind = "content_kind"
+        case durationMs = "duration_ms"
+        case status
+        case accepted
+    }
+}
+
+/// 一条属于本标注、且**现在就能播放**的音频。
+///
+/// 面板显示和操作的最小单位。刻意不带音色与音调：缓存条目里没有这些字段
+/// （`clip_id` 是它们的指纹，算法归 Rust 所有），所以面板不能声称"这条是按
+/// 当前参数做的"。见 `updateCostNotice` 那里为什么只能给条件式说法。
+struct SpeechClipSummary: Equatable {
+    let clipID: String
+    /// `highlight` 或 `note`。
+    let contentKind: String
+    let durationMs: Int?
+}
+
+extension Array where Element == SpeechCacheEntry {
+    /// The clips that belong to one annotation and can actually be played.
+    ///
+    /// Three filters, each for its own reason:
+    ///
+    /// - **identity** -- the entry's own `asset_id` / `annotation_id` must match.
+    ///   They are `null` when the entry is untrustworthy, and a `null` never
+    ///   equals anything, so untrustworthy entries drop out here. Falling back
+    ///   to the state file instead would be the bug: a `corrupt` row whose
+    ///   identity came from somewhere else would be filed under the wrong
+    ///   annotation, and the user would play -- and export -- the wrong audio.
+    /// - **status** -- only `ready`. `absent` and `corrupt` have no verified
+    ///   audio behind the clip ID, so the play and export controls have nothing
+    ///   to act on; listing them would offer an action that can only fail.
+    /// - **order** -- the contract already sorts by clip ID, and this keeps that
+    ///   order so a reopened panel shows the same list in the same order.
+    func playable(forAssetID assetID: String, annotationID: String) -> [SpeechClipSummary] {
+        filter { entry in
+            entry.status == "ready"
+                && entry.assetID == assetID
+                && entry.annotationID == annotationID
+                && entry.contentKind != nil
+        }
+        .map {
+            SpeechClipSummary(
+                clipID: $0.clipID,
+                contentKind: $0.contentKind ?? "highlight",
+                durationMs: $0.durationMs
+            )
+        }
     }
 }
 
