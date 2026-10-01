@@ -3,6 +3,9 @@ import AppKit
 final class BookDetailViewController: NSViewController {
     private let bookService = BookService()
     private let detailView = BookDetailView()
+    /// Where each book's Markdown went, so the speech panel opened from here
+    /// can offer that directory instead of asking for an arbitrary one.
+    private let exportRoots = BookExportRootStore.shared
     private var selectedBook: Book?
     private var loadTask: Task<Void, Never>?
     private var exportTask: Task<Void, Never>?
@@ -88,11 +91,14 @@ final class BookDetailViewController: NSViewController {
             defer { detailView.setExporting(false) }
 
             do {
-                try await bookService.exportToMarkdown(
+                let exportRoot = try await bookService.exportToMarkdown(
                     book: book,
                     annotations: annotations,
                     outputURL: directoryURL
                 )
+                if let exportRoot {
+                    exportRoots.record(assetID: book.id, exportRoot: exportRoot)
+                }
                 guard !Task.isCancelled else { return }
                 showAlert(
                     message: "导出完成",

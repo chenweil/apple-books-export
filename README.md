@@ -194,7 +194,7 @@ swift test                # 82 项 XCTest
 
 选中一条标注后，行尾会出现「生成语音」入口。面板先展示将要发送的内容、音色、
 语速、音量、声调和估算的计费字符数，**按「生成」即为授权**，没有第二个确认弹窗。
-生成后可直接播放。
+生成后可直接播放，也可以「导出音频」写进这本书的导出目录。
 
 几个需要先知道的事：
 
@@ -207,13 +207,21 @@ swift test                # 82 项 XCTest
   另一次生成。参数与已缓存音频一致时才会命中缓存、不产生费用；
 - **只朗读一个内容部分**：高亮或个人笔记，二者分别生成。没有笔记的标注不会提供笔记
   选项；
+- **导出的目标是这本书的导出目录，也就是 Markdown 已导出到的那一层**，不是任意文件夹。
+  面板把这一层显示在「导出音频」旁边：应用导出过这本书就直接写进去；没导出过就提示先
+  在书籍详情「导出」本书的 Markdown。写进别的目录导出依然会成功，但那份音频不会被任何
+  笔记引用 —— Markdown 只在自己的导出目录里找音频链接；
 - 目前只呈现 **SenseAudio** 这一个已测试的渠道。边界与取舍见
   [ADR 0008](docs/adr/0008-appkit-speech-entry.md)，供应商侧规则见
   [ADR 0007](docs/adr/0007-annotation-speech-generation-boundary.md)；
-- `speech export`（把音频写进书籍导出目录并更新导出清单）尚未接入 GUI，只能用 CLI。
+- `speech export` 的全部参数都跟随 CLI 契约，图形界面不另立一套规则。
 
-> AppKit 的语音路径目前只有 mock 覆盖。真实供应商验收是显式的本地 opt-in smoke，
+> AppKit 语音路径的自动化覆盖仍是 mock：真实供应商验收是显式的本地 opt-in smoke，
 > 不在普通 CI 中运行，也不读取真实 Apple Books 内容 —— 详见 ADR 0007「验证边界」。
+> 但 2026-10-01 已在**打包后的 app** 里对本机真实供应商跑通三次，三条
+> `status: "succeeded"` 的 Speech Attempt 留在
+> `~/Library/Application Support/books-exporter/speech/attempts/`，均带供应商 `trace_id`
+> 与回传字符数（73 / 34 / 34）。此前文档里「GUI 从未对真实供应商跑过」的说法已过期。
 
 ## 发布
 

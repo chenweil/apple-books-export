@@ -13,6 +13,9 @@ final class MainViewController: NSViewController, NSSplitViewDelegate {
     private let splitView = NSSplitView()
     private let bookListViewController = BookListViewController()
     private let bookDetailViewController = BookDetailViewController()
+    /// Exporting many books records one root each, so the speech panel knows
+    /// where each of them went.
+    private let exportRoots = BookExportRootStore.shared
     private var didSetInitialPosition = false
     private var activationObserver: NSObjectProtocol?
     private var settingsObserver: NSObjectProtocol?
@@ -136,7 +139,12 @@ final class MainViewController: NSViewController, NSSplitViewDelegate {
             for book in books {
                 let annotations = await bookService.getAnnotations(for: book.id)
                 do {
-                    try await bookService.exportToMarkdown(book: book, annotations: annotations, outputURL: directoryURL)
+                    let exportRoot = try await bookService.exportToMarkdown(
+                        book: book, annotations: annotations, outputURL: directoryURL
+                    )
+                    if let exportRoot {
+                        exportRoots.record(assetID: book.id, exportRoot: exportRoot)
+                    }
                     succeeded += 1
                 } catch {
                     failed += 1

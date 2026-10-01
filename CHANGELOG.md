@@ -21,20 +21,26 @@ AppKit 现在有了语音入口。它是语音的**第二个用户入口，不�
   `clip_id` 的指纹语义（上文 v0.3.4）；
 - 音色选择器为两级分组，**不可用的组合显式置灰并附原因，不静默替换为近似音色**；
   存储的音色不在当前目录中时停在第一个可用项，而不是退回列表第一条；
+- **生成后可以「导出音频」**，把缓存里的音频写进这本书的导出目录并更新 Speech Export
+  Manifest。导出目标**不是任意目录**：面板常驻显示「导出目录：<path>」，应用导出过这本书
+  就直接写进那一层；没有记录、或记录的那一层已经被移动删除时，提示先在书籍详情「导出」
+  本书的 Markdown。手动选的目录里若没有任何 Markdown，写入前会说明「这份音频不会被任何
+  笔记引用」再由用户确认（先导音频、后导 Markdown 是合法顺序，所以不拦）；
 - 目前**只呈现 SenseAudio 这一个已测试的渠道**。目录里来自未验证供应商的条目被丢弃
   而非置灰——置灰仍然是在承诺一个存在但没走过的路径。
 
-边界与取舍见 [ADR 0008](docs/adr/0008-appkit-speech-entry.md)，供应商侧规则见
+边界与取舍见 [ADR 0008](docs/adr/0008-appkit-speech-entry.md)，导出目标的规则见
+[ADR 0009](docs/adr/0009-speech-export-target.md)，供应商侧规则见
 [ADR 0007](docs/adr/0007-annotation-speech-generation-boundary.md)。
 
 ### 未覆盖的范围
 
-- **AppKit 语音路径目前只有 mock 覆盖，从未对真实供应商跑过**。CLI 路径曾在 2026-09-29
-  成功调用过供应商（见上文 v0.3.4），但那是 CLI 入口，**不能推断 GUI 路径可用** ——
-  真实供应商验收按 ADR 0007 属显式 opt-in smoke，不在普通 CI 中运行，也不读取真实
-  Apple Books 内容。AppKit 这一段还多一层：GUI 只在 build 树里被测过，从未在打包后的
-  app 里被打开过；
-- `speech export`（写进书籍导出目录并更新导出清单）**尚未接入图形界面**，只能用 CLI；
+- **AppKit 语音路径的自动化覆盖仍然是 mock**：真实供应商验收是显式的本地 opt-in smoke，
+  不在普通 CI 中运行，也不读取真实 Apple Books 内容（见 ADR 0007「验证边界」）。
+  但**人工验收已经做过**——2026-10-01 在打包后的 app 里对本机真实供应商跑通三次，
+  `~/Library/Application Support/books-exporter/speech/attempts/` 留下三条
+  `status: "succeeded"` 的 Speech Attempt，均带供应商 `trace_id` 与回传字符数
+  （73 / 34 / 34）。此前本文档写的「GUI 从未对真实供应商跑过」已过期；
 - Read-only TUI 与 Agent Data Skill **仍无**语音入口。
 
 ## v0.3.5 - 2026-09-30
