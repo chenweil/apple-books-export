@@ -104,6 +104,42 @@ struct SpeechService {
     /// Both streams are consulted, because the contract puts success JSON on
     /// stdout and failure JSON on stderr. An empty stdout is treated as a
     /// malformed response rather than as an empty result.
+    /// Copies a verified clip into the book's export directory and refreshes the
+    /// Speech Export Manifest.
+    ///
+    /// Not credentialed, and not because the key is optional: ADR 0007 makes
+    /// every export path local -- `provider_called` is always false and the
+    /// receipt says so, so a client can assert it rather than assume it. The
+    /// directory is the book's export root, not the audio folder inside it;
+    /// that is the CLI's parameter contract and the panel passes it through
+    /// unchanged.
+    func export(
+        clipID: String,
+        to exportRoot: String,
+        overwrite: Bool = false
+    ) async throws -> SpeechExportReceipt {
+        var arguments = [
+            "speech", "export", "--json",
+            "--clip-id", clipID,
+            "--output", exportRoot,
+        ]
+        if overwrite { arguments.append("--overwrite") }
+        let result = try await receipt(
+            SpeechExportResponse.self,
+            arguments: arguments,
+            credentialed: false
+        )
+        // The contract states this is always false. Asserting it costs nothing
+        // and turns a contract change into a visible failure rather than a
+        // surprise bill.
+        guard !result.receipt.providerCalled else {
+            throw SpeechServiceError.malformedResponse(
+                "speech export 报告联系了语音供应商，导出路径不应联网"
+            )
+        }
+        return result.receipt
+    }
+
     private func receipt<Response: Decodable>(
         _ type: Response.Type,
         arguments: [String],

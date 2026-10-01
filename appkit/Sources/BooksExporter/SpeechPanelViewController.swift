@@ -54,6 +54,12 @@ final class SpeechPanelViewController: NSViewController {
     /// The way out. A sheet presented with `presentAsSheet` has no title bar of
     /// its own, so nothing else dismisses it: without this the panel is a trap.
     private let closeButton = NSButton(frame: .zero)
+    /// Copies the generated clip into the book's export directory, the same
+    /// "pick a directory, write into it" shape Share Card uses. Not a free-form
+    /// "save anywhere": ADR 0007 keeps the audio and the exported Markdown as
+    /// one self-consistent bundle, so the target is the book's export root and
+    /// the Speech Export Manifest is refreshed with it.
+    private let exportButton = NSButton(frame: .zero)
 
     // State
     private var catalog: SpeechVoiceCatalog?
@@ -222,6 +228,8 @@ final class SpeechPanelViewController: NSViewController {
                         action: #selector(recheck), identifier: "speech.recheck")
         configureButton(closeButton, title: "关闭",
                         action: #selector(closePanel), identifier: "speech.close")
+        configureButton(exportButton, title: "导出音频",
+                        action: #selector(exportAudio), identifier: "speech.export")
         playButton.isEnabled = false
         regenerateButton.isHidden = true
 
@@ -231,6 +239,9 @@ final class SpeechPanelViewController: NSViewController {
         // disabled by that bad state.
         recheckButton.isEnabled = true
         closeButton.isEnabled = true
+        // Unlike the two above, export has nothing to repair and everything to
+        // act on, so it follows the ordinary rule: no clip, nothing to export.
+        exportButton.isEnabled = false
 
         // macOS puts the dismissing action on the trailing edge, so a flexible
         // gap pushes 关闭 away from the generation actions.
@@ -240,7 +251,7 @@ final class SpeechPanelViewController: NSViewController {
         gap.widthAnchor.constraint(greaterThanOrEqualToConstant: 24).isActive = true
 
         for button in [generateButton, playButton, regenerateButton, recheckButton,
-                       gap, closeButton] {
+                       exportButton, gap, closeButton] {
             buttonsStack.addArrangedSubview(button)
         }
         buttonsStack.orientation = NSUserInterfaceLayoutOrientation.horizontal
@@ -697,6 +708,45 @@ final class SpeechPanelViewController: NSViewController {
         }
     }
 
+    /// Ask for the book's export directory, then hand the whole thing to the
+    /// CLI. The panel does not copy the file itself: ADR 0007 makes the Rust
+    /// core the only writer of the export bundle, because the audio and the
+    /// Markdown that links to it have to stay one self-consistent artifact.
+    @objc private func exportAudio() {
+        guard let clipID = generatedClipID, let window = view.window else { return }
+        let panel = NSOpenPanel()
+        panel.title = "选择这本书的导出目录"
+        panel.prompt = "导出"
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.beginSheetModal(for: window) { [weak self] response in
+            guard response == .OK, let directoryURL = panel.url else { return }
+            self?.performExport(clipID: clipID, to: directoryURL)
+        }
+    }
+
+    private func performExport(clipID: String, to directoryURL: URL) {
+        setBusy(true)
+        defer { setBusy(false) }
+        Task {
+            do {
+                let receipt = try await speech.export(
+                    clipID: clipID,
+                    to: directoryURL.path
+                )
+                let where_ = receipt.reused ? "已存在相同文件，未重复写入" : "已导出"
+                statusLabel.stringValue = "\(where_)：\(receipt.relativePath)"
+            } catch let SpeechServiceError.commandFailed(error) {
+                statusLabel.stringValue = error.userFacingDescription
+            } catch {
+                statusLabel.stringValue = error.localizedDescription
+            }
+            refreshActionStates()
+        }
+    }
+
     private func setBusy(_ value: Bool) {
         busy = value
         refreshActionStates()
@@ -715,5 +765,6 @@ final class SpeechPanelViewController: NSViewController {
         generateButton.isEnabled = !busy && withinLimit && selectedVoiceID != nil
         playButton.isEnabled = !busy && generatedPath != nil
         regenerateButton.isEnabled = !busy && !regenerateButton.isHidden
+        exportButton.isEnabled = !busy && generatedClipID != nil
     }
 }
