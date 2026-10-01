@@ -503,6 +503,13 @@ apple-books-exporter speech history clear --json
 
 - 默认预算 1 GiB（`config.json` 的非秘密字段 `cache_budget_bytes` 可调），其中必须保留
   128 MiB 安全余量，因此真正可给缓存内容使用的是 `budget - 128 MiB`；
+- **`cache status` 的每条 entry 带归属与时长**：`asset_id`、`annotation_id`、
+  `content_kind` 和 `duration_ms`。有了它，「这条高亮之前生成过吗、生成过几条、各多长」
+  是契约能直接回答的问题——`clip_id` 是内容加 Voice Profile 的指纹，算法归 Rust 核心
+  所有，调用方不该重算一遍来反推归属。这四个字段在音频没通过校验时是 `null`：
+  一个 `corrupt` entry 的身份不可信，报出来会让调用方以为它还能用；
+- 同一条标注可以有多条 clip（改了音色或任一音调参数就是另一条、另一次计费），
+  所以 `annotation_id` 相同、`clip_id` 不同的 entry 各自独立列出；
 - `cache status` 不删除、不改写任何东西，也不调用 provider：损坏 entry 与未被 current
   pointer 引用的孤立 version 只被报告；
 - LRU 与 `cache clear` 都不淘汰当前 clip，也不淘汰正在生成（跨进程 writer 锁）、播放或

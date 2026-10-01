@@ -212,6 +212,21 @@ pub struct CacheStatusReport {
 pub struct CacheStatusEntry {
     /// 完整 clip ID。
     pub clip_id: String,
+    /// 这条 clip 属于哪本书；状态不可信或没有 state 时为 `null`。
+    ///
+    /// 存在的理由是**归属查询**：`clip_id` 是「内容 + Voice Profile」的指纹，
+    /// 指纹算法归本模块所有，调用方不该重算一遍来回答「这条高亮之前生成过吗」。
+    /// 归属只能由这里给出。
+    pub asset_id: Option<String>,
+    /// 这条 clip 属于哪条标注；同 [`Self::asset_id`]。
+    pub annotation_id: Option<String>,
+    /// 内容部分（highlight / note）；同 [`Self::asset_id`]。
+    ///
+    /// 单独给出而不是靠 `annotation_id` 推断：同一条标注的高亮和笔记是两条
+    /// 独立 clip，调用方要分别列出。
+    pub content_kind: Option<SpeechContentKind>,
+    /// 当前版本的音频时长（毫秒）；没有已校验音频时为 `null`。
+    pub duration_ms: Option<u64>,
     /// `ready` / `absent` / `corrupt`。
     pub status: ClipCacheStatus,
     /// 是否已接受：current pointer 指向通过校验的 version。
@@ -1172,7 +1187,30 @@ impl ClipCache {
             let reclaimable_versions = if in_use.is_none() { orphans } else { 0 };
             let last_used_at = stored.as_ref().and_then(|state| state.last_used_at.clone());
 
-            let (status, accepted, blocked) = match self.load_ready_clip(&clip_id) {
+            // 归属与时长来自**已校验的当前版本**，不是 state 里的字符串：state 只
+            // 记录指针和状态，音频本身的 metadata 才是「这条 clip 是什么」的来源。
+            // 校验不通过时全部为 null，而不是回退到 state —— 一个 corrupt entry
+            // 的归属是不可信的，报出来会让调用方以为它可用。
+            //
+            // 三种结果（Ok(Some) / Ok(None) / Err）必须分开：`Ok(None)` 是「没有
+            // 可用音频」，`Err` 是「音频与指针矛盾」，后者是 corrupt 而不是 absent。
+            // 合并两者会把损坏的 entry 报成普通的 absent。
+            let loaded = self.load_ready_clip(&clip_id);
+            let ready = match &loaded {
+                Ok(clip) => clip.as_ref(),
+                Err(_) => None,
+            };
+            let (asset_id, annotation_id, content_kind, duration_ms) = match ready {
+                Some(clip) => (
+                    Some(clip.state.asset_id.clone()),
+                    Some(clip.state.annotation_id.clone()),
+                    Some(clip.metadata.content_kind),
+                    Some(clip.metadata.duration_ms),
+                ),
+                None => (None, None, None, None),
+            };
+
+            let (status, accepted, blocked) = match &loaded {
                 Ok(Some(_)) => (ClipCacheStatus::Ready, true, false),
                 Ok(None) => match &stored {
                     Some(state) => {
@@ -1205,6 +1243,10 @@ impl ClipCache {
             report.reclaimable_versions += reclaimable_versions;
             report.entries.push(CacheStatusEntry {
                 clip_id,
+                asset_id,
+                annotation_id,
+                content_kind,
+                duration_ms,
                 status,
                 accepted,
                 generation_blocked: blocked,
