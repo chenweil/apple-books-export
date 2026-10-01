@@ -3117,6 +3117,18 @@ fn cache_status_reports_budget_usage_and_in_use_entries() {
         .expect("second clip entry");
     assert_eq!(other["in_use"], Value::Null);
 
+    // 归属字段：AppKit 要回答「这条高亮之前生成过吗」，而 `clip_id` 是内容 +
+    // Voice Profile 的指纹，算法归 core 所有 —— 归属只能由契约给出，不能让
+    // 调用方重算一遍指纹。
+    assert_eq!(locked["asset_id"], "book-1");
+    assert_eq!(locked["annotation_id"], "annotation-41");
+    assert_eq!(locked["content_kind"], "highlight");
+    assert_eq!(other["annotation_id"], "annotation-42");
+    assert!(
+        locked["duration_ms"].as_u64().expect("duration") > 0,
+        "a ready clip knows its own audio duration"
+    );
+
     // 人类输出同样给出这些数字。
     let human_provider = provider_with_catalog_and_synthesis("trace-status-4");
     let human = fixture.run_with(
@@ -3182,6 +3194,14 @@ fn cache_status_reports_corruption_and_orphans_without_provider_calls() {
     assert_eq!(corrupt["status"], "corrupt");
     assert_eq!(corrupt["accepted"], false);
     assert_eq!(corrupt["reclaimable_versions"], 1);
+
+    // 归属字段必须为 null，而不是从 state 里回退读取。一个 corrupt entry 的
+    // 音频已经过不了校验，报出它的身份会让调用方以为这条 clip 可用 —— 而
+    // `status` 正是用来否定这件事的，两者必须一致。
+    assert_eq!(corrupt["asset_id"], Value::Null);
+    assert_eq!(corrupt["annotation_id"], Value::Null);
+    assert_eq!(corrupt["content_kind"], Value::Null);
+    assert_eq!(corrupt["duration_ms"], Value::Null);
 
     // 状态命令不得自己修复任何东西：孤立 version 仍然在原处，等显式维护处理。
     assert!(orphan.join("audio.mp3").exists());

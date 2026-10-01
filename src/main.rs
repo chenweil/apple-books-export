@@ -1077,6 +1077,22 @@ fn cmd_speech_cache_status() -> anyhow::Result<()> {
             entry.used_bytes,
             in_use
         );
+        // 归属只在通过校验时才有。没有可校验的音频时 `clip_id` 什么都不指向，
+        // 打印一个看似确定的归属会误导排障 —— 那一行必须和 `status` 一致。
+        if let (Some(asset_id), Some(annotation_id), Some(content_kind)) = (
+            entry.asset_id.as_deref(),
+            entry.annotation_id.as_deref(),
+            entry.content_kind,
+        ) {
+            let duration = entry
+                .duration_ms
+                .map(|ms| format!("{ms} ms"))
+                .unwrap_or_else(|| "-".to_string());
+            println!(
+                "      书={asset_id} 标注={annotation_id} 内容={} 时长={duration}",
+                content_kind.as_str()
+            );
+        }
     }
     Ok(())
 }

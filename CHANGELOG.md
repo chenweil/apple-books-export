@@ -6,6 +6,23 @@
 
 ## Unreleased
 
+### 语音 Cache 契约：每条 entry 带上归属与时长
+
+`speech cache status` 的 `CacheStatusEntry` 新增 `asset_id`、`annotation_id`、
+`content_kind` 和 `duration_ms` 四个字段。纯增量，不新增命令，不改任何已有字段。
+
+原因是**归属查询答不了**。`clip_id` 是「内容 + Voice Profile」的指纹，算法归 Rust 核心
+所有（ADR 0008 明令 AppKit 不得重实现语音语义），所以图形界面此前无法回答
+「这条高亮之前生成过吗」，只能靠用户再生成一次——参数没动时命中缓存不计费，但动过
+任一滑块就是新 clip、真计费，为了听一条旧音频而意外付费是真实存在的风险。
+
+- 人类与 `--json` 输出都带归属：`- <clip_id> status=ready …` 下一行是
+  `书=… 标注=… 内容=highlight 时长=12528 ms`；
+- 音频没通过校验时四个字段都是 `null`，**不从 state 回退读取**。一个 `corrupt` entry
+  的身份不可信，报出来会和同一行的 `status=corrupt` 自相矛盾；
+- 同一条标注可以有多条 clip（改了音色或任一音调参数就是另一条、另一次计费），
+  所以 `annotation_id` 相同、`clip_id` 不同的 entry 各自独立列出。
+
 ### AppKit 语音生成入口
 
 AppKit 现在有了语音入口。它是语音的**第二个用户入口，不是第二个实现**：全部语音
