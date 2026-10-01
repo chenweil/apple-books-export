@@ -227,20 +227,40 @@ fn candidate_roots(
         roots.push((explicit, ExportCandidateOrigin::ExplicitExportRoot));
     }
     let preferred_asset = query.book.as_ref().map(|book| book.asset_id.as_str());
-    // 已知书籍身份时，该书的候选先试；其余候选保持 locator 的稳定顺序，仍然逐一复核。
-    let mut locator: Vec<(bool, PathBuf)> = locator_candidates(cache)
+    // Known book identity narrows the locator to that book; without one
+    // (`speech play` carries no book) every recorded root stays a candidate,
+    // because there is nothing to narrow by and dropping them would make a
+    // playable clip unfindable.
+    //
+    // The previous behaviour tried every book's root and rejected the foreign
+    // ones on `manifest.asset_id`. That rejection is correct -- reusing another
+    // book's audio would be wrong -- but it is reported as a warning naming
+    // the path and the asset id, so a user working on one book was told about
+    // an unrelated book's export directory on every generation. A candidate
+    // that cannot belong to the book in hand is not a candidate, and the
+    // manifest is still checked afterwards for the roots that remain.
+    //
+    // What this gives up: if the locator's own key were wrong while the
+    // manifest inside that directory were right, the broad search would have
+    // recovered the clip. The manifest remains authoritative for every root
+    // that is tried, so this narrows where roots come from, not what counts as
+    // verified.
+    let mut locator: Vec<PathBuf> = locator_candidates(cache)
         .into_iter()
-        .map(|candidate| {
-            let same_book = preferred_asset == Some(candidate.asset_id.as_str());
-            (same_book, candidate.export_root)
+        .filter(|candidate| match preferred_asset {
+            Some(asset) => candidate.asset_id == asset,
+            None => true,
         })
-        .filter(|(_, root)| !roots.iter().any(|(seen, _)| seen == root))
+        .map(|candidate| candidate.export_root)
+        .filter(|root| !roots.iter().any(|(seen, _)| seen == root))
         .collect();
-    locator.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| left.1.cmp(&right.1)));
+    // The locator's file order is already stable (BTreeMap in the projection),
+    // so this keeps a deterministic order without a preference to break.
+    locator.dedup();
     roots.extend(
         locator
             .into_iter()
-            .map(|(_, root)| (root, ExportCandidateOrigin::ExportLocator)),
+            .map(|root| (root, ExportCandidateOrigin::ExportLocator)),
     );
     roots
 }
@@ -624,6 +644,81 @@ mod tests {
         assert_eq!(
             from_locator.found().map(|(_, origin)| origin),
             Some(ExportCandidateOrigin::ExportLocator)
+        );
+    }
+
+    /// 已知书籍身份时，另一本书的 locator 根不再是候选：既不被试，也不会产生
+    /// 指向它的拒绝 warning。拒绝本身是对的，但把别的书的导出目录和 asset id
+    /// 报给正在处理另一本书的用户没有意义。
+    ///
+    /// 负向对照同样重要：`speech play` 不带书籍身份（play.rs 的 `book: None`），
+    /// 那时不能按书收窄，否则一个真实可播放的 clip 会变得找不到。
+    #[test]
+    fn a_locator_root_for_another_book_is_never_tried() {
+        let home = TempDir::new().expect("home");
+        let cache = store_and_cache(&home);
+        let mine = exported_root("book-1");
+        let theirs = exported_root("book-2");
+
+        // 两本书都写进 locator 投影。
+        find_verified_exported_clip(&cache, &with_explicit_root(mine.root.path(), true), now())
+            .found()
+            .expect("book-1 recorded");
+        find_verified_exported_clip(
+            &cache,
+            &ExportedClipQuery {
+                book: Some(ExportedBookIdentity {
+                    asset_id: "book-2".to_string(),
+                    annotation_id: "annotation-41".to_string(),
+                    content_kind: SpeechContentKind::Highlight,
+                }),
+                explicit_root: Some(theirs.root.path().to_path_buf()),
+                ..query(true)
+            },
+            now(),
+        )
+        .found()
+        .expect("book-2 recorded");
+        assert_eq!(locator_candidates(&cache).len(), 2, "投影里确实有两本书");
+
+        let lookup = find_verified_exported_clip(&cache, &query(true), now());
+        assert!(lookup.found().is_some(), "book-1 的 clip 仍然找得到");
+        assert!(
+            lookup.rejections.is_empty(),
+            "另一本书的根不该进入候选：{:?}",
+            lookup.rejections
+        );
+        // 直接看候选集，而不是靠「命中即停」的查找：找到第一个就返回了，
+        // 从查找结果推断不出第二个根有没有被试。
+        let scoped = candidate_roots(&cache, &query(true));
+        assert_eq!(scoped.len(), 1, "已知书籍时只应有本书的根：{scoped:?}");
+        assert_eq!(scoped[0].0, mine.root.path());
+
+        // 未知书籍身份时所有根仍是候选。
+        let blind_roots = candidate_roots(
+            &cache,
+            &ExportedClipQuery {
+                book: None,
+                ..query(true)
+            },
+        );
+        assert_eq!(
+            blind_roots.len(),
+            2,
+            "未知书籍时两本书的根都仍是候选：{blind_roots:?}"
+        );
+        assert!(
+            find_verified_exported_clip(
+                &cache,
+                &ExportedClipQuery {
+                    book: None,
+                    ..query(true)
+                },
+                now(),
+            )
+            .found()
+            .is_some(),
+            "未知书籍时仍然找得到可播放的 clip"
         );
     }
 
