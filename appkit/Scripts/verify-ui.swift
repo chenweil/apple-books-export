@@ -639,6 +639,88 @@ enum VerifyLayout {
 
         checkPanelFitsTheScreen(book: book)
         checkVoiceMenusAreFilled(book: book)
+        checkLongMessageDoesNotWidenThePanel(book: book)
+    }
+
+    /// A long status message must not widen the panel.
+    ///
+    /// This is the second overflow, and `preferredContentSize` cannot reach
+    /// it: a sheet is sized from its content, and an unlimited-line wrapping
+    /// label reports its full single-line width as its intrinsic width. A
+    /// provider error carrying a file path opened a panel 1970pt wide with both
+    /// edges off a 1512pt display while the declared height was still intact --
+    /// the size declaration set the initial size and nothing stopped the
+    /// window growing past it.
+    ///
+    /// So the assertion is on the *fitting* width, which is what the sheet
+    /// actually consults, and the message is the shape that really occurred.
+    private static func checkLongMessageDoesNotWidenThePanel(book: Book) {
+        print("\n超长状态文案不撑宽面板")
+        let profileJSON = """
+        {"schema_version":1,"receipt":{"operation":"profile_show","profile":\
+        {"provider":"senseaudio","model":"sensenova-tts-2.0","voice_id":"male_0004_a",\
+        "emotion_label":null,"style_label":null,"speed":1.0,"volume":1.0,"pitch":0,\
+        "verification_status":"unverified","verified_at":null,\
+        "audio":{"format":"mp3","sample_rate":32000,"bitrate":128000,"channel":2}},\
+        "api_key_env":"SENSEAUDIO_API_KEY","config_path":null,"warnings":[]}}
+        """
+        // The shape that really happened: an exported clip located by path,
+        // then refused because its manifest belongs to another asset. Long,
+        // one-token-ish runs, no spaces -- the worst case for intrinsic width.
+        let longMessage = "the Exported Speech Clip in /Users/someone/books-exported/"
+            + "100 Go Mistakes and How to Avoid Them (found via export_locator) was not used: "
+            + "the manifest belongs to asset_id 706DB5A46682C0CA482434189BBACE24 rather than "
+            + "0C61EE0000000000000000000000000000000000"
+        let errorJSON = """
+        {"schema_version":1,"error":{"code":"SPEECH_EXPORT_MISMATCH",\
+        "message":"\(longMessage)","remediation":"\(longMessage)"}}
+        """
+        let panel = makePanel(
+            book: book,
+            annotation: Annotation(
+                id: "h-long-status", type: .highlight, chapterTitle: "第一章", locationInfo: "",
+                contentText: "超长文案检查用的正文。", noteText: nil,
+                createdAt: Date(timeIntervalSinceReferenceDate: 0)
+            ),
+            runner: { _, arguments, _ in
+                if arguments.contains("voices") {
+                    return RustCLICommandResult(
+                        stderr: Data(errorJSON.utf8), terminationStatus: 1
+                    )
+                }
+                return .success(profileJSON)
+            },
+            hasCredential: true
+        )
+
+        _ = panel.view
+        let status = view(named: "speech.status", in: panel.view) as? NSTextField
+        guard let status else {
+            check("超长文案检查：找得到状态标签", false, "缺少 speech.status")
+            return
+        }
+        let deadline = Date().addingTimeInterval(5)
+        while status.stringValue.isEmpty && Date() < deadline {
+            RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.02))
+        }
+        check("超长文案已进入状态标签", status.stringValue.contains("manifest belongs to"),
+              "len=\(status.stringValue.count)")
+
+        // What the sheet consults. Unbounded here is the shipped defect.
+        let fitting = panel.view.fittingSize
+        let declared = panel.preferredContentSize
+        check("超长文案不撑宽面板",
+              fitting.width <= declared.width + 1,
+              "fitting=\(fitting) declared=\(declared)")
+
+        // And the positive evidence that it wrapped rather than stretched:
+        // laid out at the declared width, the label is narrower than the
+        // message and taller than a single line.
+        panel.view.frame = NSRect(origin: .zero, size: declared)
+        panel.view.layoutSubtreeIfNeeded()
+        check("超长文案在面板宽度内换行",
+              status.frame.height > 20,
+              "label=\(status.frame) message chars=\(status.stringValue.count)")
     }
 
     /// The panel is a sheet, so its size comes from the view controller. Sized
