@@ -444,3 +444,56 @@ struct SpeechPlayReceipt: Decodable {
         case exportOrigin = "export_origin"
     }
 }
+
+/// `speech export` 的回执。ADR 0007 规定它只含稳定身份、相对路径、checksum、
+/// 大小、格式和导出时间——不含 Speech Text、API Key 或供应商原始响应。
+struct SpeechExportResponse: Decodable {
+    let schemaVersion: Int
+    let receipt: SpeechExportReceipt
+
+    enum CodingKeys: String, CodingKey {
+        case schemaVersion = "schema_version"
+        case receipt
+    }
+}
+
+struct SpeechExportReceipt: Decodable {
+    let operation: String
+    let clipID: String
+    let assetID: String
+    let annotationID: String
+    let contentKind: String
+    /// 相对书籍导出根目录的路径。
+    let relativePath: String
+    /// 已校验音频的绝对路径。
+    let path: String
+    let sha256: String
+    let sizeBytes: Int
+    let format: String
+    let exportedAt: String
+    /// 目标文件字节一致、直接复用而没有重写。
+    let reused: Bool
+    /// 本次显式替换了内容不同的已有文件。
+    let replaced: Bool
+    /// 恒为 `false`：任何 export 路径都不联系供应商。
+    let providerCalled: Bool
+    let warnings: [SpeechWarning]?
+
+    enum CodingKeys: String, CodingKey {
+        case operation
+        case clipID = "clip_id"
+        case assetID = "asset_id"
+        case annotationID = "annotation_id"
+        case contentKind = "content_kind"
+        case relativePath = "relative_path"
+        case path
+        case sha256
+        case sizeBytes = "size_bytes"
+        case format
+        case exportedAt = "exported_at"
+        case reused
+        case replaced
+        case providerCalled = "provider_called"
+        case warnings
+    }
+}

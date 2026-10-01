@@ -615,7 +615,7 @@ enum VerifyLayout {
                             "speech.voice-variant", "speech.speed", "speech.volume",
                             "speech.pitch", "speech.cost-notice", "speech.status",
                             "speech.generate", "speech.play", "speech.regenerate",
-                            "speech.recheck", "speech.close"])
+                            "speech.recheck", "speech.close", "speech.export"])
         let unexpected = Set(actionIdentifiers).subtracting(expected)
         check("面板没有多余的动作控件（无第二次确认）", unexpected.isEmpty,
               "unexpected=\(unexpected.sorted())")
@@ -640,6 +640,94 @@ enum VerifyLayout {
         checkPanelFitsTheScreen(book: book)
         checkVoiceMenusAreFilled(book: book)
         checkLongMessageDoesNotWidenThePanel(book: book)
+        checkExportFollowsTheClipRule(book: book)
+    }
+
+    /// The export control appears only once there is something to export, and
+    /// it is wired to the CLI rather than to a local file copy.
+    ///
+    /// The rule being tested is the ordinary one -- no clip, nothing to export
+    /// -- so unlike recheck and close this button *is* gated. The assertions
+    /// therefore go both ways: disabled before a generation, enabled after one,
+    /// driven through the real action rather than by poking the flag.
+    private static func checkExportFollowsTheClipRule(book: Book) {
+        print("\n导出音频按钮的可用性")
+        let profileJSON = """
+        {"schema_version":1,"receipt":{"operation":"profile_show","profile":\
+        {"provider":"senseaudio","model":"sensenova-tts-2.0","voice_id":"male_0004_a",\
+        "emotion_label":null,"style_label":null,"speed":1.0,"volume":1.0,"pitch":0,\
+        "verification_status":"unverified","verified_at":null,\
+        "audio":{"format":"mp3","sample_rate":32000,"bitrate":128000,"channel":2}},\
+        "api_key_env":"SENSEAUDIO_API_KEY","config_path":null,"warnings":[]}}
+        """
+        let catalogJSON = """
+        {"schema_version":1,"receipt":{"operation":"voices","provider":"senseaudio",\
+        "fetched_at":"2026-09-30T09:38:03Z","stale":false,"warnings":[],"voices":[\
+        {"provider":"senseaudio","source_type":"system","voice_id":"female_0006_a",\
+        "voice_name":"温柔御姐","emotion_label":null,"style_label":null,\
+        "description":[],"created_time":"2025-09-26"}]}}
+        """
+        let clipID = "14004204099a0116e9e43ca3d02ed7c5e035373e646ae5dc9feb7a23aaee9742"
+        let generateJSON = """
+        {"schema_version":1,"receipt":{"operation":"generate","clip_id":"\(clipID)",\
+        "attempt_id":"attempt-probe","source":"provider","provider_called":true,\
+        "asset_id":"b1","annotation_id":"h-export","content_kind":"highlight",\
+        "text_sha256":"01805727314e4def395b368a7f71768e6129a55de56a68a5d7de97736145e9c9",\
+        "unicode_characters":10,"estimated_billing_characters":20,\
+        "billing_estimator_version":"senseaudio-docs-2026-09-10",\
+        "audio":{"format":"mp3","sample_rate":32000,"bitrate":128000,"channel":2,\
+        "duration_ms":11412,"size_bytes":182272},\
+        "provider":{"trace_id":"probe","usage_characters":10},"warnings":[]}}
+        """
+        let panel = makePanel(
+            book: book,
+            annotation: Annotation(
+                id: "h-export", type: .highlight, chapterTitle: "第一章", locationInfo: "",
+                contentText: "导出检查用的正文。", noteText: nil,
+                createdAt: Date(timeIntervalSinceReferenceDate: 0)
+            ),
+            runner: { _, arguments, _ in
+                if arguments.contains("voices") { return .success(catalogJSON) }
+                if arguments.contains("generate") { return .success(generateJSON) }
+                return .success(profileJSON)
+            },
+            hasCredential: true
+        )
+
+        _ = panel.view
+        guard let group = view(named: "speech.voice-group", in: panel.view) as? NSPopUpButton,
+              let export = view(named: "speech.export", in: panel.view) as? NSButton,
+              let generate = view(named: "speech.generate", in: panel.view) as? NSButton else {
+            check("导出按钮存在", false, "缺少 speech.export / speech.generate / 音色下拉")
+            return
+        }
+        settle(group, until: { group.numberOfItems > 0 })
+
+        // Nothing generated yet, so there is nothing to export.
+        check("未生成时导出按钮禁用", !export.isEnabled, "enabled=\(export.isEnabled)")
+
+        guard generate.isEnabled else {
+            check("已选定音色后可生成（导出检查的前提）", false,
+                  "generate 仍禁用，无法验证生成后状态")
+            return
+        }
+        generate.performClick(nil)
+        settle(export, until: { export.isEnabled })
+
+        check("生成后可导出", export.isEnabled, "enabled=\(export.isEnabled)")
+        let status = (view(named: "speech.status", in: panel.view) as? NSTextField)?.stringValue ?? ""
+        check("生成后状态显示已生成", status.contains("已生成"), status)
+    }
+
+    /// Turn the run loop until `condition` holds or the budget runs out. The
+    /// panel's load and generate are `Task`s, so the loop is what lets them
+    /// progress; without it every assertion here would read the pre-load state.
+    private static func settle(_ view: NSView, until condition: () -> Bool) {
+        let deadline = Date().addingTimeInterval(5)
+        while !condition() && Date() < deadline {
+            RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.02))
+        }
+        view.layoutSubtreeIfNeeded()
     }
 
     /// A long status message must not widen the panel.
