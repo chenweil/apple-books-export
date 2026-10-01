@@ -145,6 +145,9 @@ final class SpeechPanelViewController: NSViewController {
 
     override func loadView() {
         let root = NSView()
+        // One computed size, shared by the window request and the width
+        // constraint below, so the two cannot disagree.
+        let size = Self.panelSize()
 
         let title = NSTextField(labelWithString: "生成语音")
         title.font = .systemFont(ofSize: 15, weight: .semibold)
@@ -259,17 +262,66 @@ final class SpeechPanelViewController: NSViewController {
         stack.spacing = 14
         stack.translatesAutoresizingMaskIntoConstraints = false
 
-        root.addSubview(stack)
+        // The content lives in a scroll view, and that is the whole fix for a
+        // second overflow that `preferredContentSize` could not reach.
+        //
+        // A sheet is sized from its content, and an unlimited-line wrapping
+        // label reports its full single-line width as its intrinsic width. A
+        // provider error carrying a file path -- "the Exported Speech Clip in
+        // /Users/…/100 Go Mistakes … was not used: the manifest belongs to
+        // asset_id …" -- therefore opened a panel 1970pt wide with both edges
+        // off a 1512pt display, while its height stayed at the declared 500.
+        // Declaring a size only fixes the *initial* size; nothing stopped the
+        // window growing past it.
+        //
+        // Inside a scroll view the document's width comes from the scroll
+        // view's own layout rather than from the labels' intrinsic widths, so
+        // the message wraps at the panel width instead of stretching the
+        // window, and anything taller scrolls. Pinning a width constant alone
+        // would only trade the horizontal overflow for a vertical one, because
+        // wrapped text is taller.
+        let scroll = NSScrollView()
+        scroll.hasVerticalScroller = true
+        scroll.hasHorizontalScroller = false
+        scroll.drawsBackground = false
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+
+        let document = NSView()
+        document.translatesAutoresizingMaskIntoConstraints = false
+        scroll.documentView = document
+        document.addSubview(stack)
+
         NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 24),
-            stack.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -24),
-            stack.topAnchor.constraint(equalTo: root.topAnchor, constant: 20),
-            stack.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -20),
+            stack.leadingAnchor.constraint(equalTo: document.leadingAnchor, constant: 24),
+            stack.trailingAnchor.constraint(equalTo: document.trailingAnchor, constant: -24),
+            stack.topAnchor.constraint(equalTo: document.topAnchor, constant: 20),
+            stack.bottomAnchor.constraint(equalTo: document.bottomAnchor, constant: -20),
             contentPreview.widthAnchor.constraint(equalTo: stack.widthAnchor),
             characterLabel.widthAnchor.constraint(equalTo: stack.widthAnchor),
             costLabel.widthAnchor.constraint(equalTo: stack.widthAnchor),
             statusLabel.widthAnchor.constraint(equalTo: stack.widthAnchor),
             voiceRow.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            // The document's width is an absolute constant, not a chain of
+            // relative constraints. A relative chain bounds the *layout* but
+            // not the *fitting size*: nothing pinned a number, so the solver
+            // still satisfied every constraint at the largest intrinsic width
+            // available, and that is what the sheet sizes itself from --
+            // 1980pt for a 537-character message. Measured, not reasoned.
+            //
+            // It also has to agree with `preferredContentSize`, so both read
+            // the same computed value.
+            document.widthAnchor.constraint(equalToConstant: size.width),
+            // At least the visible height, so a short panel does not get a
+            // document shorter than its own viewport.
+            document.heightAnchor.constraint(greaterThanOrEqualTo: scroll.contentView.heightAnchor),
+        ])
+
+        root.addSubview(scroll)
+        NSLayoutConstraint.activate([
+            scroll.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            scroll.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            scroll.topAnchor.constraint(equalTo: root.topAnchor),
+            scroll.bottomAnchor.constraint(equalTo: root.bottomAnchor),
         ])
 
         view = root
