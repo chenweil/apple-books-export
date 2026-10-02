@@ -95,12 +95,65 @@ final class SpeechPanelViewController: NSViewController {
     /// that from a silent mistake into a visible state.
     private let exportTargetLabel = NSTextField(labelWithString: "")
 
+    /// The clips this annotation already has, behind a disclosure.
+    ///
+    /// A Speech Clip reads *one part* of an annotation, and the clip ID is a
+    /// fingerprint over that text plus the voice and tone -- so changing any
+    /// slider produces a different clip and a separate charge. One annotation
+    /// can therefore own several clips, and until now the panel could only ever
+    /// talk about the one it had just made. Reopening the panel showed nothing
+    /// at all, which read as "this was never generated" when it was.
+    ///
+    /// Collapsed by default: for the common case of one clip it is a single
+    /// line, and the cost notice already carries the count. Expanded it lists
+    /// every ready clip with its own play and export, because those are the
+    /// two things you can do with audio you did not just pay for.
+    private let clipsToggle = NSButton(frame: .zero)
+    private let clipsList = NSStackView()
+    private let clipsErrorLabel = NSTextField(labelWithString: "")
+
     // State
     private var catalog: SpeechVoiceCatalog?
     private var profile: SpeechProfile?
-    private var generatedClipID: String?
-    private var generatedPath: String?
+    /// The clip the main 播放 / 导出 buttons act on, **with the content kind it
+    /// belongs to**.
+    ///
+    /// Not "the last clip generated" and not "the first row": it is whatever the
+    /// user last acted on. The content kind is stored rather than looked up in
+    /// `existingClips` for two reasons.
+    ///
+    /// It is what makes the content-kind switch safe. Generating a highlight,
+    /// switching to the note and pressing 导出 used to write the *highlight's*
+    /// audio, because nothing tied the selection to the part of the annotation
+    /// on screen -- the kind switch only redrew the preview. Pairing the two
+    /// turns "is this selection still about what the user is looking at?" into
+    /// a value comparison.
+    ///
+    /// And it cannot be answered from the list, because a clip generated during
+    /// this panel session is not in `existingClips` yet: that list is a snapshot
+    /// of what the cache held when the panel loaded. Looking it up would make
+    /// a fresh selection read as "unknown kind" and clear it immediately.
+    private var selectedClip: SelectedClip?
+    private struct SelectedClip {
+        let id: String
+        /// `highlight` or `note`.
+        let contentKind: String
+    }
+    /// clip ID -> verified path, for every clip the panel has resolved.
+    ///
+    /// A map rather than one `generatedPath` because the list has several live
+    /// clips at once and each play/export needs its own.
+    private var clipPaths: [String: String] = [:]
+    private var existingClips: [SpeechClipSummary] = []
     private var busy = false
+
+    /// Internal so the probe can name a row the same way the panel does. Built
+    /// from the clip ID rather than an index because the list is rebuilt from
+    /// the cache report and indices move; a probe that guessed an index would
+    /// silently start addressing a different clip when the list order changed.
+    static func clipRowIdentifier(_ clipID: String) -> String {
+        "speech.clip-row.\(clipID.prefix(12))"
+    }
 
     /// The contract's hard cap, mirrored so the panel can refuse before
     /// spending a round trip on a request the CLI would reject locally.
@@ -268,6 +321,30 @@ final class SpeechPanelViewController: NSViewController {
         exportTargetLabel.identifier = NSUserInterfaceItemIdentifier("speech.export-target")
         refreshExportTarget()
 
+        clipsToggle.title = "已有的语音（0 条）"
+        clipsToggle.bezelStyle = .rounded
+        clipsToggle.setButtonType(.momentaryPushIn)
+        clipsToggle.target = self
+        clipsToggle.action = #selector(toggleClipsSection)
+        clipsToggle.identifier = NSUserInterfaceItemIdentifier("speech.clips-section")
+        clipsToggle.alignment = .left
+
+        clipsErrorLabel.textColor = .secondaryLabelColor
+        clipsErrorLabel.maximumNumberOfLines = 0
+        clipsErrorLabel.lineBreakMode = .byWordWrapping
+        clipsErrorLabel.identifier = NSUserInterfaceItemIdentifier("speech.clips-error")
+        clipsErrorLabel.isHidden = true
+
+        clipsList.orientation = NSUserInterfaceLayoutOrientation.vertical
+        clipsList.alignment = NSLayoutConstraint.Attribute.leading
+        clipsList.spacing = 8
+        clipsList.identifier = NSUserInterfaceItemIdentifier("speech.clips-list")
+        clipsList.isHidden = true
+        // Hidden until the cache says otherwise. The first load is async, and
+        // without this the panel spends that window showing 「已有的语音（0 条）」
+        // for an annotation that already has audio.
+        clipsToggle.isHidden = true
+
         configureButton(generateButton, title: "生成", action: #selector(generate),
                         identifier: "speech.generate")
         configureButton(playButton, title: "播放", action: #selector(play),
@@ -320,6 +397,9 @@ final class SpeechPanelViewController: NSViewController {
             playbackLabel,
             exportTargetLabel,
             exportLabel,
+            clipsToggle,
+            clipsErrorLabel,
+            clipsList,
             buttonsStack,
         ])
         stack.orientation = NSUserInterfaceLayoutOrientation.vertical
@@ -369,6 +449,9 @@ final class SpeechPanelViewController: NSViewController {
             playbackLabel.widthAnchor.constraint(equalTo: stack.widthAnchor),
             exportTargetLabel.widthAnchor.constraint(equalTo: stack.widthAnchor),
             exportLabel.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            clipsToggle.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            clipsErrorLabel.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            clipsList.widthAnchor.constraint(equalTo: stack.widthAnchor),
             voiceRow.widthAnchor.constraint(equalTo: stack.widthAnchor),
             // The document's width is an absolute constant, not a chain of
             // relative constraints. A relative chain bounds the *layout* but
@@ -441,10 +524,17 @@ final class SpeechPanelViewController: NSViewController {
         setBusy(true)
         defer { setBusy(false) }
 
+        // Before the credential check, and on its own terms: `speech cache
+        // status` is a local read with no provider call, and listing, playing
+        // and exporting audio that already exists needs no key at all. Gating
+        // it behind `hasCredential()` would hide the user's own files until
+        // they configured something they may not need in order to hear them.
+        await loadExistingClips()
+
         // The catalog is a network call, so an absent key is reported here
         // rather than being discovered as an opaque auth failure later.
         guard await hasCredential() else {
-            setupLabel.stringValue = "准备：尚未配置语音 API Key，请先在「设置 › 语音」中填写。"
+            setupLabel.stringValue = "准备：尚未配置语音 API Key。已有音频仍可播放和导出；生成前请到「设置 › 语音」填写。"
             return
         }
 
@@ -513,6 +603,177 @@ final class SpeechPanelViewController: NSViewController {
         profile = nil
         setupLabel.stringValue = "准备：正在重新检查…"
         Task { await load() }
+    }
+
+    // MARK: - Existing clips
+
+    /// Reads the cache and rebuilds the disclosure.
+    ///
+    /// Failures land in their own label rather than in the setup area: the
+    /// voice catalog and the API key are the generation preconditions, and this
+    /// list is not part of them. A cache read that fails must not read as "you
+    /// have no audio", so the disclosure keeps whatever it showed and this
+    /// area says the list could not be refreshed.
+    private func loadExistingClips() async {
+        do {
+            let entries = try await speech.cacheStatus()
+
+            // A cache that reports entries but no identity on any of them is
+            // not an empty cache -- it is a CLI too old to answer. The shape is
+            // measured, not hypothesised: the CLI shipped in 0.3.12 has no
+            // `asset_id` key at all, `SpeechCacheEntry` decodes the missing key
+            // as `nil` through `decodeIfPresent`, and the filter then rejects
+            // every row. Without this the panel shows nothing at all, which reads
+            // as "this annotation has no audio" -- the exact misreading the
+            // section exists to remove.
+            //
+            // An actually empty cache answers differently and must not be
+            // reported as a problem, so the test is on the *entries*, not on the
+            // filtered result.
+            let unattributable = !entries.isEmpty && entries.allSatisfy { $0.assetID == nil }
+
+            existingClips = entries.playable(
+                forAssetID: book.id,
+                annotationID: annotation.id
+            )
+            if unattributable {
+                clipsErrorLabel.stringValue =
+                    "已有音频：缓存里有 \(entries.count) 条音频，但当前内置的语音命令行"
+                    + "没有报告归属字段，无法判断哪些属于这条标注。重新安装最新版即可。"
+                clipsErrorLabel.isHidden = false
+            } else {
+                clipsErrorLabel.stringValue = ""
+                clipsErrorLabel.isHidden = true
+            }
+            // Paths for clips the panel no longer lists would accumulate: the
+            // list is a snapshot, and a clip generated here is added below
+            // rather than re-read.
+            clipPaths = clipPaths.filter { id, _ in
+                existingClips.contains { $0.clipID == id } || id == selectedClip?.id
+            }
+            await resolvePathsForListedClips()
+            rebuildClipsSection()
+            // The count is part of the cost sentence, so it has to be recomputed
+            // now rather than at the next tone nudge.
+            reloadPreview()
+        } catch let SpeechServiceError.commandFailed(error) {
+            showClipsError(error.userFacingDescription)
+        } catch {
+            showClipsError(error.localizedDescription)
+        }
+    }
+
+    private func showClipsError(_ message: String) {
+        clipsErrorLabel.stringValue = "已有音频：读取失败（\(message)）。"
+        clipsErrorLabel.isHidden = false
+    }
+
+    /// One local resolve per listed clip, so a row's play button is either
+    /// already live or honestly disabled.
+    ///
+    /// Bounded by the number of clips one annotation owns, which is one per
+    /// distinct text + voice + tone combination the user has tried. Each call is
+    /// local and cheap, but the loop is still sequential and awaited: this runs
+    /// inside the panel's load, and a burst of parallel subprocesses for a list
+    /// that is usually empty or one row would be a poor trade.
+    private func resolvePathsForListedClips() async {
+        for clip in existingClips where clipPaths[clip.clipID] == nil {
+            await resolvePlaybackPath(for: clip.clipID)
+        }
+    }
+
+    private func rebuildClipsSection() {
+        clipsToggle.title = existingClips.isEmpty
+            ? "已有的语音（0 条）"
+            : "已有的语音（\(existingClips.count) 条）"
+        // Nothing to expand. Hidden rather than showing 「0 条」, so an
+        // annotation that has never been generated does not carry a disclosure
+        // that opens onto an empty area.
+        clipsToggle.isHidden = existingClips.isEmpty
+        clipsList.isHidden = true
+
+        for view in clipsList.arrangedSubviews {
+            clipsList.removeArrangedSubview(view)
+            view.removeFromSuperview()
+        }
+        for clip in existingClips {
+            clipsList.addArrangedSubview(makeClipRow(clip))
+        }
+        // Deliberately not touching `clipsErrorLabel` here: its visibility is
+        // decided by the load that produced the list, and this is also reached
+        // from `adoptGeneratedClip`, which has nothing new to say about it.
+        refreshActionStates()
+    }
+
+    @objc private func toggleClipsSection() {
+        guard !existingClips.isEmpty else { return }
+        clipsList.isHidden = !clipsList.isHidden
+        clipsToggle.title = clipsList.isHidden
+            ? "已有的语音（\(existingClips.count) 条）▸"
+            : "已有的语音（\(existingClips.count) 条）▾"
+    }
+
+    /// One clip: what it is, how long it is, and the two things you can do with
+    /// audio you did not just pay for.
+    ///
+    /// The play and export controls are this row's own, not the panel's main
+    /// ones. A shared pair would mean the row list could not be read without
+    /// also changing what 导出 acts on, and the label the user just clicked and
+    /// the file that gets written would be able to disagree.
+    private func makeClipRow(_ clip: SpeechClipSummary) -> NSView {
+        let kindLabel = NSTextField(labelWithString: Self.label(for: clip.contentKind))
+        kindLabel.setContentHuggingPriority(.defaultHigh, for: .horizontal)
+
+        var detail = String(clip.clipID.prefix(12)) + "…"
+        if let ms = clip.durationMs, ms > 0 {
+            detail = Self.durationText(ms) + " · " + detail
+        }
+        let detailLabel = NSTextField(labelWithString: detail)
+        detailLabel.textColor = .secondaryLabelColor
+        detailLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
+
+        let play = SpeechClipButton(clipID: clip.clipID, role: .play)
+        configureButton(play, title: "播放", action: #selector(playExisting),
+                        identifier: Self.clipRowIdentifier(clip.clipID) + ".play")
+        let export = SpeechClipButton(clipID: clip.clipID, role: .export)
+        configureButton(export, title: "导出", action: #selector(exportExisting),
+                        identifier: Self.clipRowIdentifier(clip.clipID) + ".export")
+
+        let row = NSStackView(views: [kindLabel, detailLabel, play, export])
+        row.orientation = NSUserInterfaceLayoutOrientation.horizontal
+        row.spacing = 10
+        row.alignment = .firstBaseline
+        row.identifier = NSUserInterfaceItemIdentifier(Self.clipRowIdentifier(clip.clipID))
+        applyRowControl(play)
+        applyRowControl(export)
+        return row
+    }
+
+    /// `11412` -> `11.4 秒`. Only for a value the contract actually gave; a
+    /// `null` duration prints nothing rather than a fabricated `0.0 秒`.
+    static func durationText(_ milliseconds: Int) -> String {
+        String(format: "%.1f 秒", Double(milliseconds) / 1000.0)
+    }
+
+    @objc private func playExisting(_ sender: SpeechClipButton) {
+        select(sender.clipID, contentKind: contentKind(of: sender.clipID))
+        playSelected()
+    }
+
+    @objc private func exportExisting(_ sender: SpeechClipButton) {
+        select(sender.clipID, contentKind: contentKind(of: sender.clipID))
+        exportSelectedClip()
+    }
+
+    /// The kind a listed clip belongs to, falling back to the currently selected
+    /// kind for a clip generated during this session (which is not in the list).
+    private func contentKind(of clipID: String) -> String {
+        existingClips.first { $0.clipID == clipID }?.contentKind ?? selectedContentKind
+    }
+
+    private func select(_ clipID: String, contentKind: String) {
+        selectedClip = SelectedClip(id: clipID, contentKind: contentKind)
+        refreshActionStates()
     }
 
     /// The way out of the sheet.
@@ -613,7 +874,6 @@ final class SpeechPanelViewController: NSViewController {
     // MARK: - Preview and the cost notice
 
     @objc private func reloadPreview() {
-        let kind = selectedContentKind
         let hasNote = text(for: "note") != nil
         // The note segment is enabled only when the annotation actually has a
         // note. Enabling it otherwise would let the user select a content part
@@ -623,6 +883,16 @@ final class SpeechPanelViewController: NSViewController {
         contentKindControl.setEnabled(hasNote, forSegment: 1)
         if !hasNote, contentKindControl.selectedSegment == 1 {
             contentKindControl.selectedSegment = 0
+        }
+        let kind = selectedContentKind
+
+        // A selection made under the other kind is not about what is on screen
+        // any more, and its play/export results described audio the panel is no
+        // longer offering. This is the fix for exporting a highlight while the
+        // note is selected; it belongs here, in the one place that runs on a
+        // kind switch, rather than in the segmented control's action.
+        if let selection = selectedClip, selection.contentKind != kind {
+            clearSelection()
         }
 
         guard let body = text(for: kind) else {
@@ -639,34 +909,73 @@ final class SpeechPanelViewController: NSViewController {
         refreshActionStates()
     }
 
-    /// Wording is constrained by the contract: there is no currency, no unit
-    /// price and no total, so the panel states the local estimate and that the
-    /// provider bills. Showing an amount would be inventing one.
-    private func updateCostNotice(characters: Int) {
-        let current = profile
-        let speed = speedSlider.doubleValue
-        let volume = volumeSlider.doubleValue
-        let pitch = Int(pitchSlider.doubleValue.rounded())
-        let voiceID = selectedVoiceID
+    /// Forget the current selection, and the two results that described it.
+    ///
+    /// Same rule as a new generation: those two areas were true *of that clip*
+    /// and stop being true once the panel is looking at a different part of the
+    /// annotation. Only those two -- the generation result stays, because the
+    /// audio the user paid for did not go anywhere.
+    private func clearSelection() {
+        selectedClip = nil
+        playbackLabel.stringValue = ""
+        exportLabel.stringValue = ""
+    }
 
-        // Wording is constrained by the contract: there is no currency, no unit
-        // price and no total, so the panel states the local estimate and that the
-        // provider bills. Showing an amount would be inventing one.
-        var notice = "生成会调用语音供应商并计费，约 \(characters) 个计费字符。最终金额以供应商账单为准。"
-        guard let current else {
-            // No profile has loaded, so there is no cached clip to compare
-            // against and claiming the parameters "differ" would be inventing a
-            // baseline. Say it is the first generation instead.
-            notice += "\n这是一次新的生成。"
-            costLabel.stringValue = notice
-            return
-        }
-        if !current.toneDiffers(voiceID: voiceID, speed: speed, volume: volume, pitch: pitch) {
-            notice += "\n参数与已缓存音频一致，命中缓存时不会产生费用。"
-        } else {
-            notice += "\n当前参数与已缓存音频不同，会生成新的音频并单独计费。"
-        }
+    /// Wording is constrained by what the panel can actually know.
+    ///
+    /// It used to compare the pickers against the stored Voice Profile and
+    /// announce 「参数与已缓存音频一致，命中缓存时不会产生费用」. That claim was
+    /// wrong in both directions, and the profile was the wrong thing to compare
+    /// against:
+    ///
+    /// - The profile describes the voice and tone, but `clip_id` is a
+    ///   fingerprint over the *text* as well. Identical tone on a different
+    ///   annotation -- or on the other half of this one -- is a different clip,
+    ///   so 「一致」 did not mean 「命中缓存」.
+    /// - When no profile had loaded, the panel said 「这是一次新的生成」, which is
+    ///   exactly backwards: no profile is a reason to know *nothing* about
+    ///   whether the audio exists, not a reason to claim it does not.
+    ///
+    /// The cache report settles it instead, because it says which clips belong
+    /// to *this annotation*. What it still cannot say is which voice and tone
+    /// each of them used, so the reuse sentence is conditional rather than a
+    /// prediction -- the panel has no way to know the fingerprint it would
+    /// produce.
+    private func updateCostNotice(characters: Int) {
+        var notice = "生成这条音频约 \(characters) 个计费字符，最终金额以供应商账单为准。"
+        notice += "\n" + reuseAdvice()
         costLabel.stringValue = notice
+    }
+
+    private func reuseAdvice() -> String {
+        let kind = selectedContentKind
+        let label = kind == "note" ? "笔记" : "高亮"
+
+        guard !existingClips.isEmpty else {
+            return "这条标注还没有音频，这次会是它的第一条。"
+        }
+
+        let sameKind = existingClips.filter { $0.contentKind == kind }
+        guard sameKind.isEmpty else {
+            return "这条标注已有 \(existingClips.count) 条音频"
+                + "（\(clipBreakdown())）。当前的音色和音调若与其中一条完全相同，"
+                + "会直接复用、不产生费用；改了就是新的一条，单独计费。"
+        }
+        return "这条标注已有 \(existingClips.count) 条音频，但没有\(label)这一条。"
+            + "\(label)会是新的一条，单独计费。"
+    }
+
+    /// 「高亮 1 · 笔记 1」, counting only the kinds actually present so the
+    /// sentence never names a kind the annotation does not have.
+    private func clipBreakdown() -> String {
+        var counts: [String: Int] = [:]
+        for clip in existingClips { counts[clip.contentKind, default: 0] += 1 }
+        return counts.keys.sorted().map { "\(Self.label(for: $0)) \(counts[$0]!)" }
+            .joined(separator: " · ")
+    }
+
+    static func label(for contentKind: String) -> String {
+        contentKind == "note" ? "笔记" : "高亮"
     }
 
     @objc private func toneChanged() {
@@ -705,8 +1014,7 @@ final class SpeechPanelViewController: NSViewController {
         // one case where the old text is genuinely untrue rather than merely
         // in the way. A generation the user has already paid for is untouched
         // by 重新检查, which only ever writes the setup label.
-        playbackLabel.stringValue = ""
-        exportLabel.stringValue = ""
+        clearSelection()
 
         Task {
             defer { setBusy(false) }
@@ -722,10 +1030,16 @@ final class SpeechPanelViewController: NSViewController {
                     regenerate: regenerate
                 ).receipt
 
-                generatedClipID = receipt.clipID
-                generatedPath = nil
-                playButton.isEnabled = false
+                // Selected together with its kind, so a later switch to the
+                // other part of the annotation drops it instead of leaving
+                // 导出 pointing at audio from the part no longer on screen.
+                select(receipt.clipID, contentKind: kind)
+                // This is a new clip for the panel, so it joins the list. Not
+                // by re-reading the cache -- the receipt already says what came
+                // back, and a re-read would race the write the CLI just did.
+                adoptGeneratedClip(receipt.clipID, kind: kind)
                 regenerateButton.isHidden = true
+                refreshActionStates()
 
                 if receipt.wasBilled {
                     generationLabel.stringValue = "生成：已生成（clip \(String(receipt.clipID.prefix(12)))…）。"
@@ -757,19 +1071,88 @@ final class SpeechPanelViewController: NSViewController {
     private func resolvePlaybackPath(for clipID: String) async {
         do {
             let receipt = try await speech.play(clipID: clipID)
-            generatedPath = receipt.path
-            playButton.isEnabled = true
+            clipPaths[clipID] = receipt.path
+            refreshActionStates()
         } catch let SpeechServiceError.commandFailed(error) {
-            playbackLabel.stringValue = "播放：音频暂时无法播放（\(error.message)）。"
+            // A clip whose audio cannot be resolved is not a playback result:
+            // the user did not press play, and the main play button stays on
+            // whatever it was. Only the row for that clip loses its button.
+            // The generation result is untouched either way -- see
+            // `checkGenerationSurvivesAPathFailure`.
+            clipPaths.removeValue(forKey: clipID)
+            refreshRowControlsInSection(clipID: clipID)
+            if selectedClip?.id == clipID {
+                playbackLabel.stringValue = "播放：音频暂时无法播放（\(error.message)）。"
+            }
         } catch {
-            playbackLabel.stringValue = "播放：音频暂时无法播放（\(error.localizedDescription)）。"
+            clipPaths.removeValue(forKey: clipID)
+            refreshRowControlsInSection(clipID: clipID)
+            if selectedClip?.id == clipID {
+                playbackLabel.stringValue = "播放：音频暂时无法播放（\(error.localizedDescription)）。"
+            }
         }
     }
 
+    /// Rebuilds one row's controls after its path changed.
+    private func refreshRowControlsInSection(clipID: String) {
+        for subview in clipsList.arrangedSubviews {
+            for case let button as SpeechClipButton in subview.subviews
+            where button.clipID == clipID {
+                applyRowControl(button)
+            }
+        }
+    }
+
+    /// The per-role half of ``refreshRowControls(play:export:clipID:)``, so a
+    /// single button can be re-evaluated without finding its sibling.
+    private func applyRowControl(_ button: SpeechClipButton) {
+        switch button.role {
+        case .export:
+            // Export needs only a clip ID.
+            button.isEnabled = !busy
+        case .play:
+            // Play needs a path the CLI has verified.
+            button.isEnabled = !busy && clipPaths[button.clipID] != nil
+        }
+    }
+
+    /// Adds a clip this session just produced to the list, in place.
+    ///
+    /// The cache on disk already has it, but the list was read before the
+    /// write, so it is merged from the receipt rather than re-read. A re-read
+    /// would race the CLI's own write, which is how an earlier half of this
+    /// flickered the count: the entry was not yet visible when the report came
+    /// back, so the panel said 1 then 2 for the same audio.
+    private func adoptGeneratedClip(_ clipID: String, kind: String) {
+        if let index = existingClips.firstIndex(where: { $0.clipID == clipID }) {
+            let durationMs = existingClips[index].durationMs
+            existingClips[index] = SpeechClipSummary(
+                clipID: clipID, contentKind: kind, durationMs: durationMs
+            )
+        } else {
+            // Duration is `nil` rather than invented: the generate receipt
+            // carries its own audio spec, but the cache entry's duration is what
+            // the list means by it, and nothing has re-read that. A missing
+            // duration prints as a shorter row, not as a wrong number.
+            existingClips.append(
+                SpeechClipSummary(clipID: clipID, contentKind: kind, durationMs: nil)
+            )
+        }
+        rebuildClipsSection()
+    }
+
     @objc private func play() {
-        guard let clipID = generatedClipID, let path = generatedPath else { return }
+        playSelected()
+    }
+
+    /// The one play path, shared by the main button and every row.
+    ///
+    /// Two copies is how the row and the main button would come to disagree
+    /// about which clip is current; there is one selection and one play.
+    private func playSelected() {
+        guard let selection = selectedClip, let path = clipPaths[selection.id] else { return }
         do {
-            try player.play(clipID: clipID, url: URL(fileURLWithPath: path))
+            try player.play(clipID: selection.id, url: URL(fileURLWithPath: path))
             playbackLabel.stringValue = "播放：正在播放。"
         } catch {
             playbackLabel.stringValue = "播放：\(error.localizedDescription)"
@@ -801,8 +1184,22 @@ final class SpeechPanelViewController: NSViewController {
     /// With a recorded root this is one click and no dialog. Without one it is
     /// two: there is nothing to offer, and saying "choose a folder" is what
     /// produced the orphan in the first place.
+    /// The one export path, shared by the main button and every row.
+    ///
+    /// Both arrive here through `selectedClip`, and a row selects before it
+    /// calls, so the file that gets written is always the clip whose label the
+    /// user pressed.
     @objc private func exportAudio() {
-        guard let clipID = generatedClipID else { return }
+        exportSelectedClip()
+    }
+
+    private func exportSelectedClip() {
+        // No selection means no clip, and the button that would get here is
+        // disabled. The guard is for the row buttons, which the section can
+        // outlive: a list rebuilt from a failed re-read can leave a row whose
+        // clip is no longer the current one.
+        guard let selection = selectedClip else { return }
+        let clipID = selection.id
 
         switch exportTarget {
         case .known(let root):
@@ -969,8 +1366,48 @@ final class SpeechPanelViewController: NSViewController {
         let characters = text(for: selectedContentKind)?.count ?? 0
         let withinLimit = characters > 0 && characters <= Self.maximumCharacters
         generateButton.isEnabled = !busy && withinLimit && selectedVoiceID != nil
-        playButton.isEnabled = !busy && generatedPath != nil
+        // Both main buttons act on the selection, so both are off when there
+        // is none -- which is exactly the state a content-kind switch leaves
+        // behind, and the one that used to keep pointing at the other part's
+        // audio.
+        playButton.isEnabled = !busy && selectedClip.map { clipPaths[$0.id] != nil } == true
+        exportButton.isEnabled = !busy && selectedClip != nil
         regenerateButton.isEnabled = !busy && !regenerateButton.isHidden
-        exportButton.isEnabled = !busy && generatedClipID != nil
+        refreshAllRowControls()
+    }
+
+    private func refreshAllRowControls() {
+        for subview in clipsList.arrangedSubviews {
+            for case let button as SpeechClipButton in subview.subviews {
+                applyRowControl(button)
+            }
+        }
+    }
+}
+
+/// A row's play or export control, carrying the clip it belongs to.
+///
+/// The clip ID travels on the control instead of through the action, because
+/// `performClick` and a real click both hand the target a `sender` the panel
+/// cannot rely on being a particular row, and a row index would be a second
+/// thing that can go stale when the list is rebuilt. The role is carried the
+/// same way so a single button can be re-evaluated on its own.
+final class SpeechClipButton: NSButton {
+    enum Role {
+        case play
+        case export
+    }
+
+    let clipID: String
+    let role: Role
+
+    init(clipID: String, role: Role) {
+        self.clipID = clipID
+        self.role = role
+        super.init(frame: .zero)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("不支持从 Interface Builder 加载")
     }
 }

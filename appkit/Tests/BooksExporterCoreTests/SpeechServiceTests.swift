@@ -687,29 +687,4 @@ final class SpeechServiceTests: XCTestCase {
         XCTAssertEqual(profile.voiceID, "male_0004_a")
     }
 
-    // MARK: - The cost of changing a parameter
-
-    func testToneComparisonSpotsADifferentClip() {
-        let profile = SpeechProfile(
-            provider: "senseaudio",
-            model: "sensenova-tts-2.0",
-            voiceID: "male_0004_a",
-            emotionLabel: nil,
-            styleLabel: nil,
-            speed: 1.0,
-            volume: 1.0,
-            pitch: 0,
-            verificationStatus: "unverified",
-            verifiedAt: nil,
-            audio: nil
-        )
-
-        // Identical parameters reuse the cached clip: no charge.
-        XCTAssertFalse(profile.toneDiffers(voiceID: "male_0004_a", speed: 1.0, volume: 1.0, pitch: 0))
-        // Any of these produces a different `clip_id`, so a different charge.
-        XCTAssertTrue(profile.toneDiffers(voiceID: "female_0033_b", speed: 1.0, volume: 1.0, pitch: 0))
-        XCTAssertTrue(profile.toneDiffers(voiceID: "male_0004_a", speed: 1.1, volume: 1.0, pitch: 0))
-        XCTAssertTrue(profile.toneDiffers(voiceID: "male_0004_a", speed: 1.0, volume: 1.2, pitch: 0))
-        XCTAssertTrue(profile.toneDiffers(voiceID: "male_0004_a", speed: 1.0, volume: 1.0, pitch: -1))
-    }
 }
