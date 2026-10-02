@@ -1677,11 +1677,42 @@ enum VerifyLayout {
               rowText(highlightRow).contains("11.4 秒") && rowText(noteRow).contains("8.0 秒"),
               "高亮行=\(rowText(highlightRow)) 笔记行=\(rowText(noteRow))")
 
-        // 4. A row acts on **its own** clip. Playback is not observable through
-        //    the player (the fixture path cannot be played), so the chain is:
-        //    press the note row's play, then press the main 导出, and assert the
-        //    export carried the note's clip ID. A row that acted on the
-        //    selection instead of on itself would write the highlight's audio.
+        // 4. A row's own export button acts on **that row's** clip, with
+        //    nothing selected beforehand.
+        //
+        //    This is the case that needs its own assertion. The play-then-export
+        //    chain below also ends up exporting the note, but it gets there
+        //    *through* the selection, so a row export that never set the
+        //    selection passed it too -- the button was on screen, enabled, and
+        //    never pressed by anything. Removing the `select` call from
+        //    `exportExisting` survived the first version of this check.
+        guard let highlightExport = view(
+            named: SpeechPanelViewController.clipRowIdentifier(SpeechPanelFixtures.clipID) + ".export",
+            in: highlightRow
+        ) as? NSButton else {
+            check("已有 clip：行内有导出按钮（前提）", false, "找不到高亮行的导出")
+            return
+        }
+        check("已有 clip：行内导出无需先有选中项", !export.isEnabled,
+              "尚未操作时导出已可用=\(export.isEnabled)")
+
+        let beforeRowExport = calls.all.filter { $0.contains("export") }.count
+        highlightExport.performClick(nil)
+        settle(panel.view, until: {
+            calls.all.filter { $0.contains("export") }.count > beforeRowExport
+        })
+        let rowExported = calls.all.filter { $0.contains("export") }.last
+        check("已有 clip：行内导出作用于该行自己的 clip",
+              rowExported?.contains(SpeechPanelFixtures.clipID) == true,
+              "行内导出=\(rowExported ?? [])")
+        check("已有 clip：行内导出没有落到另一行",
+              rowExported?.contains(SpeechPanelFixtures.noteClipID) != true,
+              "行内导出=\(rowExported ?? [])")
+
+        // 5. A row's play selects, and the main 导出 then follows the selection.
+        //    Playback itself is not observable through the player (the fixture
+        //    path cannot be played), so the chain ends at the export, which is
+        //    the observable one.
         guard let notePlay = view(
             named: SpeechPanelViewController.clipRowIdentifier(SpeechPanelFixtures.noteClipID) + ".play",
             in: noteRow
@@ -1693,9 +1724,6 @@ enum VerifyLayout {
 
         let beforeExports = calls.all.filter { $0.contains("export") }.count
         notePlay.performClick(nil)
-        settle(panel.view, until: {
-            calls.all.filter { $0.contains("export") }.count > beforeExports
-        })
 
         guard export.isEnabled else {
             check("已有 clip：选过行之后主导出可用（前提）", false, "导出仍禁用")
@@ -1703,14 +1731,14 @@ enum VerifyLayout {
         }
         export.performClick(nil)
         settle(panel.view, until: {
-            calls.all.filter { $0.contains("export") }.count > beforeExports + 1
+            calls.all.filter { $0.contains("export") }.count > beforeExports
         })
         let exported = calls.all.filter { $0.contains("export") }.last
-        check("已有 clip：行内选择决定导出哪一条",
+        check("已有 clip：行内选择决定主导出哪一条",
               exported?.contains(SpeechPanelFixtures.noteClipID) == true,
               "最后一条 export=\(exported ?? [])")
 
-        // 5. The bug this list made fixable.
+        // 6. The bug this list made fixable.
         //
         // The note clip is selected and 导出 is live. Switching to 高亮 used to
         // redraw the preview and nothing else, so 导出 went on writing the
@@ -1734,7 +1762,7 @@ enum VerifyLayout {
               text("speech.playback-result").isEmpty && text("speech.export-result").isEmpty,
               "播放区=\(text("speech.playback-result")) 导出区=\(text("speech.export-result"))")
 
-        // 6. The cost sentence counts this annotation's clips, and does not
+        // 7. The cost sentence counts this annotation's clips, and does not
         //    promise a cache hit it cannot know about.
         let cost = (view(named: "speech.cost-notice", in: panel.view) as? NSTextField)?
             .stringValue ?? ""
@@ -1754,7 +1782,7 @@ enum VerifyLayout {
         check("成本提示在有同类音频时说明可复用", noteCost.contains("若与其中一条完全相同"),
               "cost=\(noteCost)")
 
-        // 7. A clip produced in this session joins the list, and joins it
+        // 8. A clip produced in this session joins the list, and joins it
         //    *once*. The generate fixture hands back the same clip ID the
         //    cache report already lists, which is the interesting case: an
         //    append would show the user two rows of the same audio and a count
