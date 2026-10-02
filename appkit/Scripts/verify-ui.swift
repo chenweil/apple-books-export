@@ -59,6 +59,7 @@ enum VerifyLayout {
         checkSpeechEntry()
         checkExistingClipsAreListed()
         checkNoSectionWithoutCachedClips()
+        checkStaleCLIReportsRatherThanShowsNothing()
         checkSplitView()
         checkDetailLayout()
         checkAnnotationRowHeight()
@@ -1382,6 +1383,10 @@ enum VerifyLayout {
     /// can press the export control, and hand-copying the generate receipt into a
     /// second check is how the two copies drift.
     private struct SpeechPanelFixtures {
+        /// Set by a check that needs a different cache report. One mutable
+        /// static is enough because the probe is single-threaded at that level
+        /// and a second knob would invite the two shapes to be swapped.
+        nonisolated(unsafe) static var cacheStatusOverride: String?
         static let clipID =
             "14004204099a0116e9e43ca3d02ed7c5e035373e646ae5dc9feb7a23aaee9742"
         /// A second clip of the *same* annotation: the note half. A distinct
@@ -1437,7 +1442,9 @@ enum VerifyLayout {
             // subcommand with the other four, so without this it would be
             // answered with the profile fixture and the panel's list would be
             // decoded from a profile -- silently empty rather than an error.
-            if arguments.contains("cache") { return .success(cacheStatusJSON) }
+            if arguments.contains("cache") {
+                return .success(Self.cacheStatusOverride ?? cacheStatusJSON)
+            }
             if arguments.contains("voices") { return .success(catalogJSON) }
             if arguments.contains("generate") { return .success(generateJSON(annotationID: annotationID)) }
             if arguments.contains("export") { return .success(exportJSON(annotationID: annotationID)) }
@@ -1478,6 +1485,16 @@ enum VerifyLayout {
         /// matches no annotation -- so the row would still be rejected, but for
         /// the wrong reason, and the check would no longer be testing the
         /// contract's real shape.
+        /// A cache entry as a CLI without the identity fields writes it: the
+        /// keys are simply not there.
+        static func staleCacheEntry(_ clipID: String) -> String {
+            """
+            {"clip_id":"\(clipID)","status":"ready","accepted":true,\
+            "generation_blocked":false,"in_use":null,"used_bytes":1024,\
+            "reclaimable_versions":0,"last_used_at":"2026-10-01T00:00:00Z"}
+            """
+        }
+
         private static func cacheEntry(
             clipID: String,
             assetID: String?,
@@ -1843,6 +1860,66 @@ enum VerifyLayout {
         check("无缓存时 cost 提示说明这是第一条",
               ((view(named: "speech.cost-notice", in: panel.view) as? NSTextField)?
                 .stringValue.contains("还没有音频") == true),
+              "cost=\((view(named: "speech.cost-notice", in: panel.view) as? NSTextField)?.stringValue ?? "")")
+    }
+
+    /// A CLI that predates the identity fields reports entries without them.
+    ///
+    /// Measured against the CLI bundled in 0.3.12: the keys are **absent**, not
+    /// null. `SpeechCacheEntry` decodes an absent key for a `String?` as nil, so
+    /// the filter rejects every row and the section renders as "this annotation
+    /// has no audio" -- a statement the cache contradicts. This is the one
+    /// failure mode here that is invisible, because a decode of a missing
+    /// optional key is not an error by construction.
+    private static func checkStaleCLIReportsRatherThanShowsNothing() {
+        print("\n内置 CLI 过旧时说清原因，而不是显示空列表")
+
+        let fixtures = SpeechPanelFixtures()
+        let stale = """
+        {"schema_version":1,"receipt":{"operation":"cache_status",\
+        "budget_bytes":1073741824,"safety_margin_bytes":10485760,\
+        "usable_budget_bytes":1063256064,"used_bytes":2048,\
+        "accepted_entries":2,"absent_entries":0,"blocked_entries":0,\
+        "corrupt_entries":0,"locked_entries":0,"reclaimable_versions":0,\
+        "entries":[\(SpeechPanelFixtures.staleCacheEntry("14004204099a0116e9e43ca3d02ed7c5e035373e646ae5dc9feb7a23aaee9742")),\
+        \(SpeechPanelFixtures.staleCacheEntry("3f9a2b1c0d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c"))],\
+        "warnings":[]}}
+        """
+        SpeechPanelFixtures.cacheStatusOverride = stale
+        defer { SpeechPanelFixtures.cacheStatusOverride = nil }
+
+        let book = Book(id: "b1", title: "为什么长大", author: "某人",
+                        totalAnnotations: 1, highlightsCount: 1, notesCount: 0)
+        let panel = makePanel(
+            book: book,
+            annotation: Annotation(
+                id: "h-clips", type: .highlight, chapterTitle: "第一章",
+                locationInfo: "", contentText: "正文。", noteText: nil,
+                createdAt: Date(timeIntervalSinceReferenceDate: 0)
+            ),
+            runner: { _, arguments, _ in fixtures.reply(to: arguments) },
+            hasCredential: true
+        )
+        _ = panel.view
+
+        guard let toggle = view(named: "speech.clips-section", in: panel.view) as? NSButton,
+              let generate = view(named: "speech.generate", in: panel.view) as? NSButton,
+              let error = view(named: "speech.clips-error", in: panel.view) as? NSTextField else {
+            check("过旧 CLI：控件齐全", false, "缺少必要控件")
+            return
+        }
+        settle(panel.view, until: { generate.isEnabled && !error.isHidden })
+
+        check("过旧 CLI：说清是命令行版本而非「没有音频」",
+              error.stringValue.contains("没有报告归属字段"),
+              "提示=\(error.stringValue)")
+        check("过旧 CLI：不谎称这条标注没有音频",
+              !error.stringValue.contains("还没有音频"),
+              "提示=\(error.stringValue)")
+        check("过旧 CLI：不渲染空列表", toggle.isHidden, "isHidden=\(toggle.isHidden)")
+        check("过旧 CLI：cost 提示不拿空列表当结论",
+              !((view(named: "speech.cost-notice", in: panel.view) as? NSTextField)?
+                .stringValue.contains("已有 0 条") == true),
               "cost=\((view(named: "speech.cost-notice", in: panel.view) as? NSTextField)?.stringValue ?? "")")
     }
 

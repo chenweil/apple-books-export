@@ -617,12 +617,34 @@ final class SpeechPanelViewController: NSViewController {
     private func loadExistingClips() async {
         do {
             let entries = try await speech.cacheStatus()
+
+            // A cache that reports entries but no identity on any of them is
+            // not an empty cache -- it is a CLI too old to answer. The shape is
+            // measured, not hypothesised: the CLI shipped in 0.3.12 has no
+            // `asset_id` key at all, `SpeechCacheEntry` decodes the missing key
+            // as `nil` through `decodeIfPresent`, and the filter then rejects
+            // every row. Without this the panel shows nothing at all, which reads
+            // as "this annotation has no audio" -- the exact misreading the
+            // section exists to remove.
+            //
+            // An actually empty cache answers differently and must not be
+            // reported as a problem, so the test is on the *entries*, not on the
+            // filtered result.
+            let unattributable = !entries.isEmpty && entries.allSatisfy { $0.assetID == nil }
+
             existingClips = entries.playable(
                 forAssetID: book.id,
                 annotationID: annotation.id
             )
-            clipsErrorLabel.stringValue = ""
-            clipsErrorLabel.isHidden = true
+            if unattributable {
+                clipsErrorLabel.stringValue =
+                    "已有音频：缓存里有 \(entries.count) 条音频，但当前内置的语音命令行"
+                    + "没有报告归属字段，无法判断哪些属于这条标注。重新安装最新版即可。"
+                clipsErrorLabel.isHidden = false
+            } else {
+                clipsErrorLabel.stringValue = ""
+                clipsErrorLabel.isHidden = true
+            }
             // Paths for clips the panel no longer lists would accumulate: the
             // list is a snapshot, and a clip generated here is added below
             // rather than re-read.
@@ -669,7 +691,6 @@ final class SpeechPanelViewController: NSViewController {
         // that opens onto an empty area.
         clipsToggle.isHidden = existingClips.isEmpty
         clipsList.isHidden = true
-        clipsErrorLabel.isHidden = clipsErrorLabel.stringValue.isEmpty
 
         for view in clipsList.arrangedSubviews {
             clipsList.removeArrangedSubview(view)
@@ -678,6 +699,9 @@ final class SpeechPanelViewController: NSViewController {
         for clip in existingClips {
             clipsList.addArrangedSubview(makeClipRow(clip))
         }
+        // Deliberately not touching `clipsErrorLabel` here: its visibility is
+        // decided by the load that produced the list, and this is also reached
+        // from `adoptGeneratedClip`, which has nothing new to say about it.
         refreshActionStates()
     }
 
