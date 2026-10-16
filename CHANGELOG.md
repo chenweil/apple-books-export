@@ -6,6 +6,15 @@
 
 ## Unreleased
 
+### enrich：接 MiniMax M 系列不再吐出带 `<think>` 的响应
+
+MiniMax 的 OpenAI 兼容端点默认把 thinking 内嵌在 `choices[0].message.content` 里
+（`<think>…`）。`enrich` 要求严格 JSON 输出，拿到的却是带标签的串，卡片增强会解析失败。
+现在请求体带 `reasoning_split: true`，thinking 走 `reasoning_content`，`content` 只留最终答案。
+
+对其他 OpenAI 兼容 provider 无影响：该字段为 `Option<bool>` 且关闭时整体省略，
+不会给不认识它的服务发未知参数。
+
 ### 语音 Cache 契约：每条 entry 带上归属与时长
 
 `speech cache status` 的 `CacheStatusEntry` 新增 `asset_id`、`annotation_id`、

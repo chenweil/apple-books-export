@@ -12,6 +12,8 @@ struct ChatCompletionRequest {
     model: String,
     messages: Vec<Message>,
     temperature: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning_split: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -83,6 +85,9 @@ impl LLMProvider {
             model: self.model.clone(),
             messages,
             temperature: 0.3,
+            // MiniMax M 系列：把 thinking 拆到 reasoning_content，content 只留最终答案，
+            // 否则 content 内嵌 <think> 标签会破坏卡片增强的严格 JSON 解析。
+            reasoning_split: Some(true),
         };
 
         let url = format!("{}/chat/completions", self.base_url);
@@ -183,5 +188,41 @@ mod tests {
 ```"#;
         let result = parse_llm_result(content).unwrap();
         assert_eq!(result.explanation, "test");
+    }
+
+    fn request_with(reasoning_split: Option<bool>) -> ChatCompletionRequest {
+        ChatCompletionRequest {
+            model: "MiniMax-M3".to_string(),
+            messages: vec![Message {
+                role: "user".to_string(),
+                content: "hi".to_string(),
+            }],
+            temperature: 0.3,
+            reasoning_split,
+        }
+    }
+
+    /// 回归防线：MiniMax M 系列默认把 thinking 内嵌进 `content`，会带崩卡片增强的
+    /// 严格 JSON 解析。请求体必须显式要求拆到 `reasoning_content`。
+    #[test]
+    fn request_body_asks_minimax_to_split_thinking_out_of_content() {
+        let value = serde_json::to_value(request_with(Some(true))).unwrap();
+        assert_eq!(value["reasoning_split"], serde_json::json!(true));
+    }
+
+    /// 非 MiniMax 供应商不认这个参数，所以关掉时要整字段省略，不能发 `false`。
+    #[test]
+    fn reasoning_split_is_omitted_when_disabled() {
+        let value = serde_json::to_value(request_with(None)).unwrap();
+        assert!(value.get("reasoning_split").is_none());
+    }
+
+    /// 响应体只有 `content`（不带 `reasoning_content`）时不能解析失败：
+    /// 其他供应商以及关掉拆分时的正常形状。
+    #[test]
+    fn response_without_reasoning_content_still_parses() {
+        let raw = r#"{"choices":[{"message":{"content":"ok"}}]}"#;
+        let resp: ChatCompletionResponse = serde_json::from_str(raw).unwrap();
+        assert_eq!(resp.choices[0].message.content, "ok");
     }
 }

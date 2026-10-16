@@ -51,7 +51,13 @@ mod tests {
 
     #[test]
     fn test_load_default_config() {
-        let config = load_config(None).unwrap();
+        // 不读工作目录下的 knowledge_config.json：该文件被 gitignore，内容因人而异，
+        // 在那里断言具体模型名会因「本地换过 provider」而假失败。
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("knowledge_config.json");
+
+        let config = load_config(Some(&missing)).unwrap();
+
         assert_eq!(config.llm.model, "mimo-v2.5-pro");
         assert_eq!(config.output_format, "obsidian");
     }

@@ -624,8 +624,13 @@ AI 增强功能需要配置 LLM API。配置文件：`knowledge_config.json`
 - OpenAI (gpt-4o-mini, gpt-4o)
 - DeepSeek (deepseek-chat)
 - 通义千问 (qwen-turbo)
+- MiniMax (MiniMax-M3) — `base_url` 填 `https://api.minimax.cn/v1`
 - MiMo (mimo-v2.5-pro)
 - Ollama (本地)
+
+> MiniMax M 系列默认把 thinking 内嵌在 `content` 里（`<think>` 标签），会带崩卡片增强的
+> 严格 JSON 解析。`provider.rs` 已在请求体里带上 `reasoning_split: true`，让 thinking 走
+> `reasoning_content`、`content` 只留最终答案，无需额外配置。
 
 ## 项目结构
 
